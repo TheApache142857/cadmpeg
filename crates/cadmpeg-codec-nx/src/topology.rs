@@ -1133,41 +1133,6 @@ impl Graph {
         Ok((admitted_ownership, admitted_reservation))
     }
 
-    /// Admit one complete canonical record without building graph indices.
-    /// A typed root that occupies the complete input wins physical selection
-    /// in both node-ID domains and cannot contain a second selected record.
-    /// Ownership records and all other shapes retain full graph admission.
-    pub(crate) fn has_canonical_record(
-        ctx: &DecodeContext<'_>,
-        bytes: &[u8],
-        kind: NodeKind,
-        xmt: u32,
-    ) -> Result<bool, CodecError> {
-        if !matches!(kind, NodeKind::Body | NodeKind::Region)
-            && bytes.first() == Some(&0)
-            && bytes.get(1).and_then(|tag| NodeKind::try_from(*tag).ok()) == Some(kind)
-        {
-            let work = u64_from_index(bytes.len()).checked_mul(2).ok_or_else(|| {
-                ctx.refuse_codec_limit(
-                    "validate NX canonical record framing",
-                    u64::MAX - 1,
-                    u64::MAX,
-                )
-            })?;
-            ctx.charge_work(work, "validate NX canonical record framing")?;
-            let root_matches = |full_node_id_domain| {
-                Self::fixed_record_candidates(bytes, 0, kind, full_node_id_domain)
-                    .into_iter()
-                    .flatten()
-                    .any(|candidate| candidate.xmt() == xmt && candidate.end == bytes.len())
-            };
-            if root_matches(false) && root_matches(true) {
-                return Ok(true);
-            }
-        }
-        Ok(Self::parse(ctx, bytes)?.get(kind, xmt).is_some())
-    }
-
     fn fixed_record_candidates(
         stream: &[u8],
         pos: usize,
@@ -1483,35 +1448,6 @@ impl Graph {
             endpoints: [position(first_fin.vertex)?, position(second_fin.vertex)?],
             tolerance: edge.tolerance,
         })
-    }
-
-    /// Carrier identities required by the surviving fixed topology image.
-    pub(crate) fn referenced_carrier_xmts(
-        &self,
-        ctx: &DecodeContext<'_>,
-    ) -> Result<BTreeSet<u32>, CodecError> {
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(self.nodes.len()),
-            "scan NX topology carrier references",
-        )?;
-        let mut references = self.referenced_curve_xmts(ctx)?;
-        for reference in self
-            .of_kind(NodeKind::Face)
-            .filter_map(Node::face_fields)
-            .filter_map(|fields| fields.surface.map(u32::from))
-            .filter(|reference| *reference > 1)
-        {
-            ctx.insert_btree_set(&mut references, reference, "NX topology carrier references")?;
-        }
-        for reference in self
-            .of_kind(NodeKind::Vertex)
-            .filter_map(Node::vertex_fields)
-            .filter_map(|fields| fields.point.map(u32::from))
-            .filter(|reference| *reference > 1)
-        {
-            ctx.insert_btree_set(&mut references, reference, "NX topology carrier references")?;
-        }
-        Ok(references)
     }
 
     /// Return SHELL nodes whose ownership fields define a body shape.

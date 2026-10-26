@@ -3,8 +3,8 @@
 fn path_error(max_items: u64, max_retained_bytes: u64) -> cadmpeg_core::CodecError {
     crate::test_support::with_decode_context(|service_ctx| {
         use crate::records::feature::{
-            extrude::DesignExtrudeOperation, path_features::DesignPipeConstruction,
-            scope::DesignScopePayload, surface_ops::DesignPipeSectionShape,
+            extrude::DesignExtrudeOperation, path_features::DesignLoftConstruction,
+            scope::DesignScopePayload,
         };
         use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
 
@@ -12,16 +12,9 @@ fn path_error(max_items: u64, max_retained_bytes: u64) -> cadmpeg_core::CodecErr
         let mut native = super::construction_group_limits::native(true, false);
         native.design_parameter_scopes[0]
             .try_edit(|draft| {
-                draft.payload = DesignScopePayload::Pipe(Some(DesignPipeConstruction {
+                draft.payload = DesignScopePayload::Loft(Some(DesignLoftConstruction {
                     operation: DesignExtrudeOperation::NewBody,
                     operation_offset: 0,
-                    section_shape: DesignPipeSectionShape::Circular,
-                    section_shape_offset: 0,
-                    filled: true,
-                    filled_offset: 0,
-                    values: crate::test_support::reals([0.0; 4]),
-                    record_indexes: [100, 101, 102, 103],
-                    value_offsets: [0; 4],
                 }));
             })
             .unwrap();
@@ -32,7 +25,11 @@ fn path_error(max_items: u64, max_retained_bytes: u64) -> cadmpeg_core::CodecErr
         let (decode, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
         let mut ctx = super::super::Ctx::new(&ir, &native, service_ctx).unwrap();
         ctx.decode = &decode;
-        super::super::validate_path_feature_operand_roles(&ctx, &mut Vec::new()).unwrap_err()
+        let error = super::super::validate_path_feature_operand_roles(&ctx, &mut Vec::new()).unwrap_err();
+        let cadmpeg_core::CodecError::ResourceLimit(limit) = &error else { panic!("typed resource refusal") };
+        assert_eq!(decode.resource_refusal().as_ref(), Some(limit));
+        assert!(matches!(decode.charge_work(1, "after path-feature refusal"), Err(cadmpeg_core::CodecError::ResourceLimit(sticky)) if &sticky == limit));
+        error
     })
 }
 

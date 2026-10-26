@@ -14,7 +14,7 @@ pub(crate) struct TransmitState {
 }
 
 impl TransmitState {
-    pub(super) fn new(
+    pub(crate) fn new(
         description: String,
         schema: String,
         maximum_node_type: u16,
@@ -27,14 +27,14 @@ impl TransmitState {
         {
             return Err("description: require printable ASCII containing (deltas)");
         }
-        if schema.split('_').count() != 4
+        if !matches!(schema.split('_').count(), 3 | 4)
             || schema.len() <= 4
             || !schema.starts_with("SCH_")
             || !schema
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         {
-            return Err("schema: require an embedded SCH_ token with four components");
+            return Err("schema: require a plain or embedded SCH_ token");
         }
         let maximum_node_type =
             NonZeroU16::new(maximum_node_type).ok_or("maximum_node_type: must be nonzero")?;
@@ -49,7 +49,6 @@ impl TransmitState {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn description(&self) -> &str {
         &self.description
     }
@@ -112,13 +111,15 @@ mod tests {
             serde_json::to_vec(&state).unwrap(),
             serde_json::to_vec(&super::TransmitWire::from(state.clone())).unwrap()
         );
+        let mut plain = serde_json::to_value(&state).unwrap();
+        plain["schema"] = serde_json::json!("SCH_3501171_13006");
+        assert!(serde_json::from_value::<TransmitState>(plain).is_ok());
         let valid = serde_json::to_value(&state).unwrap();
         for (field, value) in [
             ("description", serde_json::json!("Transmit")),
             ("description", serde_json::json!("(deltas)\n")),
             ("schema", serde_json::json!("SCH_")),
             ("schema", serde_json::json!("SCH_1!")),
-            ("schema", serde_json::json!("SCH_3501171_13006")),
             ("maximum_node_type", serde_json::json!(0)),
             ("user_field_size", serde_json::json!(17)),
         ] {

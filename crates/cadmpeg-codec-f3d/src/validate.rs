@@ -4852,7 +4852,7 @@ fn validate_construction_operand_groups(
                         && group.extrude_role().is_none()
                 }
                 Some(design::DesignFeatureFamily::Pipe) => {
-                    group.role() == DesignOperandRole::ROLE_0X5 && group.extrude_role().is_none()
+                    group.extrude_role().is_none()
                 }
                 Some(design::DesignFeatureFamily::CircularPattern) => {
                     matches!(
@@ -5132,7 +5132,7 @@ fn validate_path_feature_operand_roles(
     for scope in native
         .design_parameter_scopes
         .iter()
-        .filter(|scope| scope.has_path_construction())
+        .filter(|scope| scope.has_path_construction() && scope.kind() != records::feature::scope::DesignFeatureKind::Pipe)
     {
         let native_stream = design_stream(&scope.id);
         let groups = ctx.decode.collect_vec(
@@ -5262,16 +5262,6 @@ fn validate_path_feature_operand_roles(
                                 && role_count(DesignOperandRole::BODIES_A) == 1
                         }
                     }
-            }
-            records::feature::scope::DesignScopePayload::Pipe(Some(
-                crate::records::feature::path_features::DesignPipeConstruction {
-                    operation, ..
-                },
-            )) => {
-                *operation == records::feature::extrude::DesignExtrudeOperation::NewBody
-                    && groups.len() == 1
-                    && role_count(DesignOperandRole::ROLE_0X5) == 1
-                    && !groups[0].members().is_empty()
             }
             _ => false,
         };

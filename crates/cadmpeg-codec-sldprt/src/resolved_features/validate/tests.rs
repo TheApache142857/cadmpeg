@@ -233,8 +233,9 @@ fn native_validation_route_refusal(dimension: cadmpeg_core::decode::ResourceDime
     };
     *selected = 0;
     let (ctx, _) = DecodeContext::from_root_bytes(&source, &arena, &policy).unwrap();
-    let CodecError::ResourceLimit(limit) =
-        SldprtCodec.validate_native(&ctx, decoded.ir()).unwrap_err()
+    let CodecError::ResourceLimit(limit) = SldprtCodec
+        .validate_native(&ctx, decoded.ir(), None)
+        .unwrap_err()
     else {
         panic!("native validation must propagate a resource refusal");
     };
@@ -250,7 +251,7 @@ fn native_validation_route_refusal(dimension: cadmpeg_core::decode::ResourceDime
     *selected = limit.used + limit.additional - 1;
     let (ctx, _) = DecodeContext::from_root_bytes(&source, &arena, &policy).unwrap();
     assert!(
-        matches!(SldprtCodec.validate_native(&ctx, decoded.ir()), Err(CodecError::ResourceLimit(refusal))
+        matches!(SldprtCodec.validate_native(&ctx, decoded.ir(), None), Err(CodecError::ResourceLimit(refusal))
         if refusal.dimension == dimension && refusal.operation == limit.operation)
     );
 }
@@ -272,7 +273,7 @@ fn native_validation_route_keeps_valid_record_copies_in_scoped_storage() {
     policy.limits.max_retained_bytes = 0;
     let (ctx, _) = DecodeContext::from_root_bytes(&source, &arena, &policy).unwrap();
     assert!(SldprtCodec
-        .validate_native(&ctx, decoded.ir())
+        .validate_native(&ctx, decoded.ir(), None)
         .unwrap()
         .is_empty());
     assert!(ctx.finish_session().is_ok());

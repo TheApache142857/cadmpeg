@@ -10,7 +10,6 @@
 use crate::framing::node_kind::NodeKind;
 use std::collections::BTreeMap;
 
-use crate::deltas::record_family::RecordFamily;
 use crate::framing::read_xmt_width as read_xmt;
 use crate::framing::xmt_reference::NonNullXmt;
 pub(crate) mod curve_references;
@@ -636,7 +635,6 @@ enum ArrayValues<'a> {
 
 struct ArrayRecord<'a> {
     reference: u32,
-    end: usize,
     values: ArrayValues<'a>,
 }
 
@@ -765,11 +763,7 @@ fn array_record_at<'bytes>(
             propagate_resource!(finite_f64_bytes(ctx, raw))?;
             ArrayValues::F64(raw)
         };
-        Some(Ok(ArrayRecord {
-            reference,
-            end,
-            values,
-        }))
+        Some(Ok(ArrayRecord { reference, values }))
     })();
     parsed.transpose()
 }
@@ -847,41 +841,6 @@ fn surface_payload_at<'bytes>(
     parsed.transpose()
 }
 
-fn surface_data_header_at(bytes: &[u8], pos: usize) -> Option<(u32, usize)> {
-    (bytes.get(pos..pos + 2) == Some(&[0, 125])).then_some(())?;
-    let escape = usize::from(bytes.get(pos + 2) == Some(&0xff));
-    let (xmt, xmt_len) = read_xmt(bytes, pos + 2 + escape)?;
-    NonNullXmt::try_from(xmt).ok()?;
-    let mut at = pos.checked_add(2 + escape + xmt_len)?;
-    for _ in 0..8 {
-        View::f64_be_at(bytes, at)?.is_finite().then_some(())?;
-        at += 8;
-    }
-    let marker = usize::from(*bytes.get(at)?);
-    matches!(marker, 1 | 2).then_some(())?;
-    at += 1;
-    let marker_lane = bytes.get(at..at.checked_add(12)?)?;
-    let canonical_b_count = marker * 4;
-    let canonical = marker_lane[..canonical_b_count]
-        .iter()
-        .all(|byte| *byte == b'B')
-        && marker_lane[canonical_b_count..]
-            .iter()
-            .all(|byte| *byte == b'?');
-    let extended_marker_one = marker == 1
-        && marker_lane[..8].iter().all(|byte| *byte == b'B')
-        && marker_lane[8..].iter().all(|byte| *byte == b'?');
-    (canonical || extended_marker_one).then_some(())?;
-    at += marker_lane.len();
-    for _ in 0..4 {
-        let (_, reference_len) = read_xmt(bytes, at)?;
-        at += reference_len;
-        (bytes.get(at) == Some(&1)).then_some(())?;
-        at += 1;
-    }
-    Some((xmt, at))
-}
-
 fn curve_payloads<'bytes, 'ctx>(
     ctx: &'ctx DecodeContext<'_>,
     bytes: &'bytes [u8],
@@ -925,20 +884,6 @@ fn curve_payload_at<'bytes>(
         Some(Ok((xmt, Payload { raw }, end)))
     })();
     parsed.transpose()
-}
-
-fn curve_data_header_at(bytes: &[u8], pos: usize) -> Option<(u32, usize)> {
-    (bytes.get(pos..pos + 2) == Some(&[0, 135])).then_some(())?;
-    let escape = usize::from(bytes.get(pos + 2) == Some(&0xff));
-    let (xmt, xmt_len) = read_xmt(bytes, pos + 2 + escape)?;
-    NonNullXmt::try_from(xmt).ok()?;
-    let mut at = pos.checked_add(2 + escape + xmt_len)?;
-    matches!(bytes.get(at), Some(1 | 2)).then_some(())?;
-    at += 1;
-    let (_, reference_len) = read_xmt(bytes, at)?;
-    at += reference_len;
-    (bytes.get(at) == Some(&1)).then_some(())?;
-    Some((xmt, at + 1))
 }
 
 fn finite_f64_bytes(ctx: &DecodeContext<'_>, raw: &[u8]) -> Result<Option<()>, CodecError> {
@@ -1299,64 +1244,6 @@ fn curve_descriptor_at(
         },
         pos + 23 + shift + mult_len + knots_len,
     ))
-}
-
-/// Exact frame of one NURBS descriptor, payload, knot, or multiplicity record.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct AuxiliaryRecord {
-    /// Record layout and its references.
-    pub(crate) family: RecordFamily,
-    /// Stream-local record identity.
-    pub(crate) xmt: u32,
-    /// First byte after the complete record.
-    pub(crate) end: usize,
-}
-
-/// Decode one complete NURBS auxiliary record at `pos`.
-pub(crate) fn auxiliary_record_at(
-    ctx: &DecodeContext<'_>,
-    bytes: &[u8],
-    pos: usize,
-) -> Result<Option<AuxiliaryRecord>, CodecError> {
-    let parsed: Option<Result<_, CodecError>> = (|| {
-        let kind = View::u16_be_at(bytes, pos)?;
-        let (xmt, family, end) = match kind {
-            125 => propagate_resource!(surface_payload_at(ctx, bytes, pos))
-                .map(|(xmt, _, end)| (xmt, end))
-                .or_else(|| surface_data_header_at(bytes, pos))
-                .map(|(xmt, end)| (xmt, RecordFamily::BSurfaceData, end))?,
-            126 => {
-                let (xmt, _, end) = surface_descriptor_at(bytes, pos)?;
-                (xmt, RecordFamily::BSurfaceDescriptor, end)
-            }
-            127 | 128 => {
-                let record = propagate_resource!(array_record_at(ctx, bytes, pos))?;
-                let family = if kind == 127 {
-                    RecordFamily::Multiplicities
-                } else {
-                    RecordFamily::Knots
-                };
-                (record.reference, family, record.end)
-            }
-            135 => propagate_resource!(curve_payload_at(ctx, bytes, pos))
-                .map(|(xmt, _, end)| (xmt, end))
-                .or_else(|| curve_data_header_at(bytes, pos))
-                .map(|(xmt, end)| (xmt, RecordFamily::BCurveData, end))?,
-            136 => {
-                let (xmt, descriptor, end) = curve_descriptor_at(bytes, pos, false)?;
-                (
-                    xmt,
-                    RecordFamily::BCurveDescriptor {
-                        references: descriptor.references,
-                    },
-                    end,
-                )
-            }
-            _ => return None,
-        };
-        Some(Ok(AuxiliaryRecord { family, xmt, end }))
-    })();
-    parsed.transpose()
 }
 
 fn unique_records<'ctx, T>(

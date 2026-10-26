@@ -62,6 +62,7 @@ fn tolerant_edge_becomes_a_two_support_procedural_intersection() {
             .windows(2)
             .position(|window| window == [0, 16])
             .expect("edge record");
+        let source_edge_offset = edge;
         put_ref(&mut stream, edge + 24, 1);
         let fin = stream
             .windows(2)
@@ -74,12 +75,25 @@ fn tolerant_edge_becomes_a_two_support_procedural_intersection() {
         .unwrap();
         let mut off_support_ir = ir.clone();
         let mut annotations = cadmpeg_ir::annotations::AnnotationBuilder::new();
-        let stream = StreamHandle::new(
+        let source_len = stream.len();
+        let source_stream = StreamHandle::new(
             &cadmpeg_test_support::service_decode_context(),
             cadmpeg_ir::stream_name!("nx:test"),
             "fixture stream handle",
         )
         .unwrap();
+        let origin_map = crate::raw_origin::OriginMap::raw(
+            crate::raw_origin::RawStreamOrdinal::new(0),
+            source_len,
+        );
+        let raw_streams = [crate::decode::origin::RawGeometryStream {
+            handle: source_stream,
+            len: source_len,
+        }];
+        let origins = crate::decode::origin::GeometryOrigins {
+            map: &origin_map,
+            streams: &raw_streams,
+        };
 
         attach_tolerant_edge_intersections(
             geometry_ctx,
@@ -87,7 +101,7 @@ fn tolerant_edge_becomes_a_two_support_procedural_intersection() {
             &graph,
             &edges,
             &crate::decode::ids::IdScope::stream(0),
-            &stream,
+            origins,
             &mut annotations,
         );
 
@@ -127,6 +141,16 @@ fn tolerant_edge_becomes_a_two_support_procedural_intersection() {
         assert_eq!(*endpoints, expected_endpoints);
         assert_eq!(tolerance, 0.01);
         assert_eq!(*parameterization, None);
+        let provenance = annotations.build().provenance;
+        for id in [curve.id.as_str(), procedural.id.as_str()] {
+            let source = &provenance[id];
+            assert_eq!(source.stream(), "nx:test");
+            assert_eq!(
+                source.offset,
+                cadmpeg_core::decode::u64_from_index(source_edge_offset)
+            );
+            assert_eq!(source.tag.as_deref(), Some("TOLERANT_EDGE_INTERSECTION"));
+        }
 
         let start = off_support_ir.model.edges[0].start.clone();
         let point_id = off_support_ir
@@ -171,19 +195,13 @@ fn tolerant_edge_becomes_a_two_support_procedural_intersection() {
             .expect("a finite position is a point"),
         );
         let mut annotations = cadmpeg_ir::annotations::AnnotationBuilder::new();
-        let stream = StreamHandle::new(
-            &cadmpeg_test_support::service_decode_context(),
-            cadmpeg_ir::stream_name!("nx:test"),
-            "fixture stream handle",
-        )
-        .unwrap();
         attach_tolerant_edge_intersections(
             geometry_ctx,
             &mut off_support_ir,
             &graph,
             &edges,
             &crate::decode::ids::IdScope::stream(0),
-            &stream,
+            origins,
             &mut annotations,
         );
         assert_eq!(off_support_ir.model.edges[0].curve(), None);
@@ -217,6 +235,18 @@ fn tolerant_edge_does_not_replace_a_serialized_fin_curve() {
             "fixture stream handle",
         )
         .unwrap();
+        let origin_map = crate::raw_origin::OriginMap::raw(
+            crate::raw_origin::RawStreamOrdinal::new(0),
+            stream.len(),
+        );
+        let raw_streams = [crate::decode::origin::RawGeometryStream {
+            handle: source_stream,
+            len: stream.len(),
+        }];
+        let origins = crate::decode::origin::GeometryOrigins {
+            map: &origin_map,
+            streams: &raw_streams,
+        };
 
         attach_tolerant_edge_intersections(
             geometry_ctx,
@@ -224,7 +254,7 @@ fn tolerant_edge_does_not_replace_a_serialized_fin_curve() {
             &graph,
             &edges,
             &crate::decode::ids::IdScope::stream(0),
-            &source_stream,
+            origins,
             &mut annotations,
         );
 

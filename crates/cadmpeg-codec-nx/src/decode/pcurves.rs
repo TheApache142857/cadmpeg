@@ -21,6 +21,7 @@ use super::offset::{
     refine_offset_surface_parameters_with_index_and_budget, surface_parameter_domain_with_index,
     surface_parameter_periods_with_index,
 };
+use super::origin::GeometryOrigins;
 use super::support_uv::{
     blend_spine_cache_fit_tolerance_with_index, linear_knots,
     parameterization_equivalent_surfaces_with_index, pcurve_requires_completion,
@@ -4574,7 +4575,7 @@ pub(super) fn attach_tolerant_edge_intersections(
     graph: &Graph,
     edges: &BTreeMap<u32, EdgeId>,
     scope: &crate::decode::ids::IdScope,
-    source_stream: &cadmpeg_ir::annotations::StreamHandle,
+    origins: GeometryOrigins<'_>,
     annotations: &mut AnnotationBuilder,
 ) {
     let geometry_budget = GeometryWorkBudget::from_context(
@@ -4586,7 +4587,7 @@ pub(super) fn attach_tolerant_edge_intersections(
         ir,
         graph,
         edges,
-        (scope, source_stream),
+        (scope, origins),
         annotations,
         &geometry_budget,
     )
@@ -4598,10 +4599,7 @@ pub(super) fn attach_tolerant_edge_intersections_with_budget(
     ir: &mut CadIr,
     graph: &Graph,
     edges: &BTreeMap<u32, EdgeId>,
-    (scope, source_stream): (
-        &crate::decode::ids::IdScope,
-        &cadmpeg_ir::annotations::StreamHandle,
-    ),
+    (scope, origins): (&crate::decode::ids::IdScope, GeometryOrigins<'_>),
     annotations: &mut AnnotationBuilder,
     geometry_budget: &GeometryWorkBudget<'_>,
 ) -> Result<(), cadmpeg_core::CodecError> {
@@ -4825,19 +4823,19 @@ pub(super) fn attach_tolerant_edge_intersections_with_budget(
             .derived(ctx, &edge_id, "curve")
             .map_err(cadmpeg_core::CodecError::from)?;
         if let Some(node) = graph.get(NodeKind::Edge, xmt) {
-            annotations.note(
+            origins.note_record(
                 ctx,
+                annotations,
                 &curve_id,
-                source_stream,
-                cadmpeg_core::decode::u64_from_index(node.pos()),
-                Some("TOLERANT_EDGE_INTERSECTION"),
+                node.pos(),
+                "TOLERANT_EDGE_INTERSECTION",
             )?;
-            annotations.note(
+            origins.note_record(
                 ctx,
+                annotations,
                 &procedural_id,
-                source_stream,
-                cadmpeg_core::decode::u64_from_index(node.pos()),
-                Some("TOLERANT_EDGE_INTERSECTION"),
+                node.pos(),
+                "TOLERANT_EDGE_INTERSECTION",
             )?;
         }
         annotations
@@ -5220,12 +5218,10 @@ mod tests {
                 &std::collections::BTreeMap::new(),
                 (
                     &crate::decode::ids::IdScope::stream(0),
-                    &cadmpeg_ir::annotations::StreamHandle::new(
-                        &cadmpeg_test_support::service_decode_context(),
-                        cadmpeg_ir::stream_name!("nx:test"),
-                        "fixture stream handle",
-                    )
-                    .unwrap(),
+                    super::GeometryOrigins {
+                        map: &crate::raw_origin::OriginMap::default(),
+                        streams: &[],
+                    },
                 ),
                 &mut cadmpeg_ir::AnnotationBuilder::new(),
                 &geometry_budget,

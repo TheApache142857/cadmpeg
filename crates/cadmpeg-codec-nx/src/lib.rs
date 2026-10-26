@@ -54,10 +54,11 @@
 //!
 //! Read [`cadmpeg_ir::report::decode::DecodeReport`] before using the model as a complete
 //! representation. Deltas streams pair with the preceding equal-schema partition
-//! in validated `UG_PART` segment order and apply
-//! supported non-topology full records and exact-key tombstones using the last
-//! event for each key. Valid partition topology remains authoritative. Unmatched
-//! tombstone relations remain unresolved. Segment body aliases, primary-body
+//! in validated `UG_PART` segment order for source namespace attribution.
+//! Aggregate Deltas selection remains unresolved: paired and unpaired Deltas
+//! streams contribute no semantic bytes, and partitions retain their own input.
+//! One sequential owner retains complete supported physical events and the exact
+//! suffix at its first unsupported boundary. Segment body aliases, primary-body
 //! writers, and Boolean tool operands select terminal partition images when the
 //! complete body lineage is unambiguous. Assembly files may contain only
 //! references to external child parts.
@@ -108,10 +109,13 @@ mod om_tokens;
 mod parasolid;
 mod payload_text;
 mod printable_string;
+mod raw_origin;
 mod records;
 mod scan_notes;
 mod topology;
 mod vec3_at;
+
+const RETAINED_PARASOLID_STREAM_ID_PREFIX: &str = "nx:container:parasolid#";
 
 #[doc(hidden)]
 pub mod fuzz;
@@ -136,6 +140,7 @@ impl CodecBackend for NxCodec {
     fn validate_native(
         ctx: &DecodeContext<'_>,
         ir: &cadmpeg_ir::CadIr,
+        source: Option<&cadmpeg_ir::SourceFidelity>,
     ) -> Result<Vec<cadmpeg_ir::report::check::Finding>, CodecError> {
         let Some(namespace) = ir.native.namespace("nx") else {
             return Ok(Vec::new());
@@ -168,9 +173,33 @@ impl CodecBackend for NxCodec {
                 }
                 Ok(())
             })
+            .and_then(|()| native::admit_deltas_records(ctx, namespace, source))
         });
         Ok(match admitted {
-            Ok(_) => Vec::new(),
+            Ok((findings, storage)) => {
+                drop(storage);
+                let bytes = findings
+                    .capacity()
+                    .checked_mul(std::mem::size_of::<cadmpeg_ir::report::check::Finding>())
+                    .ok_or_else(|| ctx.refuse_codec_limit("retain NX source findings", 0, 1))?;
+                ctx.charge_retained(
+                    cadmpeg_core::decode::u64_from_index(bytes),
+                    "retain NX source findings",
+                )?;
+                for finding in &findings {
+                    ctx.charge_retained(
+                        cadmpeg_core::decode::u64_from_index(finding.message.capacity()),
+                        "retain NX source finding message",
+                    )?;
+                    if let Some(entity) = &finding.entity {
+                        ctx.charge_retained(
+                            cadmpeg_core::decode::u64_from_index(entity.capacity()),
+                            "retain NX source finding entity",
+                        )?;
+                    }
+                }
+                findings
+            }
             Err(error) => {
                 let message = error.to_string();
                 let codec_error = CodecError::from(error);

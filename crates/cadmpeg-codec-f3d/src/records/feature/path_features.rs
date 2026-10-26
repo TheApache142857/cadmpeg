@@ -2,7 +2,7 @@
 //! Path features: revolve, loft, sweep and pipe constructions.
 
 use super::extrude::DesignExtrudeOperation;
-use super::surface_ops::DesignPipeSectionShape;
+use super::work_geometry::DesignWorkPointConstruction;
 use crate::records::identity::Located;
 use cadmpeg_ir::scalar::{FiniteReal, PositiveAngle};
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ cadmpeg_core::named_optional_field!(
     u32,
     "opposite_angle_record_index"
 );
-/// Exact construction carried by a Revolve, Loft, or Sweep scope.
+/// Exact construction carried by a Revolve, Loft, Sweep, or Pipe scope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum DesignPathFeatureConstruction {
@@ -27,7 +27,7 @@ pub(crate) enum DesignPathFeatureConstruction {
     Loft(DesignLoftConstruction),
     /// Sweep result operation and fixed dimension lanes.
     Sweep(DesignSweepConstruction),
-    /// Generated-section Pipe result and fixed dimension lanes.
+    /// Native Pipe prefix and canonical scalar-owner identities.
     Pipe(DesignPipeConstruction),
 }
 
@@ -146,28 +146,122 @@ pub(crate) struct DesignSweepConstruction {
     pub(crate) value_offsets: [u64; 6],
 }
 
-/// Fixed construction of a `Pipe` scope.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Native construction of a `Pipe` scope.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(try_from = "DesignPipeConstructionWire")]
 pub(crate) struct DesignPipeConstruction {
     /// Boolean result operation.
     pub(crate) operation: DesignExtrudeOperation,
     /// Byte offset of the operation u32.
     pub(crate) operation_offset: u64,
-    /// Section-shape selector byte.
-    pub(crate) section_shape: DesignPipeSectionShape,
-    /// Byte offset of the section-shape selector.
-    pub(crate) section_shape_offset: u64,
-    /// Whether the generated section is filled.
-    pub(crate) filled: bool,
-    /// Byte offset of the filled-section flag.
-    pub(crate) filled_offset: u64,
-    /// Four scalar values in path-fraction, reverse-path-fraction,
-    /// section-size, and section-thickness order.
-    pub(crate) values: [FiniteReal; 4],
-    /// Referenced scalar records in lane order.
+    /// Whether the section has an inward wall.
+    pub(crate) is_hollow: bool,
+    /// Byte offset of the hollow flag.
+    pub(crate) is_hollow_offset: u64,
+    /// Two uninterpreted bytes following the result operation.
+    pub(crate) post_operation_bytes: cadmpeg_ir::native::bytes::NativeBytes<[u8; 2]>,
+    /// Byte offset of the first uninterpreted byte.
+    pub(crate) post_operation_offset: u64,
+    /// Canonical scalar owners in fraction, reverse fraction, size, thickness order.
     pub(crate) record_indexes: [u32; 4],
-    /// Byte offsets of the scalar values in lane order.
-    pub(crate) value_offsets: [u64; 4],
+    /// Optional native point-selection relation.
+    pub(crate) point_selection: Option<DesignPipePointSelection>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DesignPipePointSelection {
+    pub(crate) prefix_reference_offset: u64,
+    pub(crate) point_data: DesignWorkPointConstruction,
+}
+
+cadmpeg_core::named_optional_field!(deserialize_pipe_point_selection, DesignPipePointSelection, "point_selection");
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DesignPipeConstructionWire {
+    operation: DesignExtrudeOperation,
+    operation_offset: u64,
+    is_hollow: bool,
+    is_hollow_offset: u64,
+    post_operation_bytes: cadmpeg_ir::native::bytes::NativeBytes<[u8; 2]>,
+    post_operation_offset: u64,
+    record_indexes: [u32; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_pipe_point_selection")]
+    point_selection: Option<DesignPipePointSelection>,
+}
+
+impl Serialize for DesignPipeConstruction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct BorrowedWire<'a> {
+            operation: DesignExtrudeOperation,
+            operation_offset: u64,
+            is_hollow: bool,
+            is_hollow_offset: u64,
+            post_operation_bytes: cadmpeg_ir::native::bytes::NativeBytes<&'a [u8]>,
+            post_operation_offset: u64,
+            record_indexes: &'a [u32; 4],
+            #[serde(skip_serializing_if = "Option::is_none")]
+            point_selection: Option<&'a DesignPipePointSelection>,
+        }
+        BorrowedWire {
+            operation: self.operation,
+            operation_offset: self.operation_offset,
+            is_hollow: self.is_hollow,
+            is_hollow_offset: self.is_hollow_offset,
+            post_operation_bytes: cadmpeg_ir::native::bytes::NativeBytes::from(&self.post_operation_bytes),
+            post_operation_offset: self.post_operation_offset,
+            record_indexes: &self.record_indexes,
+            point_selection: self.point_selection.as_ref(),
+        }.serialize(serializer)
+    }
+}
+
+impl TryFrom<DesignPipeConstructionWire> for DesignPipeConstruction {
+    type Error = String;
+
+    fn try_from(value: DesignPipeConstructionWire) -> Result<Self, Self::Error> {
+        if value.is_hollow_offset.checked_add(1) != Some(value.operation_offset)
+            || value.operation_offset.checked_add(4) != Some(value.post_operation_offset)
+            || value.record_indexes.iter().enumerate().any(|(ordinal, id)| {
+                *id == 0 || value.record_indexes[..ordinal].contains(id)
+            })
+        {
+            return Err("invalid Pipe prefix offsets or scalar identities".into());
+        }
+        Ok(Self {
+            operation: value.operation,
+            operation_offset: value.operation_offset,
+            is_hollow: value.is_hollow,
+            is_hollow_offset: value.is_hollow_offset,
+            post_operation_bytes: value.post_operation_bytes,
+            post_operation_offset: value.post_operation_offset,
+            record_indexes: value.record_indexes,
+            point_selection: value.point_selection,
+        })
+    }
+}
+
+impl DesignPipeConstruction {
+    pub(super) fn scope_offsets_are_valid(&self, start: u64, table: u64) -> bool {
+        use crate::layout::{compact_pipe_operation_prefix as compact, legacy_pipe_operation_prefix as legacy};
+        let compact = start.checked_add(cadmpeg_core::decode::u64_from_index(compact::IS_HOLLOW));
+        let legacy = start.checked_add(cadmpeg_core::decode::u64_from_index(legacy::IS_HOLLOW));
+        if ![compact, legacy].contains(&Some(self.is_hollow_offset))
+            || self.is_hollow_offset.checked_add(1) != Some(self.operation_offset)
+            || self.operation_offset.checked_add(4) != Some(self.post_operation_offset)
+            || self.post_operation_offset.checked_add(2).is_none_or(|end| end > table)
+            || self.point_selection.as_ref().is_some_and(|selection| {
+                self.post_operation_offset.checked_add(2).is_none_or(|end| selection.prefix_reference_offset <= end)
+                    || selection.prefix_reference_offset.checked_add(10).is_none_or(|end| end > table)
+            })
+        {
+            return false;
+        }
+        true
+    }
+}
+
+pub(crate) mod pipe;
 mod identity_rewrite;

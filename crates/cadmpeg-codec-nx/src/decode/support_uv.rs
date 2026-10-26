@@ -22,6 +22,7 @@ use super::offset::{
     refine_offset_surface_parameters_with_index_and_budget, surface_parameter_domain_with_index,
     surface_parameters,
 };
+use super::origin::GeometryOrigins;
 use super::pcurves::{
     blend_boundary_parameter_from_support_spine_with_index_and_budget,
     endpoint_witness_for_candidate, linear_nurbs_curve_endpoint_witness_with_index,
@@ -35,7 +36,6 @@ use crate::framing::xmt_reference::NonNullXmt;
 use crate::intersection::{SupportUv, SupportUvLane};
 use crate::topology::Graph;
 use cadmpeg_core::decode::{work_units, DecodeContext, WorkBudget};
-use cadmpeg_ir::annotations::StreamHandle;
 use cadmpeg_ir::document::CadIr;
 use cadmpeg_ir::eval::{analytic_surface_parameters, finite_or_refusal};
 use cadmpeg_ir::geometry::{
@@ -2486,7 +2486,7 @@ pub(super) fn parameterization_equivalent_surfaces_with_index(
 pub(super) struct IntersectionCompletionSource<'a> {
     pub(super) scope: crate::decode::ids::IdScope,
     pub(super) graph: &'a Graph,
-    pub(super) source_stream: StreamHandle,
+    pub(super) origins: GeometryOrigins<'a>,
     pub(super) coedge_start: usize,
     pub(super) procedural_start: usize,
 }
@@ -2496,12 +2496,13 @@ fn stream_owns_id(id: &str, prefix: &str) -> bool {
         .is_some_and(|suffix| suffix.starts_with(':'))
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct IntersectionStream<'inputs> {
     pub(super) graph: &'inputs Graph,
     pub(super) scope: &'inputs crate::decode::ids::IdScope,
     pub(super) coedge_start: usize,
     pub(super) procedural_start: usize,
-    pub(super) source_stream: cadmpeg_ir::annotations::StreamHandle,
+    pub(super) origins: GeometryOrigins<'inputs>,
     pub(super) validated_endpoint_witnesses: &'inputs EndpointWitnesses,
 }
 
@@ -2519,14 +2520,14 @@ pub(super) fn attach_completed_intersection_pcurves_for_stream_with_budget(
         scope,
         coedge_start,
         procedural_start,
-        source_stream,
+        origins,
         validated_endpoint_witnesses,
     } = intersection_stream;
 
     let source = IntersectionCompletionSource {
         scope: scope.try_clone_for_decode(ctx)?,
         graph,
-        source_stream,
+        origins,
         coedge_start,
         procedural_start,
     };
@@ -2944,17 +2945,15 @@ fn attach_completed_intersection_pcurves_for_sources_with_budget(
         if ir.model.pcurves.iter().any(|pcurve| pcurve.id == pcurve_id) {
             continue;
         }
-        let source_offset = source
-            .graph
-            .get(NodeKind::Fin, fin_xmt)
-            .map_or(0, |node| cadmpeg_core::decode::u64_from_index(node.pos()));
-        annotations.note(
-            ctx,
-            &pcurve_id,
-            &source.source_stream,
-            source_offset,
-            Some("INTERSECTION_PCURVE"),
-        )?;
+        if let Some(fin) = source.graph.get(NodeKind::Fin, fin_xmt) {
+            source.origins.note_record(
+                ctx,
+                annotations,
+                &pcurve_id,
+                fin.pos(),
+                "INTERSECTION_PCURVE",
+            )?;
+        }
         annotations
             .derived(ctx, &pcurve_id, "geometry")
             .map_err(cadmpeg_core::CodecError::from)?;
@@ -3088,12 +3087,10 @@ mod tests {
                     scope: &crate::decode::ids::IdScope::stream(0),
                     coedge_start: 0,
                     procedural_start: 0,
-                    source_stream: cadmpeg_ir::annotations::StreamHandle::new(
-                        &cadmpeg_test_support::service_decode_context(),
-                        cadmpeg_ir::stream_name!("nx:test"),
-                        "fixture stream handle",
-                    )
-                    .unwrap(),
+                    origins: super::GeometryOrigins {
+                        map: &crate::raw_origin::OriginMap::default(),
+                        streams: &[],
+                    },
                     validated_endpoint_witnesses: &BTreeMap::new(),
                 },
                 &mut annotations,

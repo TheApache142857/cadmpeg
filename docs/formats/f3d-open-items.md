@@ -127,13 +127,13 @@ The thirty-byte class tail is `u32 0`, `u8 1`, five f32 `(0, 0, 0, 1, 1)`, `u32 
 
 **Need.** A writer must choose the value to emit for a link a neutral model does not carry. Without the meaning, only a link decoded from source restores it.
 
-### DR-31. Other `Pipe` section and hollow forms
+### DR-31. `Pipe` section type and path parameterization
 
-**Question.** Which primary-header values select square, triangular, and hollow `Pipe` sections? How is section size measured for the noncircular shapes, and where is hollow-wall placement encoded?
+**Question.** Which native field carries `sectionType`, and which feature-to-topology relation identifies the section for shape reconstruction? What sets the origin and orientation of a partially consumed path?
 
-**Known.** Primary-header offset 29 value `1` selects a circular section. Offset 30 value `1` selects a filled section and value `0` selects a hollow section. For the filled form, scalar ordinal two is the outside diameter and scalar ordinal three is an inactive positive thickness. For the hollow form, scalar ordinal two is the outside diameter and scalar ordinal three is the inward wall thickness, which is less than the outside radius. The settings reference contains a u32 and one finite double. Class-`421`/`257` uses the fixed prefix and four class-`342` 103-byte parameter-owner references at local ordinals zero through three; its legacy reference table has one settings record, one role-`0x0000000500000000` path group, the group's nonempty ordered members, and no other construction group or trailing scope reference. Class-`405`/`259` and class-`475`/`260` legacy `Pipe` prefixes store the result operation, section shape, and filled flag at offsets `26`, `30`, and `31`; the admitted legacy reference form has four owner-local scalar records, one settings record, one role-`0x0000000500000000` path group, its nonempty ordered members, and no other construction group or trailing scope reference.
+**Known.** `f3d.md` §3.1 defines both structural prefixes, hollow state, four canonical scalar owners, settings, complete construction groups, and the optional point-selection pair. The raw post-operation pair does not identify section shape. Section Size is the outside dimension in centimetres. Its shape-dependent meaning is outside diameter for a circle, side length for a square, and altitude for an equilateral triangle. Section Thickness is the inward wall thickness in centimetres and is inactive for a solid section. Forward and reverse path fractions remain exact native values. The point-selection relation does not establish a path origin.
 
-**Need.** We must define the selector values and dimension conventions for square and triangular sections, and the scalar mapping for hollow variants. Comparing otherwise equal square and triangular pipes with hollow placement alternately inside and outside distinguishes section shape, size convention, and wall-placement fields.
+**Need.** Identify the section-type carrier and an independent association between a feature and its saved section topology. Establish the native path parameter origin and orientation before defining general partial-path reconstruction.
 
 ### DR-61. u64 values in a cross-document `Combine` selector tail
 

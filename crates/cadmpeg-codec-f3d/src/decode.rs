@@ -4965,6 +4965,7 @@ fn extend_related_design_records(
         native.design_parameter_owners.iter().flat_map(|owner| {
             let scope = crate::ids::native_stream(owner.id()).unwrap_or(crate::ids::DEFAULT_STREAM);
             [
+                owner.record_index(),
                 owner.scope_record_index(),
                 owner.parameter_record_index(),
                 owner.companion_record_index(),
@@ -5128,6 +5129,7 @@ fn extend_related_design_records(
             &mut native.design_parameter_scopes,
             &native.design_record_headers,
         )?;
+    crate::design::decode::scopes::pipe::bind_constructions(ctx, scan, native)?;
     native.design_loft_legacy_body_carriers =
         crate::design::decode::operands::decode_loft_legacy_body_carriers(
             ctx,

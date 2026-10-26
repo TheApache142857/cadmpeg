@@ -789,6 +789,15 @@ fn decode_completes_one_non_sentinel_ext11_uv_lane_analytically() {
 
 #[test]
 fn completed_intersection_support_lane_attaches_after_topology_emission() {
+    assert_completed_intersection_support_lane(false);
+}
+
+#[test]
+fn completed_intersection_support_lane_retains_the_selected_raw_delta_fin_origin() {
+    assert_completed_intersection_support_lane(true);
+}
+
+fn assert_completed_intersection_support_lane(present_fin: bool) {
     crate::test_support::with_decode_context(|geometry_ctx| {
         let mut ir = cadmpeg_ir::examples::unit_cube().expect("unit cube fixture is admitted");
         let edge =
@@ -882,9 +891,29 @@ fn completed_intersection_support_lane_attaches_after_topology_emission() {
             "fixture stream handle",
         )
         .unwrap();
-        let graph =
-            crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &[]))
-                .unwrap();
+        let raw = if present_fin {
+            let mut primary = crate::test_support::test_streams::topology_partition_stream();
+            let at = primary
+                .windows(4)
+                .position(|bytes| bytes == [0, 17, 0, 7])
+                .expect("primary FIN");
+            put_ref(&mut primary, at + 2, 42);
+            primary
+        } else {
+            Vec::new()
+        };
+        let raw_len = raw.len();
+        let raw_source =
+            crate::raw_origin::RawSource::raw(crate::raw_origin::RawStreamOrdinal::new(0), &raw);
+        let graph = crate::topology::Graph::parse(geometry_ctx, raw_source.bytes()).unwrap();
+        let raw_streams = [crate::decode::origin::RawGeometryStream {
+            handle: source_stream,
+            len: raw_len,
+        }];
+        let origins = crate::decode::origin::GeometryOrigins {
+            map: raw_source.origins(),
+            streams: &raw_streams,
+        };
         let geometry_budget = crate::decode::geometry_work::GeometryWorkBudget::from_context(
             geometry_ctx,
             cadmpeg_core::decode::u64_from_index(usize::MAX),
@@ -899,7 +928,7 @@ fn completed_intersection_support_lane_attaches_after_topology_emission() {
                     scope: &crate::decode::ids::IdScope::stream(0),
                     coedge_start: target_index + 1,
                     procedural_start: 0,
-                    source_stream: source_stream.clone(),
+                    origins,
                     validated_endpoint_witnesses: &std::collections::BTreeMap::new(),
                 },
                 &mut annotations,
@@ -915,7 +944,7 @@ fn completed_intersection_support_lane_attaches_after_topology_emission() {
         let source = crate::decode::support_uv::IntersectionCompletionSource {
             scope: crate::decode::ids::IdScope::stream(0),
             graph: &graph,
-            source_stream,
+            origins,
             coedge_start: 0,
             procedural_start: 0,
         };
@@ -947,6 +976,23 @@ fn completed_intersection_support_lane_attaches_after_topology_emission() {
             .pcurves
             .iter()
             .any(|pcurve| pcurve.pcurve == completed.id)));
+        let provenance = annotations.build().provenance;
+        let source = provenance.get(completed.id.as_str());
+        if present_fin {
+            let source = source.expect("completed pcurve has a raw FIN origin");
+            assert_eq!(source.stream(), "nx:test");
+            assert_eq!(
+                source.offset,
+                cadmpeg_core::decode::u64_from_index(
+                    raw.windows(4)
+                        .position(|bytes| bytes == [0, 17, 0, 42])
+                        .expect("primary FIN source offset")
+                )
+            );
+            assert_eq!(source.tag.as_deref(), Some("INTERSECTION_PCURVE"));
+        } else {
+            assert!(source.is_none());
+        }
     });
 }
 

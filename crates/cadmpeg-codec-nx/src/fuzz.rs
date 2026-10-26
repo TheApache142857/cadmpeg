@@ -21,13 +21,7 @@ pub fn deltas(data: &[u8]) {
     let arena = DecodeArena::new();
     let policy = fuzz_policy();
     if let Ok((ctx, _)) = DecodeContext::from_root_bytes(data, &arena, &policy) {
-        drop(crate::deltas::census::walk(&ctx, data));
-        let mid = data.len() / 2;
-        drop(crate::deltas::unmatched_terminal_tombstones(
-            &ctx,
-            &data[..mid],
-            &data[mid..],
-        ));
+        drop(crate::records::DeltasRecords::read(&ctx, data));
     }
 }
 

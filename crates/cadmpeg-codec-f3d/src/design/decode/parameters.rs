@@ -567,11 +567,17 @@ pub(crate) fn decode_parameter_owners(
     parameters: &[DesignParameter],
     headers: &[DesignRecordHeader],
 ) -> Result<Vec<DesignParameterOwner>, CodecError> {
-    if parameters
-        .iter()
-        .all(|parameter| parameter.owner_record_index().is_none())
-    {
-        return Ok(Vec::new());
+    if parameters.iter().all(|parameter| parameter.owner_record_index().is_none()) {
+        let mut has_pipe = false;
+        for entry in scan.entries.iter().filter(|entry| scan.is_design_stream(entry, ContainerRole::Bulkstream)) {
+            if super::meta::metadata_for_bulk_stream(ctx, scan, &entry.name)?.as_ref().is_some_and(|meta| {
+                meta.types.iter().any(crate::records::feature::path_features::pipe::is_pipe)
+            }) {
+                has_pipe = true;
+                break;
+            }
+        }
+        if !has_pipe { return Ok(Vec::new()) }
     }
     let mut headers_by_stream = HashMap::<&str, HashMap<u32, &DesignRecordHeader>>::new();
     for header in headers {
@@ -615,6 +621,64 @@ pub(crate) fn decode_parameter_owners(
             .or_insert((entry, IndexedRecordOffsets::build(ctx, bytes)?));
     }
     let mut out = Vec::new();
+    let mut emitted = HashMap::new();
+    for (stream, (entry, records)) in &streams {
+        use crate::records::feature::path_features::pipe;
+        let Some(meta) = super::meta::metadata_for_bulk_stream(ctx, scan, &entry.name)? else {
+            continue;
+        };
+        if !meta.types.iter().any(pipe::is_pipe) { continue }
+        let bytes = scan.entry_bytes(&entry.name)?;
+        let frames = match super::meta::design_primary_frames(ctx, bytes, &meta) {
+            Ok(frames) => frames,
+            Err(error @ CodecError::ResourceLimit(_)) => return Err(error),
+            Err(_) => continue,
+        };
+        let mut registrations = HashMap::new();
+        for data in &meta.types {
+            for id in data.entities.values() {
+                ctx.reserve_map(&mut registrations, 1, "f3d Pipe owner registration")?;
+                match registrations.entry(*id) {
+                    std::collections::hash_map::Entry::Vacant(slot) => { slot.insert(Some(data)); }
+                    std::collections::hash_map::Entry::Occupied(mut slot) => { slot.insert(None); }
+                }
+            }
+        }
+        let mut pipe_owners = HashMap::new();
+        for frame in &frames {
+            ctx.charge_work(1, "index F3D Pipe scalar owner primary")?;
+            if !pipe::is_pipe(frame.design_type)
+                || registrations.get(&frame.entity_id).and_then(|data| *data)
+                    .is_none_or(|data| !std::ptr::eq(data, frame.design_type))
+            {
+                continue;
+            }
+            ctx.reserve_map(&mut pipe_owners, 1, "index F3D Pipe scalar owner")?;
+            match pipe_owners.entry(frame.entity_id) {
+                std::collections::hash_map::Entry::Vacant(slot) => { slot.insert(Some(frame)); }
+                std::collections::hash_map::Entry::Occupied(mut slot) => { slot.insert(None); }
+            }
+        }
+        for frame in frames.iter().filter(|frame| pipe::is_scalar(frame.design_type)) {
+            if registrations.get(&frame.entity_id).and_then(|data| *data)
+                .is_none_or(|data| !std::ptr::eq(data, frame.design_type)) {
+                continue;
+            }
+            let Some(parsed) = bytes.get(frame.start..frame.member_end).and_then(parse_parameter_owner) else { continue };
+            if !matches!(parsed.frame_length, 103 | 104)
+                || !registrations.get(&u64::from(parsed.scope_record_index)).and_then(|data| *data).is_some_and(pipe::is_pipe)
+                || pipe_owners.get(&u64::from(parsed.scope_record_index)).and_then(|owner| *owner).is_none()
+                || records.frames(parsed.record_index).filter(|(start, end)| *start == frame.start && *end == frame.member_end).count() != 1 {
+                continue;
+            }
+            let Some(owner) = parsed.into_record(&entry.name, u64_from_index(frame.start)) else { continue };
+            let key = (stream.as_str(), owner.record_index());
+            if emitted.contains_key(&key) { continue }
+            ctx.reserve_map(&mut emitted, 1, "f3d unique parameter owner")?;
+            emitted.insert(key, out.len());
+            ctx.push_vec(&mut out, owner, "f3d parameter owner")?;
+        }
+    }
     for parameter in parameters {
         let Some(owner_index) = parameter.owner_record_index() else {
             continue;
@@ -630,6 +694,12 @@ pub(crate) fn decode_parameter_owners(
         };
         let scope = native_stream(&parameter.id)
             .ok_or_else(|| malformed("has no Design stream identity"))?;
+        if let Some(ordinal) = emitted.get(&(scope, owner_index)).copied() {
+            if out[ordinal].parameter_record_index() != parameter.record_index {
+                return Err(malformed("does not link back to its referencing parameter"));
+            }
+            continue;
+        }
         let Some(header) = headers_by_stream
             .get(scope)
             .and_then(|headers| headers.get(&owner_index))
@@ -670,6 +740,8 @@ pub(crate) fn decode_parameter_owners(
         }
 
         ctx.reserve_vec(&mut out, 1, "f3d parameter owner")?;
+        ctx.reserve_map(&mut emitted, 1, "f3d unique parameter owner")?;
+        emitted.insert((scope, owner_index), out.len());
         out.push(owner);
     }
     ctx.stable_sort_by(

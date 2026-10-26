@@ -2,9 +2,8 @@
 //! Geometry decode, active-body selection, and inactive-topology prune.
 
 use super::emit::{
-    annotate_node, canonical_trim_range, curve_tag, decoded_tolerance, emit_topology,
-    retain_unknown_stream_data, retain_unresolved_topology_carriers, source_meta, surface_tag,
-    unknown_stream_metadata,
+    canonical_trim_range, curve_tag, decoded_tolerance, emit_topology, retain_unknown_stream_data,
+    retain_unresolved_topology_carriers, source_meta, surface_tag, unknown_stream_metadata,
 };
 use super::geometry_work::{
     GeometryWorkBudget, MAX_ADAPTIVE_GEOMETRY_WORK, MAX_COUPLED_SUPPORT_UV_GEOMETRY_WORK,
@@ -12,6 +11,7 @@ use super::geometry_work::{
     MAX_SUPPORT_UV_COMPLETION_GEOMETRY_WORK,
 };
 use super::offset::{intersection_side, normalize_pcurve_parameters, saved_offset_carriers};
+use super::origin::{GeometryOrigins, RawGeometryStream};
 use super::pcurves::{
     completion_transfer_budget_limit, transfer_budget_exhausted, EndpointWitnesses,
     IntersectionEntityStarts, IntersectionIncidenceIndex, MAX_EXACT_BOUNDARY_TRANSFER_SAMPLES,
@@ -154,9 +154,7 @@ pub(super) fn try_decode_geometry(
         .unwrap_or_default();
     for (si, stream) in scan.streams.iter().enumerate() {
         if stream.kind().is_parasolid() {
-            for (body, nodes) in
-                topology_body_node_ids(ctx, si, &parsed.stream(si).view_for_geometry().graph)?
-            {
+            for (body, nodes) in topology_body_node_ids(ctx, si, &parsed.stream(si).graph)? {
                 ctx.insert_btree_map(
                     &mut body_node_ids,
                     body,
@@ -228,14 +226,7 @@ pub(super) fn try_decode_geometry(
                     .as_ref()
                     .is_none_or(|(_, selected, _)| selected.contains(si))
         })
-        .map(|(si, _)| {
-            parsed
-                .stream(si)
-                .view_for_geometry()
-                .intersections
-                .curves
-                .len()
-        })
+        .map(|(si, _)| parsed.stream(si).intersections.curves.len())
         .sum::<usize>();
     let transfer_limit = completion_transfer_budget_limit(ctx, chart_count)?;
     let support_uv_limit = support_uv_completion_budget_limit(ctx, chart_count)?;
@@ -272,6 +263,10 @@ pub(super) fn try_decode_geometry(
     let mut intersection_index = IntersectionIncidenceIndex::default();
     let mut model_endpoint_witnesses = EndpointWitnesses::new();
     let mut completion_streams = Vec::new();
+    let mut raw_streams = ctx.collection_vec(scan.streams.len(), "NX geometry raw streams")?;
+    for (ordinal, stream) in scan.streams.iter().enumerate() {
+        raw_streams.push(RawGeometryStream::new(ctx, ordinal, stream)?);
+    }
     let container_stream = StreamHandle::new(
         ctx,
         cadmpeg_ir::stream_name!("nx:container"),
@@ -327,18 +322,13 @@ pub(super) fn try_decode_geometry(
                 "nx carrier refusal loss text",
             )?));
         }
-        let view = parsed.stream(si).view_for_geometry();
-        let stream_name = ctx.format_retained(
-            format_args!("nx:parasolid#{si}:{}", stream.kind().label()),
-            "nx geometry stream name",
-        )?;
-        let source_stream = StreamHandle::new(
-            ctx,
-            cadmpeg_ir::StreamName::try_from(stream_name).map_err(CodecError::malformed)?,
-            "allocate annotation stream handle",
-        )?;
+        let view = parsed.stream(si);
+        let origins = GeometryOrigins {
+            map: view.source.origins(),
+            streams: &raw_streams,
+        };
         ctx.reserve_vec(&mut completion_streams, 1, "nx completion streams")?;
-        completion_streams.push((si, source_stream.clone()));
+        completion_streams.push(si);
         let graph = &view.graph;
         let mut points_by_xmt = BTreeMap::new();
         let mut surfaces_by_xmt = BTreeMap::new();
@@ -364,14 +354,7 @@ pub(super) fn try_decode_geometry(
         {
             let pid: PointId = scope.id_charged(ctx, &cadmpeg_ir::identity_component!("pt"), pi)?;
             let vid: VertexId = scope.id_charged(ctx, &cadmpeg_ir::identity_component!("v"), pi)?;
-            annotate_node(
-                ctx,
-                &mut annotations,
-                pid.as_str(),
-                &source_stream,
-                node,
-                "POINT",
-            )?;
+            origins.note_record(ctx, &mut annotations, pid.as_str(), node.pos(), "POINT")?;
             annotations.derived(ctx, pid.as_str(), "position")?;
             ctx.reserve_vec(&mut ir.model.points, 1, "nx geometry points")?;
             ir.model.points.push(Point::new(
@@ -410,12 +393,11 @@ pub(super) fn try_decode_geometry(
             }
             let id: SurfaceId =
                 scope.id_charged(ctx, &cadmpeg_ir::identity_component!("surf"), fi)?;
-            annotate_node(
+            origins.note_record(
                 ctx,
                 &mut annotations,
                 id.as_str(),
-                &source_stream,
-                node,
+                node.pos(),
                 surface_tag(geometry.solved().ok_or_else(|| {
                     cadmpeg_core::CodecError::NotImplemented(
                         "carrier has no solved geometry".into(),
@@ -440,12 +422,12 @@ pub(super) fn try_decode_geometry(
             counts.nurbs_surfaces += 1;
             let id: SurfaceId =
                 scope.id_charged(ctx, &cadmpeg_ir::identity_component!("nurbs-surf"), fi)?;
-            annotations.note(
+            origins.note_record(
                 ctx,
+                &mut annotations,
                 id.as_str(),
-                &source_stream,
-                cadmpeg_core::decode::u64_from_index(surf.pos),
-                Some("B_SPLINE_SURFACE"),
+                surf.pos,
+                "B_SPLINE_SURFACE",
             )?;
             annotations.derived(ctx, id.as_str(), "geometry")?;
             ctx.reserve_vec(&mut ir.model.surfaces, 1, "nx geometry surfaces")?;
@@ -489,12 +471,12 @@ pub(super) fn try_decode_geometry(
             } else {
                 let surface_id: SurfaceId =
                     scope.id_charged(ctx, &cadmpeg_ir::identity_component!("offset-surf"), oi)?;
-                annotations.note(
+                origins.note_record(
                     ctx,
+                    &mut annotations,
                     surface_id.as_str(),
-                    &source_stream,
-                    cadmpeg_core::decode::u64_from_index(offset.pos),
-                    Some("OFFSET_SURF"),
+                    offset.pos,
+                    "OFFSET_SURF",
                 )?;
                 annotations.derived(ctx, surface_id.as_str(), "geometry")?;
                 ctx.reserve_vec(&mut ir.model.surfaces, 1, "nx offset surfaces")?;
@@ -526,12 +508,12 @@ pub(super) fn try_decode_geometry(
                 });
                 (surface_id, None)
             };
-            annotations.note(
+            origins.note_record(
                 ctx,
+                &mut annotations,
                 procedural_id.as_str(),
-                &source_stream,
-                cadmpeg_core::decode::u64_from_index(offset.pos),
-                Some("OFFSET_SURF"),
+                offset.pos,
+                "OFFSET_SURF",
             )?;
             annotations.derived(ctx, procedural_id.as_str(), "definition")?;
             let admitted_payload =
@@ -574,12 +556,12 @@ pub(super) fn try_decode_geometry(
                 scope.id_charged(ctx, &cadmpeg_ir::identity_component!("blend-surf"), bi)?;
             let procedural_id: ProceduralSurfaceId =
                 scope.id_charged(ctx, &cadmpeg_ir::identity_component!("blend"), bi)?;
-            annotations.note(
+            origins.note_record(
                 ctx,
+                &mut annotations,
                 surface_id.as_str(),
-                &source_stream,
-                cadmpeg_core::decode::u64_from_index(blend.pos),
-                Some("BLEND_SURF"),
+                blend.pos,
+                "BLEND_SURF",
             )?;
             annotations.derived(ctx, surface_id.as_str(), "geometry")?;
             ctx.reserve_vec(&mut ir.model.surfaces, 1, "nx blend surfaces")?;
@@ -607,12 +589,12 @@ pub(super) fn try_decode_geometry(
                     instance_path: Vec::new(),
                 }),
             });
-            annotations.note(
+            origins.note_record(
                 ctx,
+                &mut annotations,
                 procedural_id.as_str(),
-                &source_stream,
-                cadmpeg_core::decode::u64_from_index(blend.pos),
-                Some("BLEND_SURF"),
+                blend.pos,
+                "BLEND_SURF",
             )?;
             annotations.derived(ctx, procedural_id.as_str(), "definition")?;
             let procedural_index = ir.model.procedural_surfaces.len();
@@ -702,12 +684,11 @@ pub(super) fn try_decode_geometry(
                 CurveGeometry::Solved(SolvedCurveGeometry::Unknown { .. }) => {}
             }
             let id: CurveId = scope.id_charged(ctx, &cadmpeg_ir::identity_component!("crv"), ci)?;
-            annotate_node(
+            origins.note_record(
                 ctx,
                 &mut annotations,
                 id.as_str(),
-                &source_stream,
-                node,
+                node.pos(),
                 curve_tag(geometry.solved().ok_or_else(|| {
                     cadmpeg_core::CodecError::NotImplemented(
                         "carrier has no solved geometry".into(),
@@ -728,12 +709,12 @@ pub(super) fn try_decode_geometry(
             counts.nurbs_curves += 1;
             let id: CurveId =
                 scope.id_charged(ctx, &cadmpeg_ir::identity_component!("nurbs-crv"), ci)?;
-            annotations.note(
+            origins.note_record(
                 ctx,
+                &mut annotations,
                 id.as_str(),
-                &source_stream,
-                cadmpeg_core::decode::u64_from_index(crv.pos),
-                Some("B_SPLINE_CURVE"),
+                crv.pos,
+                "B_SPLINE_CURVE",
             )?;
             annotations.derived(ctx, id.as_str(), "geometry")?;
             ctx.reserve_vec(&mut ir.model.curves, 1, "nx NURBS curves")?;
@@ -751,13 +732,7 @@ pub(super) fn try_decode_geometry(
         for (pi, pcurve) in nurbs_pcurves.into_iter().enumerate() {
             let id: PcurveId =
                 scope.id_charged(ctx, &cadmpeg_ir::identity_component!("pcurve"), pi)?;
-            annotations.note(
-                ctx,
-                id.as_str(),
-                &source_stream,
-                cadmpeg_core::decode::u64_from_index(pcurve.pos),
-                Some("B_CURVE_2D"),
-            )?;
+            origins.note_record(ctx, &mut annotations, id.as_str(), pcurve.pos, "B_CURVE_2D")?;
             annotations.derived(ctx, id.as_str(), "geometry")?;
             ctx.reserve_vec(&mut ir.model.pcurves, 1, "nx NURBS pcurves")?;
             ir.model.pcurves.push(Pcurve {
@@ -961,12 +936,12 @@ pub(super) fn try_decode_geometry(
                     },
                 ));
             }
-            annotations.note(
+            origins.note_record(
                 ctx,
+                &mut annotations,
                 curve_id.as_str(),
-                &source_stream,
-                cadmpeg_core::decode::u64_from_index(construction.pos),
-                Some("INTERSECTION"),
+                construction.pos,
+                "INTERSECTION",
             )?;
             if charted.is_some() || uncharted.is_some() {
                 annotations.derived(ctx, curve_id.as_str(), "geometry")?;
@@ -1023,12 +998,12 @@ pub(super) fn try_decode_geometry(
                     instance_path: Vec::new(),
                 }),
             });
-            annotations.note(
+            origins.note_record(
                 ctx,
+                &mut annotations,
                 procedural_id.as_str(),
-                &source_stream,
-                cadmpeg_core::decode::u64_from_index(construction.pos),
-                Some("INTERSECTION"),
+                construction.pos,
+                "INTERSECTION",
             )?;
             if charted.is_some() || uncharted.is_some() {
                 annotations.derived(ctx, procedural_id.as_str(), "definition")?;
@@ -1341,7 +1316,7 @@ pub(super) fn try_decode_geometry(
                 surfaces: &mut surfaces_by_xmt,
                 curves: &mut curves_by_xmt,
                 pcurves: &pcurves_by_xmt,
-                source_stream: &source_stream,
+                origins,
             },
             &mut annotations,
         )?;
@@ -1367,7 +1342,7 @@ pub(super) fn try_decode_geometry(
                 pcurves: &pcurves_by_xmt,
                 pcurve_supports: &pcurve_supports_by_xmt,
                 trim_ranges: &trim_ranges,
-                source_stream: &source_stream,
+                origins,
                 intersection_starts,
                 procedural_start,
             },
@@ -1456,7 +1431,7 @@ pub(super) fn try_decode_geometry(
                 scope: &IdScope::stream_charged(ctx, si)?,
                 coedge_start: intersection_starts.coedges,
                 procedural_start: intersection_starts.procedural_curves,
-                source_stream: source_stream.clone(),
+                origins,
                 validated_endpoint_witnesses: &validated_endpoint_witnesses,
             },
             &mut annotations,
@@ -1499,11 +1474,14 @@ pub(super) fn try_decode_geometry(
     intersection_index.complete_from_model(ctx, &mut ir)?;
     let mut completion_sources =
         ctx.collection_vec(completion_streams.len(), "nx completion sources")?;
-    for (si, source_stream) in &completion_streams {
+    for si in &completion_streams {
         completion_sources.push(IntersectionCompletionSource {
             scope: IdScope::stream_charged(ctx, *si)?,
-            graph: parsed.stream(*si).view_for_geometry().graph.as_ref(),
-            source_stream: source_stream.clone(),
+            graph: parsed.stream(*si).graph.as_ref(),
+            origins: GeometryOrigins {
+                map: parsed.stream(*si).source.origins(),
+                streams: &raw_streams,
+            },
             coedge_start: 0,
             procedural_start: 0,
         });
@@ -1621,7 +1599,6 @@ pub(super) fn try_decode_geometry(
         ctx,
         scan,
         &crate::decode::report::GeometryReportFacts {
-            unmatched_delta_tombstone_counts: parsed.unmatched_tombstone_counts(),
             counts: &counts,
             has_topology: !ir.model.faces.is_empty(),
             has_unresolved_sub_bodies: ir.model.bodies.len() > 1 && !active_body_selection,

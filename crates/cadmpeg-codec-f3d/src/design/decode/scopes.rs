@@ -22,6 +22,7 @@ mod legacy_operand_paths;
 pub(crate) mod mirror;
 pub(crate) mod parameter_scope;
 mod path_feature;
+pub(crate) mod pipe;
 mod pattern;
 pub(super) mod point_data;
 pub(super) mod shared_frames;

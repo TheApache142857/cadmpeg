@@ -1787,7 +1787,7 @@ fn visibility_cardinality_matches_when_element_count_is_absent() {
     let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &DecodePolicy::service())
         .expect("validation context");
     assert!(FcstdCodec
-        .validate_native(&ctx, result.ir())
+        .validate_native(&ctx, result.ir(), None)
         .expect("validation fits service policy")
         .is_empty());
 }

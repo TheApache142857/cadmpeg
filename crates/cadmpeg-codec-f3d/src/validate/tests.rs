@@ -77,7 +77,7 @@ fn native_validation_refuses_decode_collection_limit() {
     let mut policy = DecodePolicy::service();
     policy.limits.max_collection_items = 0;
     let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let error = F3dCodec.validate_native(&ctx, &ir).unwrap_err();
+    let error = F3dCodec.validate_native(&ctx, &ir, None).unwrap_err();
     assert!(matches!(error, cadmpeg_core::CodecError::ResourceLimit(_)));
 }
 
@@ -910,7 +910,7 @@ fn validation_accepts_hole_and_surface_trim_construction_group_roles() {
 }
 
 #[test]
-fn validation_checks_pipe_path_group_roles() {
+fn validation_checks_generic_sweep_group_carriers() {
     use crate::records::{
         decal::DesignRecordHeader,
         feature::{
@@ -928,22 +928,17 @@ fn validation_checks_pipe_path_group_roles() {
     let mut ir = cadmpeg_ir::examples::unit_cube().expect("unit cube fixture is admitted");
     let mut scope = DesignParameterScope::empty(
         &scope_id,
-        crate::records::feature::scope::DesignFeatureKind::Pipe,
+        crate::records::feature::scope::DesignFeatureKind::Sweep,
         10,
     );
     {
-        let value = Some(DesignPathFeatureConstruction::Pipe(
-            crate::records::feature::path_features::DesignPipeConstruction {
+        let value = Some(DesignPathFeatureConstruction::Sweep(
+            crate::records::feature::path_features::DesignSweepConstruction {
                 operation: DesignExtrudeOperation::NewBody,
                 operation_offset: 0,
-                section_shape:
-                    crate::records::feature::surface_ops::DesignPipeSectionShape::Circular,
-                section_shape_offset: 0,
-                filled: true,
-                filled_offset: 0,
-                values: crate::test_support::reals([1.0, 1.0, 0.6, 0.15]),
-                record_indexes: [11, 12, 13, 14],
-                value_offsets: [0; 4],
+                values: crate::test_support::reals([0.0; 6]),
+                record_indexes: [11, 12, 13, 14, 15, 16],
+                value_offsets: [0; 6],
             },
         ));
         scope
@@ -1026,19 +1021,6 @@ fn validation_checks_pipe_path_group_roles() {
         ]);
     }
 
-    let has_role_finding = |ir: &cadmpeg_ir::CadIr| {
-        crate::test_support::with_decode_context(|ctx| {
-            crate::validate::validate_native_charged(ctx, ir).expect("service native validation")
-        })
-        .iter()
-        .any(|finding| {
-            finding.entity.as_deref() == Some(scope_id.as_str())
-                && finding.message
-                    == "Fusion Design path-feature operand roles conflict with its construction"
-        })
-    };
-    assert!(has_role_finding(&ir));
-
     let group_native_finding_count = |ir: &cadmpeg_ir::CadIr| {
         crate::test_support::with_decode_context(|ctx| {
             crate::validate::validate_native_charged(ctx, ir).expect("service native validation")
@@ -1072,7 +1054,6 @@ fn validation_checks_pipe_path_group_roles() {
             )
             .unwrap();
     }
-    assert!(!has_role_finding(&ir));
     // The synthetic carrier is only a record header. No typed edge operand
     // exists yet, so the independent carrier finding remains.
     assert_eq!(group_native_finding_count(&ir), 1);

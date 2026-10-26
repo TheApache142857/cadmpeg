@@ -1458,7 +1458,7 @@ fn native_validation_propagates_collection_refusal_from_arena_loading() {
     let (ctx, _) =
         DecodeContext::from_root_bytes(&[], &arena, &policy).expect("validation context");
     assert!(matches!(
-        InventorCodec.validate_native(&ctx, decoded.ir()),
+        InventorCodec.validate_native(&ctx, decoded.ir(), None),
         Err(CodecError::ResourceLimit(limit))
             if limit.dimension == ResourceDimension::CollectionItems
                 && limit.operation == "load typed native record"
@@ -1466,7 +1466,9 @@ fn native_validation_propagates_collection_refusal_from_arena_loading() {
 
     let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &DecodePolicy::service())
         .expect("service validation context");
-    assert!(InventorCodec.validate_native(&ctx, decoded.ir()).is_ok());
+    assert!(InventorCodec
+        .validate_native(&ctx, decoded.ir(), None)
+        .is_ok());
 }
 
 #[test]
@@ -1894,7 +1896,7 @@ fn malformed_optional_ufrx_is_a_warning_without_weakening_required_links() {
         .expect("bounded optional table");
     let ctx = crate::native::test_ctx();
     let findings = InventorCodec
-        .validate_native(&ctx, decoded.ir())
+        .validate_native(&ctx, decoded.ir(), None)
         .expect("validation");
     let finding = findings
         .iter()
@@ -1908,7 +1910,7 @@ fn malformed_optional_ufrx_is_a_warning_without_weakening_required_links() {
         .arenas_mut()
         .remove("segment_pairs");
     let findings = InventorCodec
-        .validate_native(&ctx, &broken)
+        .validate_native(&ctx, &broken, None)
         .expect("required arena validation");
     assert!(findings.iter().any(
         |finding| finding.severity == cadmpeg_ir::report::Severity::Error

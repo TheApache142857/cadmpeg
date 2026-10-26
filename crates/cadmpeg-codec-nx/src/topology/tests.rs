@@ -516,7 +516,7 @@ fn topology_carrier_references_refuse_collection_limit() {
         },
         |ctx| {
             let error = graph
-                .referenced_carrier_xmts(ctx)
+                .referenced_curve_xmts(ctx)
                 .expect_err("carrier reference refusal");
             assert!(
                 matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
@@ -1281,83 +1281,6 @@ fn topology_reference_views_reserve_only_one_as_null() {
             }
         }
     }
-}
-
-#[test]
-fn canonical_point_admission_does_not_build_a_topology_graph() {
-    let stream = topology_partition_stream();
-    let graph = crate::test_support::with_decode_context(|ctx| Graph::parse(ctx, &stream)).unwrap();
-    let point = graph.of_kind(NodeKind::Point).next().unwrap();
-    crate::test_support::with_decode_context_over(
-        &[],
-        |policy| policy.limits.max_work_units = 128,
-        |ctx| {
-            assert!(
-                Graph::has_canonical_record(ctx, &point.bytes, NodeKind::Point, point.xmt())
-                    .unwrap()
-            );
-            assert!(ctx.resource_refusal().is_none());
-        },
-    );
-}
-
-#[test]
-fn canonical_admission_keeps_the_graph_fallback_for_composite_input() {
-    let stream = topology_partition_stream();
-    let graph = crate::test_support::with_decode_context(|ctx| Graph::parse(ctx, &stream)).unwrap();
-    let point_xmt = graph.of_kind(NodeKind::Point).next().unwrap().xmt();
-    crate::test_support::with_decode_context(|ctx| {
-        assert!(Graph::has_canonical_record(ctx, &stream, NodeKind::Point, point_xmt).unwrap());
-        assert!(!Graph::has_canonical_record(ctx, &stream, NodeKind::Point, 999).unwrap());
-    });
-}
-
-#[test]
-fn canonical_admission_matches_graph_identity_selection() {
-    crate::test_support::with_decode_context(|ctx| {
-        for bytes in [
-            topology_partition_stream(),
-            offset_surface_topology_partition_stream(),
-            partnered_trimmed_topology_partition_stream(),
-        ] {
-            let graph = Graph::parse(ctx, &bytes).unwrap();
-            for node in graph.nodes.values() {
-                for identity in [node.xmt(), 999_999] {
-                    let expected = Graph::parse(ctx, &node.bytes)
-                        .unwrap()
-                        .get(node.kind, identity)
-                        .is_some();
-                    assert_eq!(
-                        Graph::has_canonical_record(ctx, &node.bytes, node.kind, identity).unwrap(),
-                        expected,
-                        "family {:?}, identity {identity}",
-                        node.kind,
-                    );
-                }
-            }
-        }
-    });
-}
-
-#[test]
-fn canonical_admission_preserves_work_refusals() {
-    let bytes = topology_partition_stream();
-    let graph = crate::test_support::with_decode_context(|ctx| Graph::parse(ctx, &bytes)).unwrap();
-    let point = graph.of_kind(NodeKind::Point).next().unwrap();
-    crate::test_support::with_decode_context_over(
-        &[],
-        |policy| policy.limits.max_work_units = 0,
-        |ctx| {
-            let refusal = Graph::has_canonical_record(ctx, &point.bytes, point.kind, point.xmt())
-                .expect_err("canonical framing remains charged");
-            assert!(matches!(
-                refusal,
-                cadmpeg_core::CodecError::ResourceLimit(limit)
-                    if limit.operation == "validate NX canonical record framing"
-                        && ctx.resource_refusal() == Some(limit)
-            ));
-        },
-    );
 }
 
 #[test]

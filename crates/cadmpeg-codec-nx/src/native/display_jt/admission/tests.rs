@@ -10,7 +10,7 @@ use super::{DisplayJtGraph, DisplayJtGraphWire};
 
 fn validate_native(ir: &cadmpeg_ir::CadIr) -> Vec<cadmpeg_ir::report::check::Finding> {
     crate::test_support::with_decode_context(|ctx| {
-        crate::NxCodec::validate_native(ctx, ir).expect("validation fits service policy")
+        crate::NxCodec::validate_native(ctx, ir, None).expect("validation fits service policy")
     })
 }
 
@@ -236,12 +236,12 @@ fn display_jt_native_validation_propagates_resource_limit() {
             policy.limits.max_work_units = 0;
         },
         |ctx| {
-            let error = crate::NxCodec::validate_native(ctx, &ir).unwrap_err();
+            let error = crate::NxCodec::validate_native(ctx, &ir, None).unwrap_err();
             assert!(matches!(error, CodecError::ResourceLimit(limit)
         if limit.dimension == ResourceDimension::WorkUnits
             && limit.operation == "construct canonical native value"));
             crate::test_support::with_decode_context(|service| {
-                assert!(crate::NxCodec::validate_native(service, &ir)
+                assert!(crate::NxCodec::validate_native(service, &ir, None)
                     .unwrap()
                     .is_empty());
             });
@@ -261,12 +261,12 @@ fn display_jt_native_arena_refuses_before_value_clone() {
             policy.limits.max_materialized_bytes = 0;
         },
         |ctx| {
-            let error = crate::NxCodec::validate_native(ctx, &ir).unwrap_err();
+            let error = crate::NxCodec::validate_native(ctx, &ir, None).unwrap_err();
             assert!(matches!(error, CodecError::ResourceLimit(limit)
         if limit.dimension == ResourceDimension::MaterializedBytes
             && limit.operation == "load typed native record"));
             crate::test_support::with_decode_context(|service| {
-                assert!(crate::NxCodec::validate_native(service, &ir)
+                assert!(crate::NxCodec::validate_native(service, &ir, None)
                     .unwrap()
                     .is_empty());
             });

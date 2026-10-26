@@ -5,6 +5,10 @@
 //! record vectors into domain sub-structs. JT graph admission rejects
 //! inconsistent owners before attachment.
 
+use super::parasolid::deltas_instance::{ParasolidDeltasInstance, ParasolidDeltasSchema};
+use super::parasolid::deltas_metadata::ParasolidDeltasMetadata;
+use super::parasolid::ParasolidDeltasEvents;
+
 use crate::native::features::draft::feature_draft_construction_binary32_lanes;
 use crate::native::features::draft::feature_draft_construction_binary64_lanes;
 use crate::native::features::draft::feature_draft_construction_graph_payloads;
@@ -168,9 +172,8 @@ use super::om::{
 use super::parasolid::{
     parasolid_attribute_class_uses, parasolid_attribute_definitions,
     parasolid_attribute_field_names, parasolid_attribute_field_uses, parasolid_blend_bound_records,
-    parasolid_blend_surface_records, parasolid_chart_records,
-    parasolid_deltas_events_with_censuses, parasolid_entity_51_numeric_uses,
-    parasolid_entity_51_records, parasolid_entity_51_string_uses,
+    parasolid_blend_surface_records, parasolid_chart_records, parasolid_deltas_events_from_records,
+    parasolid_entity_51_numeric_uses, parasolid_entity_51_records, parasolid_entity_51_string_uses,
     parasolid_entity_51_structured_uses, parasolid_entity_value_records,
     parasolid_field_names_records, parasolid_groups, parasolid_intersection_records,
     parasolid_offset_surface_records, parasolid_support_uv_records,
@@ -180,11 +183,8 @@ use super::parasolid::{
     parasolid_topology_attribute_list_references, parasolid_trimmed_curve_records,
     resolve_group_members, ParasolidAttributeClassUse, ParasolidAttributeDefinition,
     ParasolidAttributeFieldNames, ParasolidAttributeFieldUse, ParasolidBlendBoundRecord,
-    ParasolidBlendSurfaceRecord, ParasolidChartRecord, ParasolidDeltasBodyRevision,
-    ParasolidDeltasPartitionPrefix, ParasolidDeltasPmarkPacket, ParasolidDeltasRecord,
-    ParasolidDeltasReferenceMarkerPacket, ParasolidDeltasReferenceTypeMap,
-    ParasolidDeltasResidualSpan, ParasolidDeltasSchemaNode, ParasolidDeltasTaggedReferenceLane,
-    ParasolidDeltasTerminalNullReferences, ParasolidDeltasTombstone, ParasolidDeltasTransmitHeader,
+    ParasolidBlendSurfaceRecord, ParasolidChartRecord, ParasolidDeltasPartitionPrefix,
+    ParasolidDeltasRecord, ParasolidDeltasResidualSpan, ParasolidDeltasTransmitHeader,
     ParasolidEntity51NumericUse, ParasolidEntity51Record, ParasolidEntity51StringUse,
     ParasolidEntity51StructuredUse, ParasolidEntity52IntegerRecord, ParasolidEntity53DoubleRecord,
     ParasolidEntity54StringRecord, ParasolidEntity57AxisRecord, ParasolidEntity58TagRecord,
@@ -306,17 +306,12 @@ pub(in crate::native) struct ParasolidRecords {
     pub(super) group_records: Vec<ParasolidGroupRecord>,
     pub(super) group_members: Vec<ParasolidGroupMember>,
     pub(super) deltas_transmit_headers: Vec<ParasolidDeltasTransmitHeader>,
-    pub(super) deltas_terminal_null_references: Vec<ParasolidDeltasTerminalNullReferences>,
     pub(super) deltas_records: Vec<ParasolidDeltasRecord>,
-    pub(super) deltas_tombstones: Vec<ParasolidDeltasTombstone>,
-    pub(super) deltas_body_revisions: Vec<ParasolidDeltasBodyRevision>,
-    pub(super) deltas_tagged_reference_lanes: Vec<ParasolidDeltasTaggedReferenceLane>,
-    pub(super) deltas_reference_type_maps: Vec<ParasolidDeltasReferenceTypeMap>,
-    pub(super) deltas_pmark_packets: Vec<ParasolidDeltasPmarkPacket>,
+    pub(super) deltas_instances: Vec<ParasolidDeltasInstance>,
     pub(super) deltas_partition_prefixes: Vec<ParasolidDeltasPartitionPrefix>,
-    pub(super) deltas_reference_marker_packets: Vec<ParasolidDeltasReferenceMarkerPacket>,
-    pub(super) deltas_schema_nodes: Vec<ParasolidDeltasSchemaNode>,
+    pub(super) deltas_schemas: Vec<ParasolidDeltasSchema>,
     pub(super) deltas_residual_spans: Vec<ParasolidDeltasResidualSpan>,
+    pub(super) deltas_metadata: Vec<ParasolidDeltasMetadata>,
     pub(super) blend_surface_records: Vec<ParasolidBlendSurfaceRecord>,
     pub(super) blend_bound_records: Vec<ParasolidBlendBoundRecord>,
     pub(super) offset_surface_records: Vec<ParasolidOffsetSurfaceRecord>,
@@ -783,7 +778,7 @@ impl NativeModel {
             (container.segment_stream_wrappers().next().is_some()).then_some(&linked_deltas),
         )?;
         let deltas_events =
-            parasolid_deltas_events_with_censuses(ctx, streams, parsed.take_delta_censuses(ctx)?)?;
+            parasolid_deltas_events_from_records(ctx, streams, parsed.take_deltas(ctx)?)?;
         let (parasolid_group_records, mut parasolid_group_members) =
             parasolid_groups(ctx, streams, &delta_pairs, &deltas_events)?;
         resolve_group_members(&mut parasolid_group_members, parsed);
@@ -793,13 +788,12 @@ impl NativeModel {
         let parasolid_trimmed_curve_records = parasolid_trimmed_curve_records(ctx, parsed)?;
         let parasolid_surface_curve_records = parasolid_surface_curve_records(ctx, parsed)?;
         let parasolid_intersection_records = parasolid_intersection_records(ctx, parsed)?;
-        let parasolid_term_use_records =
-            parasolid_term_use_records(ctx, streams, &deltas_events.records)?;
+        let parasolid_term_use_records = parasolid_term_use_records(ctx, streams)?;
         let parasolid_support_uv_records = parasolid_support_uv_records(ctx, streams)?;
         let parasolid_chart_records = parasolid_chart_records(ctx, streams)?;
         let parasolid_attribute_definitions = parasolid_attribute_definitions(ctx, streams)?;
         let parasolid_entity_51_records = parasolid_entity_51_records(ctx, streams)?;
-        let value_records = parasolid_entity_value_records(ctx, streams, &deltas_events.records)?;
+        let value_records = parasolid_entity_value_records(ctx, streams)?;
         let parasolid_entity_52_integer_records = value_records.integers;
         let parasolid_entity_53_double_records = value_records.doubles;
         let parasolid_entity_54_string_records = value_records.strings;
@@ -1496,6 +1490,15 @@ impl NativeModel {
         )?;
         let (saved_toggle_streams, saved_toggle_entries) = saved_toggle_records(ctx, container)?;
         let assembly_placements = assembly_placements(ctx, container)?;
+        let ParasolidDeltasEvents {
+            transmit_headers: deltas_transmit_headers,
+            records: deltas_records,
+            instances: deltas_instances,
+            partition_prefixes: deltas_partition_prefixes,
+            schemas: deltas_schemas,
+            residual_spans: deltas_residual_spans,
+            metadata: deltas_metadata,
+        } = deltas_events;
         Ok(NativeModel {
             display_jt: DisplayJtRecords {
                 graph: DisplayJtGraph::from_wire_with_context(
@@ -1534,18 +1537,13 @@ impl NativeModel {
             parasolid: ParasolidRecords {
                 group_records: parasolid_group_records,
                 group_members: parasolid_group_members,
-                deltas_transmit_headers: deltas_events.transmit_headers,
-                deltas_terminal_null_references: deltas_events.terminal_null_references,
-                deltas_records: deltas_events.records,
-                deltas_tombstones: deltas_events.tombstones,
-                deltas_body_revisions: deltas_events.body_revisions,
-                deltas_tagged_reference_lanes: deltas_events.tagged_reference_lanes,
-                deltas_reference_type_maps: deltas_events.reference_type_maps,
-                deltas_pmark_packets: deltas_events.pmark_packets,
-                deltas_partition_prefixes: deltas_events.partition_prefixes,
-                deltas_reference_marker_packets: deltas_events.reference_marker_packets,
-                deltas_schema_nodes: deltas_events.schema_nodes,
-                deltas_residual_spans: deltas_events.residual_spans,
+                deltas_transmit_headers,
+                deltas_records,
+                deltas_instances,
+                deltas_partition_prefixes,
+                deltas_schemas,
+                deltas_residual_spans,
+                deltas_metadata,
                 blend_surface_records: parasolid_blend_surface_records,
                 blend_bound_records: parasolid_blend_bound_records,
                 offset_surface_records: parasolid_offset_surface_records,

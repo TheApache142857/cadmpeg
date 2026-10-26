@@ -105,9 +105,7 @@ use crate::native::history::{
     active_feature_closure_for_decode, BodyWriterHistory, NATIVE_PRIMARY_BODY_CLOSURE_WITNESS,
     NATIVE_PRIMARY_BODY_OBJECT_INDEX,
 };
-use crate::native::om::display_color::{
-    RmDisplayColorAssignment, RmDisplayColorAssignmentEncoding,
-};
+use crate::native::om::display_color::RmDisplayColorAssignment;
 use crate::native::segments::BooleanOffsetStoreResolution;
 
 use super::catalogue::NATIVE_CATALOGUE;
@@ -286,8 +284,7 @@ pub(super) fn attach(
     if model.is_empty() && !has_object_sections {
         return Ok(());
     }
-    attach_rm_face_colors(ctx, ir, model, scan, annotations)?;
-    attach_rm_appearances(ctx, ir, model, scan, annotations)?;
+    attach_rm_appearances(ctx, ir, model, annotations)?;
     let display_jt_tessellations = display_jt_tessellations(
         ctx,
         &DisplayJtTessellationInputs {
@@ -641,86 +638,9 @@ fn attach_configurations<'a>(
     Ok(())
 }
 
-fn attach_rm_face_colors(
-    ctx: &DecodeContext<'_>,
-    ir: &mut CadIr,
-    model: &crate::native::model::NativeModel,
-    scan: &Scan,
-    annotations: &mut AnnotationBuilder,
-) -> Result<(), CodecError> {
-    let (face_ids, _face_ids_reservation) =
-        collect_rm_face_ids(ctx, ir.model.faces.iter().map(|face| face.id.as_str()))?;
-    let (bindings, _bindings_storage) =
-        ctx.with_scoped_storage("NX RM color projection storage", || {
-            resolve_rm_face_colors(
-                ctx,
-                &face_ids,
-                &model.om.rm_display_color_assignments,
-                &model.om.part_color_definitions,
-                &model.parasolid.deltas_records,
-                &super::substrate::paired_delta_streams(ctx, scan)?,
-            )
-        })?;
-    for (face_id, color) in bindings {
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(ir.model.faces.len()),
-            "NX RM face color target lookup",
-        )?;
-        let Some(index) = ir
-            .model
-            .faces
-            .iter()
-            .rposition(|face| face.id.as_str() == face_id)
-        else {
-            continue;
-        };
-        let face = &mut ir.model.faces[index];
-        if face.color.is_none() || face.color == Some(color) {
-            face.color = Some(color);
-            annotations
-                .derived(ctx, &face.id, "color")
-                .map_err(cadmpeg_core::CodecError::from)?;
-        }
-    }
-    Ok(())
-}
-
-fn collect_rm_face_ids<'a, 'b>(
-    ctx: &'a DecodeContext<'_>,
-    faces: impl IntoIterator<Item = &'b str>,
-) -> Result<
-    (
-        BTreeSet<String>,
-        cadmpeg_core::decode::ScopedReservation<'a>,
-    ),
-    CodecError,
-> {
-    let mut ids = BTreeSet::new();
-    let mut reservation = ctx.reserve_scoped(0, "NX RM face identity lookup")?;
-    for id in faces {
-        ctx.charge_work(1, "NX RM face identity lookup")?;
-        if ids.contains(id) {
-            continue;
-        }
-
-        let id = reservation
-            .with_storage(|| ctx.copy_retained_text(id, "NX RM face identity lookup"))?;
-        reservation
-            .with_storage(|| ctx.insert_btree_set(&mut ids, id, "NX RM face identity lookup"))?;
-    }
-    Ok((ids, reservation))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RmSourceColorBinding {
     source_id: String,
-    color_definition: String,
-    source_offset: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RmFaceColorBinding {
-    face_id: String,
     color_definition: String,
     source_offset: u64,
 }
@@ -729,27 +649,13 @@ fn attach_rm_appearances(
     ctx: &DecodeContext<'_>,
     ir: &mut CadIr,
     model: &crate::native::model::NativeModel,
-    scan: &Scan,
     annotations: &mut AnnotationBuilder,
 ) -> Result<(), CodecError> {
     let (source_bindings, _source_bindings_storage) = ctx
         .with_scoped_storage("NX RM color projection storage", || {
             resolve_rm_source_color_bindings(ctx, &model.om.rm_display_color_assignments)
         })?;
-    let (face_ids, _face_ids_reservation) =
-        collect_rm_face_ids(ctx, ir.model.faces.iter().map(|face| face.id.as_str()))?;
-    let (face_bindings, _face_bindings_storage) =
-        ctx.with_scoped_storage("NX RM color projection storage", || {
-            resolve_rm_face_color_bindings(
-                ctx,
-                &face_ids,
-                &model.om.rm_display_color_assignments,
-                &model.om.part_color_definitions,
-                &model.parasolid.deltas_records,
-                &super::substrate::paired_delta_streams(ctx, scan)?,
-            )
-        })?;
-    if source_bindings.is_empty() && face_bindings.is_empty() {
+    if source_bindings.is_empty() {
         return Ok(());
     }
     let annotation_stream = StreamHandle::new(
@@ -847,122 +753,6 @@ fn attach_rm_appearances(
             appearance: appearance_id,
             source_entity_id: Some(binding.source_id),
             object_type: Some("RMFastLoad object ID".into()),
-            visible: None,
-            channels: BTreeMap::new(),
-        });
-    }
-    for binding in face_bindings {
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(model.om.part_color_definitions.len()),
-            "NX RM appearance definition lookup",
-        )?;
-        let Some(definition) = model
-            .om
-            .part_color_definitions
-            .iter()
-            .rev()
-            .find(|definition| definition.id == binding.color_definition)
-        else {
-            continue;
-        };
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(ir.model.faces.len()),
-            "NX RM appearance face lookup",
-        )?;
-        let Some(face) = ir
-            .model
-            .faces
-            .iter()
-            .find(|face| face.id.as_str() == binding.face_id)
-        else {
-            continue;
-        };
-        let existing_color = face.color;
-        let color = Color::new(
-            definition.components[0].0.value(),
-            definition.components[1].0.value(),
-            definition.components[2].0.value(),
-            1.0,
-        )
-        .ok_or_else(|| CodecError::Malformed("RM color components must be in [0, 1]".into()))?;
-        if existing_color.is_some_and(|existing| existing != color) {
-            continue;
-        }
-        let face_id = face
-            .id
-            .try_clone_for_decode(ctx, "NX decoded IR value copy")?;
-        let appearance_id = ensure_rm_color_appearance(
-            ctx,
-            ir,
-            annotations,
-            &mut appearances,
-            &mut appearances_reservation,
-            definition,
-            &annotation_stream,
-        )?;
-        let binding_id_reservation = ctx.reserve_scoped(
-            cadmpeg_core::decode::u64_from_index(
-                binding.face_id.len().checked_add(128).ok_or_else(|| {
-                    ctx.refuse_codec_limit(
-                        "NX RM face binding identity",
-                        0,
-                        cadmpeg_core::decode::u64_from_index(binding.face_id.len()),
-                    )
-                })?,
-            ),
-            "NX RM face binding identity",
-        )?;
-        let binding_id: AppearanceBindingId =
-            IdScope::native(cadmpeg_ir::identity_component!("appearance-binding")).id(
-                &cadmpeg_ir::identity_component!("rmfastload-face-color"),
-                native_entity_key(&binding.face_id).ok_or_else(|| {
-                    CodecError::malformed(format_args!(
-                        "NX RMFASTLOAD_FACE_COLOR_ASSIGNMENT face id is not identity key text"
-                    ))
-                })?,
-            );
-        drop(binding_id_reservation);
-        annotations.note(
-            ctx,
-            binding_id.as_str(),
-            &annotation_stream,
-            binding.source_offset,
-            Some("RMFASTLOAD_FACE_COLOR_ASSIGNMENT"),
-        )?;
-        annotations
-            .derived(ctx, binding_id.as_str(), "target")
-            .map_err(cadmpeg_core::CodecError::from)?;
-        annotations
-            .derived(ctx, binding_id.as_str(), "appearance")
-            .map_err(cadmpeg_core::CodecError::from)?;
-        let binding_bytes = binding_id
-            .as_str()
-            .len()
-            .checked_add(face_id.as_str().len())
-            .and_then(|bytes| bytes.checked_add(appearance_id.as_str().len()))
-            .ok_or_else(|| {
-                ctx.refuse_codec_limit(
-                    "NX RM face appearance binding",
-                    0,
-                    cadmpeg_core::decode::u64_from_index(face_id.as_str().len()),
-                )
-            })?;
-        ctx.charge_collection_items(1, "NX RM face appearance bindings")?;
-        ctx.charge_retained(
-            cadmpeg_core::decode::u64_from_index(binding_bytes),
-            "NX RM face appearance binding",
-        )?;
-        ctx.reserve_capacity(
-            &mut ir.model.appearance_bindings,
-            1,
-            "NX RM face appearance bindings",
-        )?;
-        ir.model.appearance_bindings.push(AppearanceBinding {
-            id: binding_id,
-            target: AppearanceTarget::Face(face_id),
-            appearance: appearance_id,
-            source_entity_id: Some(binding.face_id),
-            object_type: Some("Parasolid FACE".into()),
             visible: None,
             channels: BTreeMap::new(),
         });
@@ -1154,207 +944,6 @@ fn resolve_rm_source_color_bindings(
             source_offset,
         });
     }
-    Ok(bindings)
-}
-
-fn resolve_rm_face_colors(
-    ctx: &DecodeContext<'_>,
-    face_ids: &BTreeSet<String>,
-    assignments: &[RmDisplayColorAssignment],
-    definitions: &[super::om::PartColorDefinition],
-    records: &[super::parasolid::ParasolidDeltasRecord],
-    delta_pairs: &BTreeMap<usize, Vec<usize>>,
-) -> Result<Vec<(String, Color)>, CodecError> {
-    let (bindings, _bindings_storage) =
-        ctx.with_scoped_storage("NX RM color projection storage", || {
-            resolve_rm_face_color_bindings(
-                ctx,
-                face_ids,
-                assignments,
-                definitions,
-                records,
-                delta_pairs,
-            )
-        })?;
-    let mut colors = Vec::new();
-    for binding in bindings {
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(definitions.len()),
-            "NX RM face color definition lookup",
-        )?;
-        let Some(definition) = definitions
-            .iter()
-            .rev()
-            .find(|definition| definition.id.as_str() == binding.color_definition.as_str())
-        else {
-            continue;
-        };
-        let color = Color::new(
-            definition.components[0].0.value(),
-            definition.components[1].0.value(),
-            definition.components[2].0.value(),
-            1.0,
-        )
-        .ok_or_else(|| CodecError::Malformed("RM color components must be in [0, 1]".into()))?;
-        ctx.reserve_vec(&mut colors, 1, "NX resolved RM face colors")?;
-        let face_id = ctx.copy_retained_text(&binding.face_id, "NX resolved RM face identity")?;
-        colors.push((face_id, color));
-    }
-    Ok(colors)
-}
-
-fn resolve_rm_face_color_bindings(
-    ctx: &DecodeContext<'_>,
-    face_ids: &BTreeSet<String>,
-    assignments: &[RmDisplayColorAssignment],
-    definitions: &[super::om::PartColorDefinition],
-    records: &[super::parasolid::ParasolidDeltasRecord],
-    delta_pairs: &BTreeMap<usize, Vec<usize>>,
-) -> Result<Vec<RmFaceColorBinding>, CodecError> {
-    let mut bindings = Vec::new();
-    for (position, assignment) in assignments.iter().enumerate() {
-        let RmDisplayColorAssignmentEncoding::Linked(row) = assignment.frame.encoding() else {
-            continue;
-        };
-        let object_index = row.first_index().atom.value();
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(position),
-            "NX RM face color assignment identity",
-        )?;
-        if assignments[..position].iter().any(|earlier| {
-            matches!(
-                earlier.frame.encoding(),
-                RmDisplayColorAssignmentEncoding::Linked(previous)
-                    if previous.first_index().atom.value() == object_index
-            )
-        }) {
-            continue;
-        }
-        let mut choice = RmColorChoice::new(assignment);
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(assignments.len() - position - 1),
-            "NX RM face color assignments",
-        )?;
-        for later in assignments.iter().skip(position + 1) {
-            if matches!(
-                later.frame.encoding(),
-                RmDisplayColorAssignmentEncoding::Linked(next)
-                    if next.first_index().atom.value() == object_index
-            ) {
-                choice.observe(later);
-            }
-        }
-        let RmColorChoice::Unique {
-            definition,
-            source_offset,
-        } = choice
-        else {
-            continue;
-        };
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(definitions.len()),
-            "NX RM face color definitions",
-        )?;
-        if !definitions
-            .iter()
-            .any(|candidate| candidate.id.as_str() == definition)
-        {
-            continue;
-        }
-
-        let mut candidate = None::<String>;
-        let mut ambiguous = false;
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(records.len()),
-            "NX RM face color records",
-        )?;
-        for record in records {
-            let crate::deltas::record_family::RecordFamily::Face { node_id, .. } = &record.family
-            else {
-                continue;
-            };
-            if *node_id != object_index {
-                continue;
-            }
-            let mut partition = None;
-            let mut multiple_partitions = false;
-            for (raw_partition, deltas) in delta_pairs {
-                let work = deltas
-                    .len()
-                    .checked_add(1)
-                    .ok_or_else(|| ctx.refuse_codec_limit("NX RM face color delta links", 0, 1))?;
-                ctx.charge_work(
-                    cadmpeg_core::decode::u64_from_index(work),
-                    "NX RM face color delta links",
-                )?;
-                let Ok(partition_id) = u32::try_from(*raw_partition) else {
-                    continue;
-                };
-                if !deltas
-                    .iter()
-                    .any(|delta| u32::try_from(*delta).ok() == Some(record.stream_ordinal))
-                {
-                    continue;
-                }
-                match partition {
-                    None => partition = Some(partition_id),
-                    Some(existing) if existing == partition_id => {}
-                    Some(_) => {
-                        multiple_partitions = true;
-                        break;
-                    }
-                }
-            }
-            if multiple_partitions {
-                continue;
-            }
-            let Some(partition) = partition else {
-                continue;
-            };
-            let face_id = format!("nx:s{partition}:face#{}", record.xmt);
-            if !face_ids.contains(&face_id) {
-                continue;
-            }
-            match candidate.as_ref() {
-                None => candidate = Some(face_id),
-                Some(existing) if existing == &face_id => {}
-                Some(_) => {
-                    ambiguous = true;
-                    break;
-                }
-            }
-        }
-        if ambiguous {
-            continue;
-        }
-        let Some(face_id) = candidate else {
-            continue;
-        };
-        let bytes = face_id.len().checked_add(definition.len()).ok_or_else(|| {
-            ctx.refuse_codec_limit(
-                "NX RM face color binding",
-                0,
-                cadmpeg_core::decode::u64_from_index(face_id.len()),
-            )
-        })?;
-        ctx.charge_collection_items(1, "NX RM face color bindings")?;
-        ctx.charge_retained(
-            cadmpeg_core::decode::u64_from_index(bytes),
-            "NX RM face color bindings",
-        )?;
-        ctx.reserve_capacity(&mut bindings, 1, "NX RM face color bindings")?;
-        bindings.push(RmFaceColorBinding {
-            face_id,
-            color_definition: definition.to_owned(),
-            source_offset,
-        });
-    }
-    ctx.stable_sort_by(
-        &mut bindings,
-        |left, right| left.face_id.cmp(&right.face_id),
-        |binding| binding.face_id.len(),
-        "sort NX RM face color bindings",
-    )?;
     Ok(bindings)
 }
 

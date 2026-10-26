@@ -394,6 +394,7 @@ pub(in crate::design::decode) struct DesignPrimaryFrame<'a> {
     pub(super) entity_id: u64,
     pub(super) class_tag: crate::records::references::DesignClassTag,
     pub(super) start: usize,
+    pub(super) member_end: usize,
     pub(super) end: usize,
     pub(super) design_type: &'a SegmentTypeData,
 }
@@ -488,6 +489,7 @@ pub(super) fn design_primary_frames<'a>(
             entity_id,
             class_tag,
             start: frame.start,
+            member_end: frame.member_end,
             end: frame.end,
             design_type,
         });

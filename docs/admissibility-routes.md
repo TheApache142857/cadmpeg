@@ -118,6 +118,23 @@ source image, which holds every quarantined card.
 `cadmpeg check` / convert validation =
 
 1. `validate_neutral` (or `validate_neutral_with_source_fidelity`)
-2. plus every registered native validator whose namespace is present
+2. plus every registered native validator whose namespace is present, with the
+   loaded document's optional `SourceFidelity`
+
+NX native validation admits Deltas structure, then compares all six Deltas
+arenas with the projection derived from retained inflated stream bytes. This
+comparison requires exact record identities, complete record sets, field
+values, effective schemas, custom metadata, headers, prefixes, and residual
+spans. A stopped stream reports `NativeLinks` `Info` with its stop offset and
+reason. Its bounded prefix was parsed, and its residual range and digest were
+compared.
+
+Without a sidecar, each claimed Deltas stream reports structural-only
+`NativeLinks` `Info`. A digest-only retained stream reports the same limit.
+A present sidecar missing a claimed stream reports `NativeLinks` `Error`.
+When any Deltas arena contains records, inline canonical retained Deltas
+streams also enter comparison, including a stream whose native records were
+deleted. Empty Deltas arenas make no source claim and produce no Deltas source
+finding. Resource refusals remain typed check-stage errors.
 
 Encoders count rows with `CadIr::census`, not validation.

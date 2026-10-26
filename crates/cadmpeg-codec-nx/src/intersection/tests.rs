@@ -13,7 +13,6 @@ use crate::test_support::test_bytes::record;
 use crate::test_support::test_streams::blend_bound_charted_intersection_curve_stream;
 use crate::test_support::test_streams::charted_intersection_curve_topology_partition_stream;
 use crate::test_support::test_streams::charted_intersection_with_edge_endpoint_witnesses_stream;
-use crate::test_support::test_streams::deltas_intersection_curve_stream;
 use crate::test_support::test_streams::ext11_charted_intersection_curve_stream;
 use crate::test_support::test_streams::two_support_charted_intersection_curve_stream;
 
@@ -303,20 +302,6 @@ fn intersection_auxiliaries_reject_duplicate_identities() {
     .unwrap();
     assert!(scan.curves.is_empty());
     assert_eq!(scan.rejected.missing_chart, 1);
-    assert_eq!(
-        crate::test_support::with_decode_context(|ctx| {
-            crate::intersection::scan_with_auxiliary_replacements(
-                ctx,
-                &chart,
-                &chart[..chart.len() - 108],
-                &[&chart[chart.len() - 108..]],
-            )
-        })
-        .unwrap()
-        .curves
-        .len(),
-        1
-    );
 
     let base_term = charted_intersection_curve_topology_partition_stream();
     let mut term = base_term.clone();
@@ -337,20 +322,6 @@ fn intersection_auxiliaries_reject_duplicate_identities() {
     .unwrap();
     assert!(scan.curves.is_empty());
     assert_eq!(scan.rejected.missing_start_term, 1);
-    assert_eq!(
-        crate::test_support::with_decode_context(|ctx| {
-            crate::intersection::scan_with_auxiliary_replacements(
-                ctx,
-                &term,
-                &base_term,
-                &[&term[base_term.len()..]],
-            )
-        })
-        .unwrap()
-        .curves
-        .len(),
-        1
-    );
 
     let mut uv = charted_intersection_curve_topology_partition_stream();
     append_record(&mut uv, &[0, 204, 0, 0, 0, 4, 0, 23], 41);
@@ -502,21 +473,8 @@ fn intersection_rejects_duplicate_xmt_states_atomically() {
 #[test]
 fn unanchored_delta_payload_does_not_replace_partition_intersection() {
     let base = charted_intersection_curve_topology_partition_stream();
-    let replacement = deltas_intersection_curve_stream();
-    let mut semantic = base.clone();
-    semantic.extend_from_slice(
-        &crate::test_support::with_decode_context(|ctx| {
-            crate::deltas::semantic_residual(ctx, &replacement)
-        })
-        .unwrap(),
-    );
     let scan = crate::test_support::with_decode_context(|ctx| {
-        crate::intersection::scan_with_auxiliary_replacements(
-            ctx,
-            &semantic,
-            &base,
-            &[&replacement],
-        )
+        crate::intersection::scan(ctx, &base, crate::intersection::ChartPointLayout::Xyz3)
     })
     .unwrap();
     let [construction] = scan.source_constructions.as_slice() else {
@@ -581,58 +539,26 @@ fn uncharted_intersection_requires_exact_topology_bounds() {
 }
 
 #[test]
-fn intersection_chart_accepts_one_matching_parameter_complement() {
-    let ext11 = ext11_charted_intersection_curve_stream();
-    let ext11_start = ext11
-        .windows(8)
-        .position(|window| window == [0, 40, 0, 0, 0, 2, 0, 20])
-        .expect("ext11 chart");
-    let complement = ext11[ext11_start..ext11_start + 236].to_vec();
-
+fn unselected_parameter_complement_does_not_change_primary_chart() {
     let base = charted_intersection_curve_topology_partition_stream();
-    let mut stream = base.clone();
-    stream.extend_from_slice(&complement);
-    let [curve] = crate::test_support::with_decode_context(|ctx| {
-        crate::intersection::scan_with_auxiliary_replacements(ctx, &stream, &base, &[&complement])
-    })
-    .unwrap()
-    .curves
-    .try_into()
-    .expect("complemented curve");
-    assert_eq!(curve.samples.parameters(), [2.0, 5.0]);
-
-    let base_chart = crate::test_support::with_decode_context(|ctx| {
-        crate::intersection::chart_source_records(
-            ctx,
-            &base,
-            crate::intersection::ChartPointLayout::Xyz3,
-        )
-    })
-    .unwrap()[0]
-        .pos;
-    let (_, base_chart_end) = crate::test_support::with_decode_context(|ctx| {
-        crate::intersection::chart_source_record_at(
-            ctx,
-            &base,
-            base_chart,
-            crate::intersection::ChartPointLayout::Xyz3,
-        )
-    })
-    .unwrap()
-    .expect("base chart bounds");
-    let duplicate_chart = base[base_chart..base_chart_end].to_vec();
-    let mut duplicate_stream = base.clone();
-    duplicate_stream.extend_from_slice(&duplicate_chart);
-    let scan = crate::test_support::with_decode_context(|ctx| {
-        crate::intersection::scan(
-            ctx,
-            &duplicate_stream,
-            crate::intersection::ChartPointLayout::Xyz3,
-        )
+    let expected = crate::test_support::with_decode_context(|ctx| {
+        crate::intersection::scan(ctx, &base, super::ChartPointLayout::Xyz3)
     })
     .unwrap();
-    assert!(scan.curves.is_empty());
-    assert_eq!(scan.rejected.missing_chart, 1);
+    assert_eq!(expected.curves.len(), 1);
+    let delta = ext11_charted_intersection_curve_stream();
+    let file = crate::test_support::test_prt::prt_with_streams(&[&base, &delta]);
+    crate::test_support::with_decode_context_over(
+        &file,
+        |_| {},
+        |ctx| {
+            let scan =
+                crate::decode::scan(ctx, cadmpeg_core::decode::View::over_retained(&file)).unwrap();
+            let sources = crate::native::substrate::topology_streams(ctx, &scan).unwrap();
+            assert_eq!(sources[0], base.as_slice());
+            assert!(sources[1].is_empty());
+        },
+    );
 }
 
 #[test]

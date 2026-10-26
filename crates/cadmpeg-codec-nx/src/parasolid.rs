@@ -266,28 +266,6 @@ pub(crate) struct FieldNamesRecord {
     pub(crate) name_xmts: NameReferences,
 }
 
-/// Locate unique snapshot values with scoped discovery storage.
-pub(crate) fn referenced_value_record_offsets<'ctx>(
-    ctx: &'ctx DecodeContext<'_>,
-    bytes: &[u8],
-) -> Result<(Vec<usize>, ScopedReservation<'ctx>), CodecError> {
-    referenced_value_offsets(ctx, bytes, ValueMultiplicity::UniqueSnapshot)
-}
-
-/// Locate historical value events with scoped discovery storage.
-pub(crate) fn referenced_value_event_offsets<'ctx>(
-    ctx: &'ctx DecodeContext<'_>,
-    bytes: &[u8],
-) -> Result<(Vec<usize>, ScopedReservation<'ctx>), CodecError> {
-    referenced_value_offsets(ctx, bytes, ValueMultiplicity::HistoricalEvents)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ValueMultiplicity {
-    UniqueSnapshot,
-    HistoricalEvents,
-}
-
 fn value_is_referenced(
     ctx: &DecodeContext<'_>,
     references: &BTreeSet<u32>,
@@ -300,18 +278,22 @@ fn value_is_referenced(
     Ok(references.contains(&xmt))
 }
 
-fn referenced_value_offsets<'ctx>(
+/// Locate unique snapshot values with scoped discovery storage.
+///
+/// An identity that frames more than one value record, or more than one
+/// owning record, is a historical sequence rather than a snapshot and names
+/// no value here.
+pub(crate) fn referenced_value_record_offsets<'ctx>(
     ctx: &'ctx DecodeContext<'_>,
     bytes: &[u8],
-    multiplicity: ValueMultiplicity,
 ) -> Result<(Vec<usize>, ScopedReservation<'ctx>), CodecError> {
-    let (references, _reference_guard) = referenced_value_xmts(ctx, bytes, multiplicity)?;
+    let (references, _reference_guard) = referenced_value_xmts(ctx, bytes)?;
     let (candidates, _candidate_guard) =
         value_records::value_record_candidates(ctx, bytes, &references)?;
     let mut offsets = Vec::new();
     let mut reservation = ctx.reserve_scoped(0, "NX value owner offsets")?;
     for positions in candidates.into_values() {
-        if multiplicity == ValueMultiplicity::UniqueSnapshot && positions.len() != 1 {
+        if positions.len() != 1 {
             continue;
         }
         for offset in positions {
@@ -329,7 +311,6 @@ fn referenced_value_offsets<'ctx>(
 fn referenced_value_xmts<'ctx>(
     ctx: &'ctx DecodeContext<'_>,
     bytes: &[u8],
-    multiplicity: ValueMultiplicity,
 ) -> Result<(BTreeSet<u32>, ScopedReservation<'ctx>), CodecError> {
     let mut referenced = BTreeSet::new();
     let mut reference_guard = ctx.reserve_scoped(0, "NX owned value identities")?;
@@ -351,7 +332,7 @@ fn referenced_value_xmts<'ctx>(
         )?;
     }
     for records in entities.into_values() {
-        if multiplicity == ValueMultiplicity::UniqueSnapshot && records.len() != 1 {
+        if records.len() != 1 {
             continue;
         }
         for record in records {
@@ -401,7 +382,7 @@ fn referenced_value_xmts<'ctx>(
     let mut referenced_lists = BTreeSet::new();
     let mut list_guard = ctx.reserve_scoped(0, "NX referenced field-name lists")?;
     for records in definitions.into_values() {
-        if multiplicity == ValueMultiplicity::UniqueSnapshot && records.len() != 1 {
+        if records.len() != 1 {
             continue;
         }
         for record in records {
@@ -422,7 +403,7 @@ fn referenced_value_xmts<'ctx>(
             &referenced_lists,
             xmt,
             "resolve NX field-name ownership",
-        )? || (multiplicity == ValueMultiplicity::UniqueSnapshot && records.len() != 1)
+        )? || records.len() != 1
         {
             continue;
         }
@@ -567,23 +548,6 @@ pub(crate) fn entity_51_records<'ctx>(
         slots,
         payloads,
     })
-}
-
-/// Decode and retain one complete type-81 entity/attribute-list record.
-pub(crate) fn entity_51_record_at(
-    ctx: &DecodeContext<'_>,
-    bytes: &[u8],
-    offset: usize,
-) -> Result<Option<Entity51Record>, CodecError> {
-    let Some(frame) = entity_51_frame_at(bytes, offset) else {
-        return Ok(None);
-    };
-    let mut payloads = ctx.reserve_scoped(0, "NX entity-51 reference lanes")?;
-    let record = entity_51_record_from_frame(ctx, bytes, frame, &mut payloads)?;
-    if record.is_some() {
-        payloads.commit()?;
-    }
-    Ok(record)
 }
 
 #[derive(Clone, Copy)]
@@ -1126,11 +1090,13 @@ fn structural_stream_candidate(
             .with_storage(|| crate::records::PrimaryRecords::read(ctx, inflated))?
             .is_some_and(|primary| !primary.records().is_empty()));
     }
-    let census = crate::deltas::census::walk(ctx, inflated)?;
-    if !census.records.is_empty() || !census.tombstones.is_empty() {
-        return Ok(true);
-    }
-    Ok(false)
+    let owner = crate::records::DeltasRecords::read(ctx, inflated)?;
+    Ok(owner.events().iter().any(|event| {
+        matches!(
+            event.content(),
+            crate::records::deltas::EventContent::PartitionPrefix(_)
+        )
+    }))
 }
 
 /// Locate clear Parasolid transmit sections in a legacy `UG_PART/UG_PART`

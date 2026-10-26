@@ -6166,103 +6166,132 @@ source = "spec"
 anchor = "a marked reference to the owning scope at offset 88"
 
 [[record]]
-name = "fixed_pipe_operation_prefix"
+name = "compact_pipe_operation_prefix"
+parsed_by = "crates/cadmpeg-codec-f3d/src/design/decode/scopes/pipe.rs"
 kind = "byte"
 section = "3.1"
-anchor = "Primary-header offset 25 stores u32 `4`, which selects a new-body result"
-size = 31
-note = "Offsets are relative to the primary indexed header. The variable scope reference table and operand records follow this fixed prefix."
+anchor = "The compact `Pipe` prefix has zero property-presence bytes at offsets `19` and `20`"
+size = 28
+note = "Offsets are relative to the primary indexed header. The variable scope table follows this prefix."
 
 [[record.field]]
 name = "indexed_header"
 offset = 0
 type = "bytes[11]"
 source = "spec"
-anchor = "the primary indexed header"
+anchor = "The compact `Pipe` prefix has zero property-presence bytes at offsets `19` and `20`"
 
-[[record.gap]]
+[[record.field]]
+name = "zero_run_8"
 offset = 11
-size = 14
-note = "The fixed Pipe prefix carries no admitted fields between its indexed header and the operation at offset 25."
-
-[[record.field]]
-name = "operation"
-offset = 25
-type = "u32"
+type = "bytes[8]"
 source = "spec"
-anchor = "Primary-header offset 25 stores u32 `4`, which selects a new-body result"
+anchor = "The compact `Pipe` prefix has zero property-presence bytes at offsets `19` and `20`"
 
 [[record.field]]
-name = "section_shape"
-offset = 29
+name = "leading_presence"
+offset = 19
 type = "u8"
 source = "spec"
-anchor = "Offset 29 value `1` selects a circular section"
+anchor = "The compact `Pipe` prefix has zero property-presence bytes at offsets `19` and `20`"
+value = 0
 
 [[record.field]]
-name = "filled"
-offset = 30
-type = "u8"
-source = "spec"
-anchor = "Offset 30 value `1` selects a filled section"
-
-[[record]]
-name = "legacy_pipe_operation_prefix"
-kind = "byte"
-section = "3.1"
-anchor = "Class-`405` paired with class-`259`, and class-`475` paired with class-`260`, use a legacy `Pipe` operation prefix"
-size = 32
-note = "Offsets are relative to the primary indexed header. The legacy scope reference table and variable operand records follow this prefix."
-
-[[record.field]]
-name = "indexed_header"
-offset = 0
-type = "bytes[11]"
-source = "spec"
-anchor = "primary indexed header"
-
-[[record.field]]
-name = "zero_run_9"
-offset = 11
-type = "bytes[9]"
-source = "spec"
-anchor = "offsets `11` through `19` are zero"
-
-[[record.field]]
-name = "prefix_marker"
+name = "property_presence"
 offset = 20
 type = "u8"
 source = "spec"
-anchor = "offset `20` is u8 `1`"
+anchor = "The compact `Pipe` prefix has zero property-presence bytes at offsets `19` and `20`"
+value = 0
+
+[[record.field]]
+name = "is_hollow"
+offset = 21
+type = "u8"
+source = "spec"
+anchor = "The compact `Pipe` prefix has zero property-presence bytes at offsets `19` and `20`"
+
+[[record.field]]
+name = "operation"
+offset = 22
+type = "u32"
+source = "spec"
+anchor = "The compact `Pipe` prefix has zero property-presence bytes at offsets `19` and `20`"
+
+[[record.field]]
+name = "post_operation_bytes"
+offset = 26
+type = "bytes[2]"
+source = "spec"
+anchor = "The compact `Pipe` prefix has zero property-presence bytes at offsets `19` and `20`"
+
+[[record]]
+name = "legacy_pipe_operation_prefix"
+parsed_by = "crates/cadmpeg-codec-f3d/src/design/decode/scopes/pipe.rs"
+kind = "byte"
+section = "3.1"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
+size = 32
+note = "Offsets are relative to the primary indexed header. The variable scope table follows this prefix."
+
+[[record.field]]
+name = "indexed_header"
+offset = 0
+type = "bytes[11]"
+source = "spec"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
+
+[[record.field]]
+name = "zero_run_8"
+offset = 11
+type = "bytes[8]"
+source = "spec"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
+
+[[record.field]]
+name = "leading_presence"
+offset = 19
+type = "u8"
+source = "spec"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
+value = 0
+
+[[record.field]]
+name = "property_presence"
+offset = 20
+type = "u8"
+source = "spec"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
 value = 1
 
 [[record.field]]
-name = "zero_run_5"
+name = "property_count"
 offset = 21
-type = "bytes[5]"
+type = "u32"
 source = "spec"
-anchor = "offsets `21` through `25` are zero"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
+value = 0
+
+[[record.field]]
+name = "is_hollow"
+offset = 25
+type = "u8"
+source = "spec"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
 
 [[record.field]]
 name = "operation"
 offset = 26
 type = "u32"
 source = "spec"
-anchor = "offset `26` is the result-operation u32"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
 
 [[record.field]]
-name = "section_shape"
+name = "post_operation_bytes"
 offset = 30
-type = "u8"
+type = "bytes[2]"
 source = "spec"
-anchor = "offset `30` is the section-shape u8"
-
-[[record.field]]
-name = "filled"
-offset = 31
-type = "u8"
-source = "spec"
-anchor = "offset `31` is the filled-section u8"
+anchor = "The legacy `Pipe` prefix has zero at offset `19`"
 
 [[record]]
 name = "sketch_profile_region_selection_prefix"

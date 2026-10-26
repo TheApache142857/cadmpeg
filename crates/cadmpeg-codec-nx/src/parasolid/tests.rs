@@ -207,14 +207,25 @@ fn parasolid_entity_51_records_retain_layout_selected_references() {
         assert_eq!(records[0].definition_xmt, 0x21);
         assert_eq!(records[0].leading_references, [3, 4, 5, 6, 7]);
         assert_eq!(records[0].trailing_references.values(), [8]);
-        assert_eq!(
-            crate::parasolid::entity_51_record_at(ctx, &bytes, 0).unwrap(),
-            Some(records[0].clone())
-        );
-        assert!(crate::parasolid::entity_51_record_at(ctx, &bytes[..25], 0)
-            .unwrap()
-            .is_none());
+        assert!(entity_51_record_at_start(ctx, &bytes[..25]).is_none());
     });
+}
+
+/// The single type-81 record the scan frames at the start of `bytes`, if any.
+fn entity_51_record_at_start(
+    ctx: &cadmpeg_core::decode::DecodeContext<'_>,
+    bytes: &[u8],
+) -> Option<crate::parasolid::Entity51Record> {
+    let mut records = crate::parasolid::entity_51_records(ctx, bytes)
+        .unwrap()
+        .records;
+    assert!(
+        records.len() <= 1,
+        "fixtures frame at most one entity-51 record"
+    );
+    let record = records.pop()?;
+    assert_eq!(record.offset, 0);
+    Some(record)
 }
 
 #[test]
@@ -230,14 +241,10 @@ fn parasolid_entity_51_definition_uses_extended_xmt_framing() {
             bytes.extend_from_slice(&reference.to_be_bytes());
         }
 
-        let record = crate::parasolid::entity_51_record_at(ctx, &bytes, 0)
-            .unwrap()
-            .unwrap();
+        let record = entity_51_record_at_start(ctx, &bytes).unwrap();
         assert_eq!(record.definition_xmt, 40_000);
         assert_eq!(record.byte_len, 28);
-        assert!(crate::parasolid::entity_51_record_at(ctx, &bytes[..27], 0)
-            .unwrap()
-            .is_none());
+        assert!(entity_51_record_at_start(ctx, &bytes[..27]).is_none());
     });
 }
 
@@ -257,20 +264,14 @@ fn parasolid_entity_51_reference_count_is_five_plus_flags() {
             }
             direct.extend_from_slice(&[0xaa, 0xbb]);
 
-            let record = crate::parasolid::entity_51_record_at(ctx, &direct, 0)
-                .unwrap()
-                .unwrap();
+            let record = entity_51_record_at_start(ctx, &direct).unwrap();
             assert_eq!(record.leading_references.len(), 5);
             assert_eq!(
                 record.trailing_references.values().len(),
                 usize::try_from(flags).expect("fixture value fits usize")
             );
             assert_eq!(record.byte_len, direct.len() - 2);
-            assert!(
-                crate::parasolid::entity_51_record_at(ctx, &direct[..direct.len() - 3], 0)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(entity_51_record_at_start(ctx, &direct[..direct.len() - 3]).is_none());
 
             let mut prefixed = vec![0, 0x51];
             prefixed.extend_from_slice(&flags.to_be_bytes());
@@ -286,20 +287,14 @@ fn parasolid_entity_51_reference_count_is_five_plus_flags() {
             prefixed.push(0);
             prefixed.extend_from_slice(&[0xaa, 0xbb]);
 
-            let record = crate::parasolid::entity_51_record_at(ctx, &prefixed, 0)
-                .unwrap()
-                .unwrap();
+            let record = entity_51_record_at_start(ctx, &prefixed).unwrap();
             assert_eq!(record.leading_references.len(), 5);
             assert_eq!(
                 record.trailing_references.values().len(),
                 usize::try_from(flags).expect("fixture value fits usize")
             );
             assert_eq!(record.byte_len, prefixed.len() - 2);
-            assert!(
-                crate::parasolid::entity_51_record_at(ctx, &prefixed[..prefixed.len() - 3], 0)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(entity_51_record_at_start(ctx, &prefixed[..prefixed.len() - 3]).is_none());
         }
     });
 }
@@ -316,9 +311,7 @@ fn parasolid_entity_51_rejects_nonzero_upper_flag_bytes() {
             bytes.extend_from_slice(&reference.to_be_bytes());
         }
 
-        assert!(crate::parasolid::entity_51_record_at(ctx, &bytes, 0)
-            .unwrap()
-            .is_none());
+        assert!(entity_51_record_at_start(ctx, &bytes).is_none());
     });
 }
 
@@ -1265,9 +1258,7 @@ fn structural_entity_references_do_not_own_value_records() {
     crate::test_support::with_decode_context(|ctx| {
         let (owned, _) = super::referenced_value_record_offsets(ctx, &bytes).unwrap();
         assert!(!owned.contains(&value_offset));
-        let (references, _) =
-            super::referenced_value_xmts(ctx, &bytes, super::ValueMultiplicity::UniqueSnapshot)
-                .unwrap();
+        let (references, _) = super::referenced_value_xmts(ctx, &bytes).unwrap();
         assert!(!references.contains(&3));
         assert!(references.contains(&8));
     });
@@ -1343,9 +1334,8 @@ fn attribute_owner_grouping_is_admitted_once() {
         &bytes,
         |policy| policy.limits.max_work_units = 8_000_000,
         |ctx| {
-            let (references, _reservation) =
-                super::referenced_value_xmts(ctx, &bytes, super::ValueMultiplicity::UniqueSnapshot)
-                    .expect("group insertion work is billed once");
+            let (references, _reservation) = super::referenced_value_xmts(ctx, &bytes)
+                .expect("group insertion work is billed once");
             assert!(references.contains(&8));
             assert!(ctx.resource_refusal().is_none());
         },

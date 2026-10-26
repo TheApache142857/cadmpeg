@@ -6,6 +6,9 @@
 //! emission order; `phase` splits semantic islands for [`super::attach`].
 //! Stream choice (`nx:container` vs `nx:s{ordinal}`) lives in the `note` fn.
 
+use super::parasolid::deltas_instance::{ParasolidDeltasInstance, ParasolidDeltasSchema};
+use super::parasolid::deltas_metadata::ParasolidDeltasMetadata;
+
 use super::assembly_placement::AssemblyPlacement;
 use super::features::operation_record::FeatureOperationRecord;
 use super::features::unlabeled_record::FeatureUnlabeledOperationRecord;
@@ -55,11 +58,8 @@ use super::om::{
 };
 use super::parasolid::{
     ParasolidAttributeDefinition, ParasolidBlendBoundRecord, ParasolidBlendSurfaceRecord,
-    ParasolidChartRecord, ParasolidDeltasBodyRevision, ParasolidDeltasPartitionPrefix,
-    ParasolidDeltasPmarkPacket, ParasolidDeltasRecord, ParasolidDeltasReferenceMarkerPacket,
-    ParasolidDeltasReferenceTypeMap, ParasolidDeltasResidualSpan, ParasolidDeltasSchemaNode,
-    ParasolidDeltasTaggedReferenceLane, ParasolidDeltasTerminalNullReferences,
-    ParasolidDeltasTombstone, ParasolidDeltasTransmitHeader, ParasolidEntity51NumericUse,
+    ParasolidChartRecord, ParasolidDeltasPartitionPrefix, ParasolidDeltasRecord,
+    ParasolidDeltasResidualSpan, ParasolidDeltasTransmitHeader, ParasolidEntity51NumericUse,
     ParasolidEntity51Record, ParasolidEntity51StringUse, ParasolidEntity51StructuredUse,
     ParasolidEntity52IntegerRecord, ParasolidEntity53DoubleRecord, ParasolidEntity54StringRecord,
     ParasolidEntity57AxisRecord, ParasolidEntity58TagRecord, ParasolidEntity62UnicodeRecord,
@@ -620,11 +620,6 @@ impl StreamNoted for ParasolidDeltasTransmitHeader {
         (&self.id, self.stream_ordinal, 0)
     }
 }
-impl StreamNoted for ParasolidDeltasTerminalNullReferences {
-    fn stream_note(&self) -> (&str, u32, u64) {
-        (&self.id, self.stream_ordinal, self.inflated_offset)
-    }
-}
 impl StreamNoted for ParasolidDeltasRecord {
     fn stream_note(&self) -> (&str, u32, u64) {
         (&self.id, self.stream_ordinal, self.inflated_offset)
@@ -635,27 +630,7 @@ impl StreamNoted for ParasolidGroupRecord {
         (&self.id, self.origin.stream_ordinal(), self.inflated_offset)
     }
 }
-impl StreamNoted for ParasolidDeltasTombstone {
-    fn stream_note(&self) -> (&str, u32, u64) {
-        (&self.id, self.stream_ordinal, self.inflated_offset)
-    }
-}
-impl StreamNoted for ParasolidDeltasBodyRevision {
-    fn stream_note(&self) -> (&str, u32, u64) {
-        (&self.id, self.stream_ordinal, self.inflated_offset)
-    }
-}
-impl StreamNoted for ParasolidDeltasTaggedReferenceLane {
-    fn stream_note(&self) -> (&str, u32, u64) {
-        (&self.id, self.stream_ordinal, self.inflated_offset)
-    }
-}
-impl StreamNoted for ParasolidDeltasReferenceTypeMap {
-    fn stream_note(&self) -> (&str, u32, u64) {
-        (&self.id, self.stream_ordinal, self.inflated_offset)
-    }
-}
-impl StreamNoted for ParasolidDeltasPmarkPacket {
+impl StreamNoted for ParasolidDeltasInstance {
     fn stream_note(&self) -> (&str, u32, u64) {
         (&self.id, self.stream_ordinal, self.inflated_offset)
     }
@@ -665,12 +640,13 @@ impl StreamNoted for ParasolidDeltasPartitionPrefix {
         (&self.id, self.stream_ordinal, self.inflated_offset)
     }
 }
-impl StreamNoted for ParasolidDeltasReferenceMarkerPacket {
+impl StreamNoted for ParasolidDeltasSchema {
     fn stream_note(&self) -> (&str, u32, u64) {
         (&self.id, self.stream_ordinal, self.inflated_offset)
     }
 }
-impl StreamNoted for ParasolidDeltasSchemaNode {
+
+impl StreamNoted for ParasolidDeltasMetadata {
     fn stream_note(&self) -> (&str, u32, u64) {
         (&self.id, self.stream_ordinal, self.inflated_offset)
     }
@@ -1400,19 +1376,6 @@ pub(crate) const CATALOGUE: &[CatalogueRow] = &[
         counts_toward_emptiness: true,
     },
     CatalogueRow {
-        arena: "parasolid_deltas_terminal_null_references",
-        exactness: Exactness::ByteExact,
-        phase: Phase::GroupA {
-            tag: Some("DELTAS_TERMINAL_NULL_REFERENCES"),
-            note: |ctx, m, r, tag, a| {
-                note_per_stream(ctx, &m.parasolid.deltas_terminal_null_references, r, tag, a)
-            },
-        },
-        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_terminal_null_references, r, ns),
-        len: |m| m.parasolid.deltas_terminal_null_references.len(),
-        counts_toward_emptiness: true,
-    },
-    CatalogueRow {
         arena: "parasolid_deltas_records",
         exactness: Exactness::ByteExact,
         phase: Phase::GroupA {
@@ -1424,68 +1387,16 @@ pub(crate) const CATALOGUE: &[CatalogueRow] = &[
         counts_toward_emptiness: true,
     },
     CatalogueRow {
-        arena: "parasolid_deltas_tombstones",
+        arena: "parasolid_deltas_instances",
         exactness: Exactness::ByteExact,
         phase: Phase::GroupA {
-            tag: Some("DELTAS_TOMBSTONE"),
+            tag: Some("DELTAS_INSTANCE"),
             note: |ctx, m, r, tag, a| {
-                note_per_stream(ctx, &m.parasolid.deltas_tombstones, r, tag, a)
+                note_per_stream(ctx, &m.parasolid.deltas_instances, r, tag, a)
             },
         },
-        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_tombstones, r, ns),
-        len: |m| m.parasolid.deltas_tombstones.len(),
-        counts_toward_emptiness: true,
-    },
-    CatalogueRow {
-        arena: "parasolid_deltas_body_revisions",
-        exactness: Exactness::ByteExact,
-        phase: Phase::GroupA {
-            tag: Some("DELTAS_BODY_REVISION"),
-            note: |ctx, m, r, tag, a| {
-                note_per_stream(ctx, &m.parasolid.deltas_body_revisions, r, tag, a)
-            },
-        },
-        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_body_revisions, r, ns),
-        len: |m| m.parasolid.deltas_body_revisions.len(),
-        counts_toward_emptiness: true,
-    },
-    CatalogueRow {
-        arena: "parasolid_deltas_tagged_reference_lanes",
-        exactness: Exactness::ByteExact,
-        phase: Phase::GroupA {
-            tag: Some("DELTAS_TAGGED_REFERENCES"),
-            note: |ctx, m, r, tag, a| {
-                note_per_stream(ctx, &m.parasolid.deltas_tagged_reference_lanes, r, tag, a)
-            },
-        },
-        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_tagged_reference_lanes, r, ns),
-        len: |m| m.parasolid.deltas_tagged_reference_lanes.len(),
-        counts_toward_emptiness: true,
-    },
-    CatalogueRow {
-        arena: "parasolid_deltas_reference_type_maps",
-        exactness: Exactness::ByteExact,
-        phase: Phase::GroupA {
-            tag: Some("DELTAS_REFERENCE_TYPE_MAP"),
-            note: |ctx, m, r, tag, a| {
-                note_per_stream(ctx, &m.parasolid.deltas_reference_type_maps, r, tag, a)
-            },
-        },
-        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_reference_type_maps, r, ns),
-        len: |m| m.parasolid.deltas_reference_type_maps.len(),
-        counts_toward_emptiness: true,
-    },
-    CatalogueRow {
-        arena: "parasolid_deltas_pmark_packets",
-        exactness: Exactness::ByteExact,
-        phase: Phase::GroupA {
-            tag: Some("DELTAS_PMARK"),
-            note: |ctx, m, r, tag, a| {
-                note_per_stream(ctx, &m.parasolid.deltas_pmark_packets, r, tag, a)
-            },
-        },
-        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_pmark_packets, r, ns),
-        len: |m| m.parasolid.deltas_pmark_packets.len(),
+        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_instances, r, ns),
+        len: |m| m.parasolid.deltas_instances.len(),
         counts_toward_emptiness: true,
     },
     CatalogueRow {
@@ -1502,29 +1413,25 @@ pub(crate) const CATALOGUE: &[CatalogueRow] = &[
         counts_toward_emptiness: true,
     },
     CatalogueRow {
-        arena: "parasolid_deltas_reference_marker_packets",
+        arena: "parasolid_deltas_schemas",
         exactness: Exactness::ByteExact,
         phase: Phase::GroupA {
-            tag: Some("DELTAS_REFERENCE_MARKER"),
-            note: |ctx, m, r, tag, a| {
-                note_per_stream(ctx, &m.parasolid.deltas_reference_marker_packets, r, tag, a)
-            },
+            tag: Some("DELTAS_SCHEMA"),
+            note: |ctx, m, r, tag, a| note_per_stream(ctx, &m.parasolid.deltas_schemas, r, tag, a),
         },
-        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_reference_marker_packets, r, ns),
-        len: |m| m.parasolid.deltas_reference_marker_packets.len(),
+        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_schemas, r, ns),
+        len: |m| m.parasolid.deltas_schemas.len(),
         counts_toward_emptiness: true,
     },
     CatalogueRow {
-        arena: "parasolid_deltas_schema_nodes",
+        arena: "parasolid_deltas_metadata",
         exactness: Exactness::ByteExact,
         phase: Phase::GroupA {
-            tag: Some("DELTAS_SCHEMA_NODE"),
-            note: |ctx, m, r, tag, a| {
-                note_per_stream(ctx, &m.parasolid.deltas_schema_nodes, r, tag, a)
-            },
+            tag: Some("DELTAS_METADATA"),
+            note: |ctx, m, r, tag, a| note_per_stream(ctx, &m.parasolid.deltas_metadata, r, tag, a),
         },
-        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_schema_nodes, r, ns),
-        len: |m| m.parasolid.deltas_schema_nodes.len(),
+        emit: |ctx, m, r, ns| emit_arena(ctx, &m.parasolid.deltas_metadata, r, ns),
+        len: |m| m.parasolid.deltas_metadata.len(),
         counts_toward_emptiness: true,
     },
     CatalogueRow {

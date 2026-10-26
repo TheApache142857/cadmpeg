@@ -33,6 +33,7 @@ pub(crate) mod ids;
 pub(crate) mod jpeg;
 mod nurbs_fit;
 mod offset;
+mod origin;
 pub(crate) mod pcurves;
 pub(crate) mod report;
 mod support_uv;
