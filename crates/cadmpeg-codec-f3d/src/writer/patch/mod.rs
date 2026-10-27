@@ -12,6 +12,7 @@ use cadmpeg_ir::geometry::{
     CurveGeometry, SolvedCurveGeometry, SolvedSurfaceGeometry, SurfaceGeometry,
 };
 
+use crate::loss::F3dLossCode;
 use crate::writer::primitives::{
     f3d_native, validate_assembly_projection, validate_configuration_projection,
 };
@@ -20,6 +21,7 @@ use cadmpeg_asm::nurbs::reader::LEN_TO_MM;
 pub(crate) mod edits;
 mod geometry;
 pub(crate) mod records;
+mod user_knots;
 use edits::{
     validate_act_appearance_bindings, validate_act_entity_edits, validate_act_guid_edits,
     validate_act_registry_channel_edits, validate_act_root_edits, validate_body_color_edits,
@@ -90,6 +92,16 @@ pub(crate) fn write_semantic(
                 "the salvage decode of the source image refused: {other}"
             )),
         })?;
+    if baseline
+        .report()
+        .losses
+        .iter()
+        .any(|loss| loss.code == F3dLossCode::DesignIntentUndecoded.kind())
+    {
+        return Err(CodecError::NotImplemented(
+            "F3D semantic patching refuses a source whose design intent was not decoded".into(),
+        ));
+    }
     let baseline_native = f3d_native(baseline.ir())?;
     let natives = PatchNatives {
         baseline: baseline_native.as_ref(),
@@ -132,6 +144,12 @@ pub(crate) fn write_semantic(
                 let Some(SolvedCurveGeometry::Nurbs(before)) = before.geometry.solved() else {
                     return None;
                 };
+                let mut nurbs = nurbs.clone();
+                if let Some(shift) = native_subset_shift(target, &curve.id) {
+                    nurbs
+                        .edit_knots(|knots| knots.iter_mut().for_each(|knot| *knot += shift))
+                        .ok()?;
+                }
                 Some((
                     curve.id.as_str().to_owned(),
                     NurbsCurveEdit {
@@ -252,6 +270,17 @@ pub(crate) fn write_semantic(
             range[0] /= LEN_TO_MM;
             range[1] /= LEN_TO_MM;
         }
+        if let Some(shift) = target
+            .model
+            .edges
+            .iter()
+            .find(|edge| edge.id.as_str() == edge_id)
+            .and_then(|edge| edge.curve())
+            .and_then(|curve| native_subset_shift(target, curve))
+        {
+            range[0] += shift;
+            range[1] += shift;
+        }
     }
     let face_sense_edits = validate_face_sense_edits(natives, baseline.ir(), target)?;
     let coedge_sense_edits =
@@ -266,7 +295,9 @@ pub(crate) fn write_semantic(
     let tolerant_vertex_edits = validate_tolerant_vertex_edits(natives, baseline.ir(), target)?;
     let tolerant_coedge_edits = validate_tolerant_coedge_edits(natives, baseline.ir(), target)?;
     let wire_topology_edits = validate_wire_topology_edits(natives)?;
+    let mut user_knot_edits = user_knots::edits(baseline.ir(), target)?;
     let mut supported_target = baseline.ir().clone();
+    supported_target.model.subds.clone_from(&target.model.subds);
     supported_target
         .model
         .points
@@ -589,29 +620,65 @@ pub(crate) fn write_semantic(
     let mut zip = zip::ZipWriter::new(output);
     let mut patched_protein_appearances = BTreeSet::new();
     for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| {
-            CodecError::malformed(format_args!("invalid F3D ZIP entry: {error}"))
-        })?;
-        let name = entry.name().to_owned();
-        let options = crate::zip_write::file_options(entry.compression());
-        if entry.is_dir() {
-            zip.add_directory(name, options).map_err(|error| {
-                CodecError::malformed(format_args!("cannot write F3D directory: {error}"))
-            })?;
-            continue;
-        }
-        let mut bytes = Vec::new();
-        let mut chunk = [0_u8; 16 * 1024];
-        loop {
-            let read = entry.read(&mut chunk)?;
-            if read == 0 {
-                break;
+        // `zip` cannot expand or write a Zstandard member: it is read raw and expanded by
+        // `cadmpeg-core`, and written back by `write_zstd_member` below.
+        let zstd = crate::zip_write::is_zstd_member(&mut archive, index)?;
+        let (name, options, mut bytes) = {
+            let mut entry = if zstd {
+                archive.by_index_raw(index)
+            } else {
+                archive.by_index(index)
             }
-            encode_ctx.extend_retained_bytes(
-                &mut bytes,
-                &chunk[..read],
-                "retain F3D patch ZIP entry",
-            )?;
+            .map_err(|error| {
+                CodecError::malformed(format_args!("invalid F3D ZIP entry: {error}"))
+            })?;
+            let name = entry
+                .name()
+                .map_err(|error| {
+                    CodecError::malformed(format_args!("invalid ZIP entry name: {error}"))
+                })?
+                .into_owned();
+            let options = crate::zip_write::file_options(entry.compression());
+            if entry.is_dir() {
+                drop(entry);
+                if zstd {
+                    crate::zip_write::write_zstd_member(
+                        &mut zip,
+                        &mut archive,
+                        index,
+                        &[],
+                        &[],
+                        notes,
+                    )?;
+                } else {
+                    zip.add_directory(name, options).map_err(|error| {
+                        CodecError::malformed(format_args!("cannot write F3D directory: {error}"))
+                    })?;
+                }
+                continue;
+            }
+            let mut bytes = Vec::new();
+            if zstd {
+                bytes.extend(crate::zip_write::expand_zstd_member(
+                    &mut entry,
+                    &name,
+                    cadmpeg_core::decode::u64_from_index(source_image.len()),
+                )?);
+            } else {
+                let mut chunk = [0_u8; 16 * 1024];
+                loop {
+                    let read = entry.read(&mut chunk)?;
+                    if read == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk[..read]);
+                }
+            }
+            (name, options, bytes)
+        };
+        let expanded = zstd.then(|| bytes.clone());
+        if let Some(cage) = user_knot_edits.remove(&name) {
+            bytes = crate::tsm::user_knots::rewrite(&encode_ctx, &name, &bytes, &cage)?;
         }
         if let Some(configuration) = configuration_edits.get(&name) {
             bytes.clone_from(configuration);
@@ -711,10 +778,26 @@ pub(crate) fn write_semantic(
                 patch_act_entities(&mut bytes, edits)?;
             }
         }
+        if let Some(expanded) = expanded {
+            crate::zip_write::write_zstd_member(
+                &mut zip,
+                &mut archive,
+                index,
+                &expanded,
+                &bytes,
+                notes,
+            )?;
+            continue;
+        }
         zip.start_file(name, options).map_err(|error| {
             CodecError::malformed(format_args!("cannot write F3D entry: {error}"))
         })?;
         zip.write_all(&bytes)?;
+    }
+    if !user_knot_edits.is_empty() {
+        return Err(CodecError::NotImplemented(
+            "one or more edited T-spline surfaces have no writable TSM member".into(),
+        ));
     }
     if patched_protein_appearances.len() != protein_appearance_edits.len() {
         return Err(CodecError::NotImplemented(
@@ -727,6 +810,26 @@ pub(crate) fn write_semantic(
         .into_inner();
     writer.write_all(&output)?;
     Ok(())
+}
+
+/// The shift from a subset curve's local parameter onto its ACIS parameter,
+/// which is the parameter of the curve it trims, negated on a reversed carrier.
+fn native_subset_shift(ir: &CadIr, curve: &cadmpeg_ir::ids::CurveId) -> Option<f64> {
+    ir.model.procedural_curves.iter().find_map(|procedural| {
+        let cadmpeg_ir::geometry::ProceduralCurveDefinition::Subset(subset) =
+            procedural.definition()
+        else {
+            return None;
+        };
+        (ir.model.procedural_curve_owner(&procedural.id) == Some(curve)).then(|| {
+            let [first, last] = subset.parameter_range().endpoints();
+            if *subset.sense() {
+                first
+            } else {
+                -last
+            }
+        })
+    })
 }
 
 #[cfg(test)]

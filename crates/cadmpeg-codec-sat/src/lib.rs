@@ -18,7 +18,7 @@
 //! outcome decides whether the report carries geometry.
 //!
 //! <!-- generated: capability sat -->
-//! Support: L1 ([ladder](https://github.com/cadmpeg/cadmpeg/blob/main/docs/format-support.md#asmacis-bare-satsmtsmbsab-streams)).
+//! Support: L3 ([ladder](https://github.com/cadmpeg/cadmpeg/blob/main/docs/format-support.md#asmacis-bare-satsmtsmbsab-streams)).
 //! <!-- /generated: capability sat -->
 
 mod coverage;
@@ -43,15 +43,10 @@ impl CodecBackend for SatCodec {
 
     fn detect_impl(
         &self,
-        ctx: &cadmpeg_core::decode::DecodeContext<'_>,
+        _ctx: &cadmpeg_core::decode::DecodeContext<'_>,
         prefix: cadmpeg_core::decode::View<'_>,
     ) -> Result<Confidence, cadmpeg_core::CodecError> {
-        let prefix = prefix.window();
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(prefix.len()),
-            "detect input",
-        )?;
-        Ok(detect::confidence(prefix))
+        Ok(detect::confidence(prefix.window()))
     }
 
     fn inspect_impl(

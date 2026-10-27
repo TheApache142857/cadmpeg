@@ -40,7 +40,7 @@ pub(crate) fn load_artifact(
     forced: Option<ForcedInput>,
 ) -> Result<LoadedDocument, ApplicationError> {
     let arena = DecodeArena::new();
-    let ctx = DecodeContext::new(&arena, &options.policy, options.container_only);
+    let ctx = DecodeContext::new(&arena, &options.policy, options.depth);
     let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut prefix =
         cadmpeg_container::compound::read_detection_prefix(&ctx, &mut file, DETECTION_PREFIX_LEN)?;
@@ -54,7 +54,7 @@ pub(crate) fn load_artifact(
         ResolvedSource::Native { codec, selection } => {
             let format_id = codec.id();
             ctx.complete_input(&mut file, &mut prefix)?;
-            let result = codec.decode_with_context(&ctx, View::over_retained(&prefix), &options);
+            let result = codec.decode_with_context(&ctx, View::over_retained(&prefix));
             ctx.finish_session()?;
             let result = result.map_err(|failure| {
                 ApplicationError::from_decode_failure(path, format_id, failure)
@@ -68,7 +68,7 @@ pub(crate) fn load_artifact(
         ResolvedSource::Cadir => {}
         ResolvedSource::Unrecognized => {
             return Err(anyhow!(
-                "unrecognized format for {}; supported: FCStd, f3d, Inventor IPT/IAM, sldprt, CATPart, NX/Creo prt, Rhino 3DM, IGES, STEP, ASM sat/smt/smb/sab, .cadir.json; use --input-format to override detection",
+                "unrecognized format for {}; supported: FCStd, f3d, Inventor IPT/IAM, sldprt, CATPart, NX/Creo prt, Rhino 3DM, IGES, STEP, ASM sat/smt/smb/sab, Creo View pvz, .cadir.json; use --input-format to override detection",
                 path.display()
             )
             .into());
@@ -77,18 +77,21 @@ pub(crate) fn load_artifact(
 
     let max_bytes = options.policy.limits.max_input_bytes;
     ctx.complete_input(&mut file, &mut prefix)?;
-    ctx.charge_work(
-        cadmpeg_core::decode::u64_from_index(prefix.len()),
-        "validate CADIR input UTF-8",
-    )?;
     let text =
         String::from_utf8(prefix).map_err(|error| anyhow!("invalid CADIR UTF-8: {error}"))?;
     ctx.finish_session()?;
     let ir = CadIr::from_json(&text).map_err(|e| {
-        anyhow!(
-            "{} is neither a recognized CAD file nor a valid .cadir.json document: {e}",
-            path.display()
-        )
+        if names_decode_sidecar(path) {
+            anyhow!(
+                "{} is a decode sidecar; pass the CADIR document beside it",
+                path.display()
+            )
+        } else {
+            anyhow!(
+                "{} is neither a recognized CAD file nor a valid .cadir.json document: {e}",
+                path.display()
+            )
+        }
     })?;
     let Some(sidecar) = artifact_store::load_matching_sidecar(path, text.as_bytes(), max_bytes)?
     else {
@@ -103,6 +106,14 @@ pub(crate) fn load_artifact(
         sidecar.fidelity,
         cadmpeg_core::decode::u64_from_index(text.len()),
     ))
+}
+
+/// Whether the file name has the decode-sidecar suffix that `dump` writes
+/// beside a CADIR document.
+fn names_decode_sidecar(path: &Path) -> bool {
+    path.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name.ends_with(".fidelity.json"))
 }
 
 #[cfg(test)]

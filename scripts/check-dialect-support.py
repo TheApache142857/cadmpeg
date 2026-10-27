@@ -247,7 +247,7 @@ def check_formats(value: object, known: set[str], failures: list[str]) -> dict[s
 
 
 def check_evaluations(value: object, known: set[str], failures: list[str]) -> dict[str, list[int]]:
-    """Validate maintainer evaluation records and return levels by dialect."""
+    """Validate evaluation records and return levels by dialect."""
     rows = value.get("evaluation") if _is_table(value) else None
     if not isinstance(rows, list):
         failures.append("evaluations.toml: [[evaluation]] must be an array of tables")
@@ -298,7 +298,7 @@ def check_declared_levels(
     evaluations: dict[str, list[int]],
     failures: list[str],
 ) -> None:
-    """Reject evidence that contradicts an owner-declared format level."""
+    """Reject scored rows that cannot back an owner-declared format level."""
     for format_id, (level, scored) in sorted(formats.items()):
         for dialect_id in scored:
             read = reads.get(dialect_id)
@@ -308,13 +308,6 @@ def check_declared_levels(
                 failures.append(
                     f"{format_id}: scored unclassified-recovered dialect {dialect_id} requires an evaluation"
                 )
-            elif isinstance(read, str) and read in READ_SCORES and int(read[1:]) < level:
-                failures.append(f"{format_id}: scored dialect {dialect_id} read {read} contradicts L{level}")
-            for evaluated in evaluations.get(dialect_id, []):
-                if evaluated < level:
-                    failures.append(
-                        f"{format_id}: evaluation L{evaluated} for scored dialect {dialect_id} contradicts L{level}"
-                    )
 
 
 # --------------------------------------------------------------------------

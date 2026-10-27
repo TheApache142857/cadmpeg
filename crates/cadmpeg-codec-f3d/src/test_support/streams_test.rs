@@ -1605,7 +1605,7 @@ pub(crate) fn generated_design_copy_paste_bodies_bulkstream() -> (Vec<u8>, Vec<(
     (out, records)
 }
 
-/// Add a compact one-cage `Form` scope and its cage-list carrier.
+/// Add a `Form` scope and its retained compact selection-group carrier.
 pub(super) fn generated_design_form_bulkstream() -> (Vec<u8>, Vec<(u64, u64)>) {
     let (mut out, mut records) = generated_design_bulkstream();
     let scope_record = 1_400_u32;
@@ -1626,7 +1626,7 @@ pub(super) fn generated_design_form_bulkstream() -> (Vec<u8>, Vec<(u64, u64)>) {
     out.extend_from_slice(&scope);
     records.push((u64::from(scope_record), scope_offset));
 
-    let cage_offset = u64::try_from(out.len()).expect("synthetic compact Form cage offset");
+    let cage_offset = u64::try_from(out.len()).expect("synthetic Form selection-group offset");
     let mut cage = vec![0_u8; 100];
     cage[0..4].copy_from_slice(&3_u32.to_le_bytes());
     cage[4..7].copy_from_slice(b"264");
@@ -1636,7 +1636,16 @@ pub(super) fn generated_design_form_bulkstream() -> (Vec<u8>, Vec<(u64, u64)>) {
     cage[32..36].copy_from_slice(&1_u32.to_le_bytes());
     cage[36] = 1;
     cage[37..45].copy_from_slice(&u64::from(cage_object_record).to_le_bytes());
-    cage[45..49].copy_from_slice(&[0, 0, 0xfc, 0]);
+    cage[47..51].copy_from_slice(&252_u32.to_le_bytes());
+    cage[51..59].copy_from_slice(&0.25_f64.to_le_bytes());
+    cage[59..63].copy_from_slice(&252_u32.to_le_bytes());
+    cage[63] = 1;
+    cage[64..72].copy_from_slice(&u64::from(cage_record + 2).to_le_bytes());
+    cage[74] = 1;
+    cage[77] = 1;
+    cage[78..86].copy_from_slice(&u64::from(cage_record + 1).to_le_bytes());
+    cage[89] = 1;
+    cage[90..98].copy_from_slice(&u64::from(scope_record).to_le_bytes());
     out.extend_from_slice(&cage);
     indexed_header(&mut out, *b"261", cage_record);
     records.push((u64::from(cage_record), cage_offset));
@@ -1849,4 +1858,127 @@ pub(super) fn generated_design_sketch_dimension_bulkstream() -> (Vec<u8>, Vec<(u
     out.extend_from_slice(&1205_u32.to_le_bytes());
 
     (out, records)
+}
+
+/// A repeated local module with two children and one existing body-map binding.
+pub(crate) fn nested_local_component_design() -> (Vec<u8>, Vec<u8>) {
+    let mut bulk = Vec::new();
+    let mut records = Vec::new();
+    for (record, root, context) in [
+        (100, 101_u64, "00000000-0000-4000-8000-000000000100"),
+        (200, 201, "00000000-0000-4000-8000-000000000200"),
+        (300, 301, "00000000-0000-4000-8000-000000000300"),
+    ] {
+        records.push((u64::from(record), u64_from_index(bulk.len())));
+        indexed_header(&mut bulk, *b"256", record);
+        bulk.push(1);
+        bulk.extend_from_slice(&root.to_le_bytes());
+        bulk.extend_from_slice(&[0; 2]);
+        lp_utf16(&mut bulk, context);
+    }
+    records.push((400, u64_from_index(bulk.len())));
+    indexed_header(&mut bulk, *b"257", 400);
+    bulk.extend_from_slice(&0_u32.to_le_bytes());
+    lp_ascii(&mut bulk, "rootInstance");
+    bulk.push(1);
+    bulk.extend_from_slice(&1_u32.to_le_bytes());
+    bulk.push(1);
+    bulk.extend_from_slice(&100_u64.to_le_bytes());
+    bulk.extend_from_slice(&[0; 7]);
+    let parent = [
+        [0.0, -1.0, 0.0, 3.0],
+        [1.0, 0.0, 0.0, 4.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    let translated = [
+        [1.0, 0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    for (record, definition, owner, ordinal, transform) in [
+        (401, 200_u64, 101_u64, 1_u32, Some(parent)),
+        (402, 300, 201, 1, None),
+        (403, 300, 201, 2, Some(translated)),
+        (404, 200, 101, 2, Some(parent)),
+    ] {
+        records.push((u64::from(record), u64_from_index(bulk.len())));
+        indexed_header(&mut bulk, *b"257", record);
+        bulk.extend_from_slice(&[0; 8]);
+        bulk.push(1);
+        bulk.extend_from_slice(&1_u32.to_le_bytes());
+        bulk.push(1);
+        bulk.extend_from_slice(&definition.to_le_bytes());
+        bulk.extend_from_slice(&[0; 2]);
+        bulk.extend_from_slice(&0_u32.to_le_bytes());
+        bulk.push(1);
+        bulk.extend_from_slice(&1_u32.to_le_bytes());
+        lp_ascii(&mut bulk, "SelfGated");
+        lp_ascii(&mut bulk, "IntrinsicMetaTypebool");
+        bulk.push(0);
+        bulk.extend_from_slice(&[0; 2]);
+        bulk.extend_from_slice(&ordinal.to_le_bytes());
+        lp_utf16(&mut bulk, "00000000-0000-4000-8000-000000000999");
+        lp_utf16(&mut bulk, &format!("00000000-0000-4000-8001-{record:012}"));
+        bulk.push(1);
+        bulk.extend_from_slice(&500_u64.to_le_bytes());
+        bulk.extend_from_slice(&[0, 1, 1, 0, 0, 0, 0]);
+        bulk.push(1);
+        bulk.extend_from_slice(&definition.to_le_bytes());
+        bulk.extend_from_slice(&[0; 2]);
+        bulk.push(u8::from(transform.is_none()));
+        if let Some(transform) = transform {
+            for value in transform.into_iter().flatten() {
+                bulk.extend_from_slice(&f64::to_le_bytes(value));
+            }
+        }
+        bulk.extend_from_slice(&[0; 9]);
+        bulk.push(1);
+        bulk.extend_from_slice(&owner.to_le_bytes());
+        bulk.extend_from_slice(&[0; 2]);
+    }
+    records.push((500, u64_from_index(bulk.len())));
+    indexed_header(&mut bulk, *b"258", 500);
+    bulk.extend_from_slice(&[0; crate::design::body::GENERATED_BODY_MAP_ZERO_PREFIX_LEN]);
+    bulk.extend_from_slice(&1_u32.to_le_bytes());
+    bulk.extend_from_slice(&42_u64.to_le_bytes());
+    bulk.extend_from_slice(&350_u64.to_le_bytes());
+    bulk.extend_from_slice(&1793_u64.to_le_bytes());
+    bulk.extend_from_slice(&0_u32.to_le_bytes());
+    lp_utf16(&mut bulk, "BREP.module.smbh");
+    let meta = design_metastream_with_records(
+        &[
+            (
+                "00000000-0000-4000-8000-000000000010",
+                "",
+                2,
+                "Component",
+                &[100, 200, 300],
+            ),
+            (
+                crate::records::feature::assembly_features::OCCURRENCE_PLACEMENT_TYPE_GUID,
+                "",
+                2,
+                "Component",
+                &[400, 401, 402, 403, 404],
+            ),
+            (
+                crate::design::body::BODY_MAP_CARRIER_TYPE_GUID,
+                crate::design::body::BODY_MAP_CARRIER_BASE_TYPE_GUID,
+                crate::design::body::BODY_MAP_CARRIER_TYPE_VERSION,
+                "Body",
+                &[500],
+            ),
+            (
+                "00000000-0000-4000-8000-000000000011",
+                "21F379C8-CAFD-4985-B461-767673A4C502",
+                2,
+                "Component",
+                &[101, 201, 301],
+            ),
+        ],
+        &records,
+    );
+    (bulk, meta)
 }

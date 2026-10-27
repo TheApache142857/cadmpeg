@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration contracts over synthesized STEP Part 21 exchanges.
 
+mod assembly_bodies;
+
 use cadmpeg_test_support::{wire, EditableDecodeResult};
 
 use cadmpeg_ir::codec::write::target::TargetRequest;
@@ -65,9 +67,11 @@ use crate::writer::tests::round_trips::{
 };
 use crate::{StepCodec, StepSchema, StepWriteOptions};
 
+mod measured_geometry;
+
 fn assert_valid(result: &EditableDecodeResult) {
     let validation = cadmpeg_ir::validate_neutral(result.ir(), result.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{validation:#?}");
     assert!(result.ir().native.namespace("step").is_some());
 }

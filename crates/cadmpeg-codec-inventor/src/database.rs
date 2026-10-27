@@ -151,16 +151,10 @@ pub(crate) fn parse_database(
     match schema_31_body(ctx, cursor, id, schema) {
         Ok(database) => Ok(DatabaseHeader::Supported(database)),
         Err(error @ CodecError::ResourceLimit(_)) => Err(error),
-        Err(error) => {
-            ctx.charge_formatted_retained(
-                format_args!("{error}"),
-                "retain RSe unframed database detail",
-            )?;
-            Ok(DatabaseHeader::Unframed {
-                schema,
-                detail: error.to_string(),
-            })
-        }
+        Err(error) => Ok(DatabaseHeader::Unframed {
+            schema,
+            detail: error.to_string(),
+        }),
     }
 }
 
@@ -182,7 +176,6 @@ fn schema_31_body(
         note: cursor.utf16(ctx, "database note", 65_536)?,
     };
     cursor.finish()?;
-    ctx.charge_collection_items(1, "admit Inventor RSe database")?;
     Ok(database)
 }
 
@@ -201,11 +194,7 @@ pub(crate) fn parse_registry(
 ) -> Result<SegmentRegistry, CodecError> {
     let mut cursor = Cursor::new(bytes, "RSe segment registry");
     let count = cursor.count("segment count", 65_536)?;
-    ctx.charge_collection_items(
-        cadmpeg_core::decode::u64_from_index(count),
-        "admit Inventor segment registry entries",
-    )?;
-    let mut entries = ctx.vector_storage(count, "admit Inventor segment registry entries")?;
+    let mut entries = Vec::new();
     for _ in 0..count {
         let display_name = cursor.utf16(ctx, "segment display name", 4_096)?;
         let segment_id = cursor.array("segment id")?;
@@ -218,12 +207,7 @@ pub(crate) fn parse_registry(
         let type_state = cursor.u32_array("segment type state")?;
         let version = cursor.version("segment version")?;
         let trailing_value = cursor.u32("segment trailing value")?;
-        ctx.charge_collection_items(
-            cadmpeg_core::decode::u64_from_index(object_count),
-            "admit Inventor segment registry objects",
-        )?;
-        let mut objects =
-            ctx.vector_storage(object_count, "admit Inventor segment registry objects")?;
+        let mut objects = Vec::new();
         let mut node_count = None;
         for _ in 0..object_count {
             let object = SegmentObject {
@@ -236,10 +220,14 @@ pub(crate) fn parse_registry(
             node_count = Some(object.node_count);
             objects.push(object);
         }
-        let node_count = node_count
-            .unwrap_or(1)
-            .checked_sub(1)
-            .ok_or_else(|| CodecError::Malformed("RSe segment node count is zero".into()))?;
+        // The last object stores the node count plus one; zero, like an
+        // entry without objects, stores no nodes.
+        let node_count = match node_count {
+            None | Some(0) => 0,
+            Some(count) => count
+                .checked_sub(1)
+                .ok_or_else(|| CodecError::Malformed("RSe segment node count is invalid".into()))?,
+        };
         let node_count = usize::try_from(node_count)
             .map_err(|_| CodecError::Malformed("RSe segment node count is too large".into()))?;
         if node_count > 1_000_000 {
@@ -247,11 +235,7 @@ pub(crate) fn parse_registry(
                 "RSe segment node count exceeds 1000000".into(),
             ));
         }
-        ctx.charge_collection_items(
-            cadmpeg_core::decode::u64_from_index(node_count),
-            "admit Inventor segment registry nodes",
-        )?;
-        let mut nodes = ctx.vector_storage(node_count, "admit Inventor segment registry nodes")?;
+        let mut nodes = Vec::new();
         for _ in 0..node_count {
             nodes.push(SegmentNode {
                 index: cursor.u32("node index")?,
@@ -279,8 +263,8 @@ pub(crate) fn parse_registry(
         });
     }
     let state = cursor.u16_array("registry state")?;
-    let primary_ids = cursor.id_list(ctx, "primary registry ids")?;
-    let secondary_ids = cursor.id_list(ctx, "secondary registry ids")?;
+    let primary_ids = cursor.id_list("primary registry ids")?;
+    let secondary_ids = cursor.id_list("secondary registry ids")?;
     cursor.finish()?;
     Ok(SegmentRegistry {
         entries,
@@ -290,21 +274,14 @@ pub(crate) fn parse_registry(
     })
 }
 
-pub(crate) fn parse_revisions(
-    ctx: &DecodeContext<'_>,
-    bytes: &[u8],
-) -> Result<RevisionTable, CodecError> {
+pub(crate) fn parse_revisions(bytes: &[u8]) -> Result<RevisionTable, CodecError> {
     let mut cursor = Cursor::new(bytes, "RSe revision table");
     // The version word is evidence, kept on the table, and not a gate: the
     // version-3 grammar is attempted at any declared version, and a table that
     // does not obey it fails structurally at the cursor.
     let version = cursor.u32("version")?;
     let count = cursor.count("revision count", 1_000_000)?;
-    ctx.charge_collection_items(
-        cadmpeg_core::decode::u64_from_index(count),
-        "admit Inventor revision entries",
-    )?;
-    let mut entries = ctx.vector_storage(count, "admit Inventor revision entries")?;
+    let mut entries = Vec::new();
     for _ in 0..count {
         let id = cursor.array("revision id")?;
         let flags = cursor.u32("revision flags")?;
@@ -415,11 +392,7 @@ impl<'a> Cursor<'a> {
         )
     }
 
-    fn id_list(
-        &mut self,
-        ctx: &DecodeContext<'_>,
-        field: &'static str,
-    ) -> Result<Vec<[u8; 16]>, CodecError> {
+    fn id_list(&mut self, field: &'static str) -> Result<Vec<[u8; 16]>, CodecError> {
         let count = self.count(field, 1_000_000)?;
         self.source
             .counted(cadmpeg_core::decode::u64_from_index(count), 16)
@@ -428,7 +401,7 @@ impl<'a> Cursor<'a> {
                     "Inventor registry identifier count exceeds remaining payload",
                 )
             })?;
-        let mut ids = ctx.collection_vec(count, "admit Inventor registry identifier list")?;
+        let mut ids = Vec::new();
         for _ in 0..count {
             ids.push(self.array(field)?);
         }
@@ -453,7 +426,6 @@ mod tests {
     use crate::test_support::test_fixtures::push_u32;
     use crate::test_support::test_fixtures::push_utf16;
     use crate::test_support::test_fixtures::push_version;
-    use cadmpeg_core::decode::ResourceDimension;
     use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
     use cadmpeg_core::CodecError;
 
@@ -462,50 +434,27 @@ mod tests {
     };
 
     #[test]
-    fn registry_identifiers_prove_extent_and_admit_retained_storage() {
+    fn registry_identifiers_prove_extent() {
         let bytes = 1_000_000_u32.to_le_bytes();
-        crate::test_support::test_fixtures::parse(&bytes, |ctx, _| {
-            assert!(matches!(
-                super::Cursor::new(&bytes, "test").id_list(ctx, "ids"),
-                Err(CodecError::Malformed(_))
-            ));
-        });
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_collection_items = 0;
-        let (ctx, _) =
-            DecodeContext::from_root_bytes(&bytes, &arena, &policy).expect("test context");
         assert!(matches!(
-            super::Cursor::new(&bytes, "test").id_list(&ctx, "ids"),
+            super::Cursor::new(&bytes, "test").id_list("ids"),
             Err(CodecError::Malformed(_))
         ));
         let mut complete = 1_u32.to_le_bytes().to_vec();
         complete.extend_from_slice(&[0; 16]);
-        policy.limits.max_collection_items = DecodePolicy::service().limits.max_collection_items;
-        policy.limits.max_retained_bytes = 15;
-        let (ctx, _) =
-            DecodeContext::from_root_bytes(&complete, &arena, &policy).expect("test context");
-        assert!(
-            matches!(super::Cursor::new(&complete, "test").id_list(&ctx, "ids"), Err(CodecError::ResourceLimit(limit)) if limit.dimension == ResourceDimension::RetainedBytes)
+        assert_eq!(
+            super::Cursor::new(&complete, "test")
+                .id_list("ids")
+                .expect("one identifier"),
+            [[0; 16]]
         );
     }
 
     #[test]
-    fn unframed_database_detail_refuses_retained_limit_before_copy() {
+    fn truncated_schema_31_database_is_unframed() {
         let mut bytes = database_fixture();
         bytes.truncate(28);
         let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_retained_bytes = 0;
-        let (ctx, _) = DecodeContext::from_root_bytes(&bytes, &arena, &policy)
-            .expect("truncated database fits input cap");
-        assert!(matches!(
-            parse_database(&ctx, &bytes),
-            Err(CodecError::ResourceLimit(limit))
-                if limit.dimension == ResourceDimension::RetainedBytes
-                    && limit.operation == "retain RSe unframed database detail"
-        ));
-
         let (ctx, _) = DecodeContext::from_root_bytes(&bytes, &arena, &DecodePolicy::service())
             .expect("truncated database fits service policy");
         assert!(matches!(
@@ -515,30 +464,9 @@ mod tests {
     }
 
     #[test]
-    fn database_note_refuses_retained_limit_and_needs_no_utf16_scratch() {
+    fn database_note_decodes() {
         let bytes = database_fixture();
         let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_retained_bytes =
-            cadmpeg_core::decode::u64_from_index("synthetic database".len()) - 1;
-        let (ctx, _) = DecodeContext::from_root_bytes(&bytes, &arena, &policy)
-            .expect("database fits input cap");
-        assert!(matches!(
-            parse_database(&ctx, &bytes),
-            Err(CodecError::ResourceLimit(limit))
-                if limit.dimension == ResourceDimension::RetainedBytes
-                    && limit.operation == "retain RSe table UTF-16 field"
-        ));
-
-        policy.limits.max_retained_bytes = DecodePolicy::service().limits.max_retained_bytes;
-        policy.limits.max_materialized_bytes = 0;
-        let (ctx, _) = DecodeContext::from_root_bytes(&bytes, &arena, &policy)
-            .expect("database fits input cap");
-        assert!(matches!(
-            parse_database(&ctx, &bytes),
-            Ok(DatabaseHeader::Supported(database)) if database.note == "synthetic database"
-        ));
-
         let (ctx, _) = DecodeContext::from_root_bytes(&bytes, &arena, &DecodePolicy::service())
             .expect("database fits service policy");
         assert!(matches!(
@@ -548,35 +476,9 @@ mod tests {
     }
 
     #[test]
-    fn registry_names_refuse_retained_limit_before_utf16_decode() {
+    fn registry_names_decode() {
         let bytes = registry_fixture(&[2]);
         let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_retained_bytes = cadmpeg_core::decode::u64_from_index(
-            "PmBRepSegment".len() + std::mem::size_of::<super::SegmentRegistryEntry>(),
-        ) - 1;
-        let (ctx, _) = DecodeContext::from_root_bytes(&bytes, &arena, &policy)
-            .expect("registry fits input cap");
-        assert!(matches!(
-            parse_registry(&ctx, &bytes),
-            Err(CodecError::ResourceLimit(limit))
-                if limit.dimension == ResourceDimension::RetainedBytes
-                    && limit.operation == "retain RSe table UTF-16 field"
-        ));
-
-        policy.limits.max_retained_bytes = cadmpeg_core::decode::u64_from_index(
-            "PmBRepSegment".len() + std::mem::size_of::<super::SegmentRegistryEntry>(),
-        );
-        let (ctx, _) = DecodeContext::from_root_bytes(&bytes, &arena, &policy)
-            .expect("registry fits input cap");
-        assert!(matches!(
-            parse_registry(&ctx, &bytes),
-            Err(CodecError::ResourceLimit(limit))
-                if limit.dimension == ResourceDimension::RetainedBytes
-                    && limit.operation == "retain RSe table UTF-16 field"
-                    && limit.used == cadmpeg_core::decode::u64_from_index("PmBRepSegment".len() + std::mem::size_of::<super::SegmentRegistryEntry>())
-        ));
-
         let (ctx, _) = DecodeContext::from_root_bytes(&bytes, &arena, &DecodePolicy::service())
             .expect("registry fits service policy");
         assert_eq!(
@@ -698,6 +600,20 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_or_one_last_object_node_count_stores_no_nodes() {
+        for count in [0, 1] {
+            let mut bytes = registry_fixture(&[count]);
+            let node = bytes.len() - 2 * 2 - 2 * (4 + 16) - 22;
+            bytes.drain(node..node + 22);
+            with_context(&bytes, |ctx| {
+                let registry = parse_registry(ctx, &bytes).expect("registry without nodes parses");
+                assert!(registry.entries[0].nodes.is_empty());
+                assert_eq!(registry.primary_ids, vec![[0x61; 16]]);
+            });
+        }
+    }
+
+    #[test]
     fn registry_framing_rejects_unconsumed_node_sized_suffix() {
         let mut bytes = registry_fixture(&[2]);
         bytes.extend_from_slice(&[0; 22]);
@@ -722,8 +638,8 @@ mod tests {
         bytes.extend_from_slice(&u16::MAX.to_le_bytes());
         bytes.push(1);
         bytes.extend_from_slice(&[0x33; 8]);
-        with_context(&bytes, |ctx| {
-            let table = parse_revisions(ctx, &bytes).expect("revision table parses");
+        with_context(&bytes, |_| {
+            let table = parse_revisions(&bytes).expect("revision table parses");
             assert_eq!(table.entries.len(), 2);
             assert!(matches!(
                 table.entries[1].payload,
@@ -750,8 +666,8 @@ mod tests {
             bytes.extend_from_slice(&[0x22; 16]);
             push_u32(&mut bytes, 8);
             bytes.extend_from_slice(&2u16.to_le_bytes());
-            with_context(&bytes, |ctx| {
-                let table = parse_revisions(ctx, &bytes)
+            with_context(&bytes, |_| {
+                let table = parse_revisions(&bytes)
                     .expect("revision fixture follows current selector framing");
                 assert_eq!(table.entries.len(), 2);
                 assert_eq!(
@@ -766,7 +682,7 @@ mod tests {
                 assert_eq!(table.entries[1].payload, RevisionPayload::None);
             });
             bytes.push(0);
-            with_context(&bytes, |ctx| assert!(parse_revisions(ctx, &bytes).is_err()));
+            with_context(&bytes, |_| assert!(parse_revisions(&bytes).is_err()));
         }
     }
 

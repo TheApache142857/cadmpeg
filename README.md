@@ -52,11 +52,26 @@ cadmpeg convert part.f3d -o part.step
 ```
 
 ```text
-decode report (f3d): geometry_transferred=true, container_only=false
+decode report (f3d): depth=geometry, geometry_transferred=true
 ...
 check: OK (0 error(s), 0 warning(s))
 wrote part.step (... entities)
 ```
+
+Measure one face, or every cylindrical face of a part:
+
+```sh
+cadmpeg measure part.step --face face#46
+cadmpeg measure part.step --faces --kind cylinder --tsv
+```
+
+Compare the geometry of two files, for example a native file and its STEP export:
+
+```sh
+cadmpeg diff part.f3d part.step --geometry
+```
+
+[`docs/measurement.md`](docs/measurement.md) states what each value means and how exact it is.
 
 ## Format support
 
@@ -64,17 +79,18 @@ Each format carries one support level from the ladder; `cadmpeg inspect <file>` 
 
 <!-- generated: capability-lines -->
 
-- **Autodesk Inventor `.ipt` and `.iam`** — L1 ([profile](docs/format-support.md#autodesk-inventor-ipt-and-iam))
-- **ASM/ACIS bare `.sat`/`.smt`/`.smb`/`.sab` streams** — L1 ([profile](docs/format-support.md#asmacis-bare-satsmtsmbsab-streams))
+- **Autodesk Inventor `.ipt` and `.iam`** — L3 ([profile](docs/format-support.md#autodesk-inventor-ipt-and-iam))
+- **ASM/ACIS bare `.sat`/`.smt`/`.smb`/`.sab` streams** — L3 ([profile](docs/format-support.md#asmacis-bare-satsmtsmbsab-streams))
 - **FreeCAD `.FCStd`** — L5 ([profile](docs/format-support.md#freecad-fcstd))
 - **IGES** — L9 ([profile](docs/format-support.md#iges))
-- **Rhino `.3dm`** — L1 ([profile](docs/format-support.md#rhino-3dm))
-- **SolidWorks `.sldprt`** — L1 ([profile](docs/format-support.md#solidworks-sldprt))
-- **Fusion 360 `.f3d`** — L4 ([profile](docs/format-support.md#fusion-360-f3d))
+- **Rhino `.3dm`** — L2 ([profile](docs/format-support.md#rhino-3dm))
+- **SolidWorks `.sldprt`** — L3 ([profile](docs/format-support.md#solidworks-sldprt))
+- **Fusion 360 `.f3d`** — L5 ([profile](docs/format-support.md#fusion-360-f3d))
 - **Siemens NX `.prt`** — L1 ([profile](docs/format-support.md#siemens-nx-prt))
-- **CATIA V5 `.CATPart`** — L1 ([profile](docs/format-support.md#catia-v5-catpart))
+- **CATIA V5 `.CATPart`** — L3 ([profile](docs/format-support.md#catia-v5-catpart))
 - **Creo Parametric `.prt`** — L1 ([profile](docs/format-support.md#creo-parametric-prt))
-- **STEP Part 21** — L9 ([profile](docs/format-support.md#step-part-21))
+- **Creo View `.pvz`** — L3 ([profile](docs/format-support.md#creo-view-pvz))
+- **STEP Part 21** — L8 ([profile](docs/format-support.md#step-part-21))
 
 <!-- /generated: capability-lines -->
 
@@ -86,7 +102,7 @@ Each format carries one support level from the ladder; `cadmpeg inspect <file>` 
 input file ──▶ container decoder ──▶ format decoder ──▶ IR ──▶ validator ──▶ exporter ──▶ output + reports
 ```
 
-- [CAD IR version 9](docs/cad-ir.md)
+- [CAD IR version 8](docs/cad-ir.md)
 - [Architecture](docs/architecture.md)
 - [Format support](docs/format-support.md)
 - [Roadmap](docs/roadmap.md)
@@ -101,7 +117,7 @@ Other contributions:
 - Resolve an open format item with byte-backed evidence.
 - Add validators, exporters, IR tooling, corpus tooling, or CLI improvements.
 
-Commits require DCO sign-off; decoder and specification changes also require a provenance declaration. See [CONTRIBUTING.md](CONTRIBUTING.md), [LEGAL.md](LEGAL.md), and the [roadmap](docs/roadmap.md).
+Pull requests require a DCO sign-off; decoder and specification changes also require a provenance declaration. See [CONTRIBUTING.md](CONTRIBUTING.md), [LEGAL.md](LEGAL.md), and the [roadmap](docs/roadmap.md).
 
 ## Development
 

@@ -87,7 +87,7 @@ fn semantic_writer_round_trips_reference_coordinate_system() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -177,7 +177,7 @@ fn semantic_writer_round_trips_equation_driven_curve() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -275,7 +275,7 @@ fn semantic_writer_round_trips_helix() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -376,7 +376,7 @@ fn semantic_writer_round_trips_slash_named_helix() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -436,7 +436,7 @@ fn semantic_writer_round_trips_native_axis_helix() {
             == "1 typed feature(s) retain native or unresolved required operation operands."
     }));
     let findings = cadmpeg_ir::validate_neutral(decoded.ir(), Vec::new())
-        .expect("resource allocation did not fail")
+        .expect("validate the neutral model")
         .findings;
     assert!(findings.is_empty(), "{findings:#?}");
 
@@ -463,7 +463,7 @@ fn semantic_writer_round_trips_native_axis_helix() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -488,7 +488,10 @@ fn semantic_writer_round_trips_native_axis_helix() {
             start_angle: value,
             clockwise: true,
             ..
-        }) if revolutions.get() == 0.5 && ((value.get() - std::f64::consts::FRAC_PI_2).abs() < EPS_SCALAR_ROUND_TRIP) && actual_axial_rise.get() == 4000.0 && actual_pitch.get() == 16000.0
+        }) if revolutions.get() == 0.5
+        && ((value.get() - std::f64::consts::FRAC_PI_2).abs() < EPS_SCALAR_ROUND_TRIP)
+        && actual_axial_rise.get() == 4000.0
+        && actual_pitch.get() == 16000.0
     ));
 }
 
@@ -515,28 +518,18 @@ fn semantic_writer_rejects_embedded_helix_geometry_edits() {
     {
         let mut ir_edit = decoded.ir_mut();
         update_sldprt_native(&mut ir_edit, |native| {
-            let description = b"boundary_polyline mesh";
-            let schema = b"SCH_3201255_32001_13006";
-            let mut stream = b"PS\0\0".to_vec();
-            stream
-                .extend((u16::try_from(description.len()).expect("length fits u16")).to_be_bytes());
-            stream.extend(description);
-            stream.push(u8::try_from(schema.len()).expect("length fits u8"));
-            stream.extend(schema);
-            stream.extend([0xff, 0xff, 0xff, 0xff, 0x00, 0x22]);
-            stream.extend((65u32 * 3).to_be_bytes());
-            stream.extend([0x00, 0x22]);
-            for index in 0..=64 {
-                let t = f64::from(index) / 64.0;
-                let angle = std::f64::consts::FRAC_PI_2 * t;
-                for value in [
-                    10.0 + 3.5 * angle.cos(),
-                    20.0 - 3.2 * t,
-                    30.0 + 3.5 * angle.sin(),
-                ] {
-                    stream.extend(value.to_be_bytes());
-                }
-            }
+            let points = (0..=64)
+                .map(|index| {
+                    let t = f64::from(index) / 64.0;
+                    let angle = std::f64::consts::FRAC_PI_2 * t;
+                    [
+                        10000.0 + 3500.0 * angle.cos(),
+                        20000.0 - 3200.0 * t,
+                        30000.0 + 3500.0 * angle.sin(),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            let stream = crate::test_support::parasolid::construction_curve::stream(&points);
             native.feature_input_lanes[0].native_payload.extend(stream);
         });
         let native = sldprt_native(&ir_edit);
@@ -605,11 +598,20 @@ fn semantic_writer_round_trips_wrap() {
     let mut decoded = EditableDecodeResult::from(decoded);
     let face_id = decoded.ir().model.faces[0].id.clone();
     assert!(matches!(
-        decoded.ir().model.features[0].evaluation.definition(), FeatureDefinition::Operation(FeatureOperation::Wrap {
-            profile,
-            face: FaceSelection::Resolved { faces: targets, native },
-            mode: WrapMode::Emboss { depth: actual_depth },
-        }) if matches!((profile,), (PlanarProfileRef::Faces(faces),) if (faces == std::slice::from_ref(&face_id) && targets == std::slice::from_ref(&face_id) && native == &face) && actual_depth.get() == 2.0)));
+    decoded.ir().model.features[0].evaluation.definition(), FeatureDefinition::Operation(FeatureOperation::Wrap {
+        profile,
+        face: FaceSelection::Resolved { faces: targets, native },
+        mode: WrapMode::Emboss { depth: actual_depth },
+    }) if matches!(
+        (profile,),
+        (PlanarProfileRef::Faces(faces),)
+            if (
+                faces == std::slice::from_ref(&face_id)
+                && targets == std::slice::from_ref(&face_id)
+                && native == &face
+            )
+            && actual_depth.get() == 2.0
+    )));
 
     {
         let mut ir_edit = decoded.ir_mut();
@@ -631,7 +633,7 @@ fn semantic_writer_round_trips_wrap() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -667,7 +669,7 @@ fn semantic_writer_round_trips_wrap() {
         });
     }
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         scribed.ir(),
         scribed.source_fidelity(),
         &mut encoded,
@@ -726,7 +728,10 @@ fn semantic_writer_round_trips_move_copy_body() {
             }),
             copies: 2,
         }) if ( bodies.as_slice() == std::slice::from_ref(&body_id) && native == &body
-            && (angle.get() - std::f64::consts::FRAC_PI_2).abs() < 1.0e-12) && matches!(geometry_1.get(), Vector3 { x: 1.0, y: 2.0, z: 3.0 }) && matches!(geometry_2.get(), Point3 { x: 4.0, y: 5.0, z: 6.0 }) && matches!(geometry_3.get(), Vector3 { x: 0.0, y: 0.0, z: 1.0 })
+            && (angle.get() - std::f64::consts::FRAC_PI_2).abs() < 1.0e-12)
+            && matches!(geometry_1.get(), Vector3 { x: 1.0, y: 2.0, z: 3.0 })
+            && matches!(geometry_2.get(), Point3 { x: 4.0, y: 5.0, z: 6.0 })
+            && matches!(geometry_3.get(), Vector3 { x: 0.0, y: 0.0, z: 1.0 })
     ));
 
     {
@@ -742,11 +747,8 @@ fn semantic_writer_round_trips_move_copy_body() {
                 panic!("typed body motion");
             };
             *bodies = BodySelection::Bodies(
-                cadmpeg_ir::features::DistinctMembers::try_from(
-                    vec![body_id.clone()],
-                    &cadmpeg_test_support::service_decode_context(),
-                )
-                .expect("distinct bodies"),
+                cadmpeg_ir::features::DistinctMembers::try_from(vec![body_id.clone()])
+                    .expect("distinct bodies"),
             );
             *translation =
                 cadmpeg_ir::features::FiniteVector3::new(Vector3::new(-7.0, 8.0, 9.0)).unwrap();
@@ -764,7 +766,7 @@ fn semantic_writer_round_trips_move_copy_body() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -798,7 +800,7 @@ fn semantic_writer_round_trips_move_copy_body() {
         });
     }
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         translated.ir(),
         translated.source_fidelity(),
         &mut encoded,
@@ -869,7 +871,7 @@ fn semantic_writer_round_trips_offset_surface() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -943,7 +945,7 @@ fn semantic_writer_round_trips_knit_surface() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1015,11 +1017,8 @@ fn semantic_writer_round_trips_cut_with_surface() {
                 panic!("typed surface cut");
             };
             *targets = BodySelection::Bodies(
-                cadmpeg_ir::features::DistinctMembers::try_from(
-                    vec![body_id.clone()],
-                    &cadmpeg_test_support::service_decode_context(),
-                )
-                .expect("distinct bodies"),
+                cadmpeg_ir::features::DistinctMembers::try_from(vec![body_id.clone()])
+                    .expect("distinct bodies"),
             );
             *tools = FaceSelection::Faces(vec![face_id.clone()]);
             *reverse = Some(true);
@@ -1027,7 +1026,7 @@ fn semantic_writer_round_trips_cut_with_surface() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1185,7 +1184,7 @@ fn filled_surface_round_trip(
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1314,7 +1313,7 @@ fn semantic_writer_round_trips_trim_surface() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1388,7 +1387,7 @@ fn semantic_writer_round_trips_extend_surface() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1450,7 +1449,9 @@ fn semantic_writer_round_trips_all_ruled_surface_modes() {
             },
             ..
         }) if ( (edges == std::slice::from_ref(&edge_id) && edge_native == &edge
-            && faces == std::slice::from_ref(&face_id) && face_native == &face) && actual_distance.get() == 2.0) && matches!(geometry_1.get(), Vector3 { x: 0.0, y: 0.0, z: 1.0 })
+            && faces == std::slice::from_ref(&face_id) && face_native == &face)
+            && actual_distance.get() == 2.0)
+            && matches!(geometry_1.get(), Vector3 { x: 0.0, y: 0.0, z: 1.0 })
     ));
 
     {
@@ -1474,7 +1475,7 @@ fn semantic_writer_round_trips_all_ruled_surface_modes() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1504,7 +1505,7 @@ fn semantic_writer_round_trips_all_ruled_surface_modes() {
         });
     }
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         regenerated.ir(),
         regenerated.source_fidelity(),
         &mut encoded,
@@ -1556,7 +1557,12 @@ fn semantic_writer_round_trips_projected_curve() {
             target_faces: FaceSelection::Resolved { faces, native },
             direction: cadmpeg_ir::features::CurveProjectionDirection::Vector(checked_geometry_1),
             bidirectional: Some(false),
-        }) if (edges == std::slice::from_ref(&edge_id) && faces == std::slice::from_ref(&face_id) && native == &face) && matches!(checked_geometry_1.get(), Vector3 { x: 0.0, y: 0.0, z: 1.0 })
+        }) if (
+            edges == std::slice::from_ref(&edge_id)
+            && faces == std::slice::from_ref(&face_id)
+            && native == &face
+        )
+        && matches!(checked_geometry_1.get(), Vector3 { x: 0.0, y: 0.0, z: 1.0 })
     ));
 
     {
@@ -1581,7 +1587,7 @@ fn semantic_writer_round_trips_projected_curve() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1658,7 +1664,7 @@ fn semantic_writer_round_trips_ordered_composite_curve() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1743,7 +1749,7 @@ fn semantic_writer_round_trips_typed_revolution() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1775,7 +1781,12 @@ fn semantic_writer_retains_partial_native_revolution_construction() {
     ));
 
     let decoded = SldprtCodec
-        .decode(&mut Cursor::new(source), &DecodeOptions::default())
+        .decode(
+            &mut Cursor::new(crate::test_support::container::native_envelope_fixture(
+                &(source),
+            )),
+            &DecodeOptions::default(),
+        )
         .unwrap();
     let mut decoded = EditableDecodeResult::from(decoded);
     assert!(matches!(
@@ -1802,7 +1813,7 @@ fn semantic_writer_retains_partial_native_revolution_construction() {
     ));
     let mut detached = decoded.ir().clone();
     detached.model.features[0].native_ref = None;
-    let error = crate::test_support::plan_inherited_write(
+    let error = crate::test_support::plan_fixture_write_with_native_envelope(
         &detached,
         decoded.source_fidelity(),
         &mut Vec::new(),
@@ -1814,7 +1825,7 @@ fn semantic_writer_retains_partial_native_revolution_construction() {
     decoded.ir_mut().model.features[0].name = Some("Renamed turn".into());
 
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1910,7 +1921,7 @@ fn semantic_writer_round_trips_all_revolution_extents() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,

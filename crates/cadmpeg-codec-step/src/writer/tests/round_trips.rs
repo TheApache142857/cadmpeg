@@ -110,7 +110,6 @@ fn curve_geometry_for_sheet_pcurve(
         }
         PcurveGeometry::Nurbs { nurbs } => Some(CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(
             NurbsCurve::from_lanes(
-                &cadmpeg_test_support::service_decode_context(),
                 nurbs.degree(),
                 nurbs.knots().to_vec(),
                 nurbs
@@ -121,8 +120,7 @@ fn curve_geometry_for_sheet_pcurve(
                     .collect(),
                 nurbs.pole_rows().weights(),
                 nurbs.periodic(),
-            )
-            .expect("fixture constructor admission")?,
+            )?,
         ))),
         PcurveGeometry::Transformed(placed) => {
             let Some(CurveGeometry::Solved(SolvedCurveGeometry::Line(line_curve))) =
@@ -493,7 +491,6 @@ pub(crate) fn writer_round_trips_rational_nurbs_pcurves(
         .0;
     ir.model.pcurves[0].geometry = cadmpeg_ir::geometry::pcurve::PcurveGeometry::Nurbs {
         nurbs: cadmpeg_ir::geometry::pcurve::PcurveNurbs::from_lanes(
-            &cadmpeg_test_support::service_decode_context(),
             1,
             vec![0.0, 0.0, 1.0, 1.0],
             vec![
@@ -503,7 +500,6 @@ pub(crate) fn writer_round_trips_rational_nurbs_pcurves(
             Some(vec![1.0, 2.0]),
             false,
         )
-        .expect("fixture pcurve construction admission")
         .unwrap(),
     };
     let geometry = ir.model.pcurves[0].geometry.clone();
@@ -643,17 +639,26 @@ fn writer_round_trips_every_exact_step_pcurve_family(
         )
         .expect("write exact pcurve");
         let output_text = String::from_utf8(output).expect("STEP output is UTF-8");
-        if matches!(&geometry, PcurveGeometry::Transformed(_)) {
-            assert!(output_text.contains("CURVE_REPLICA"));
-            assert!(output_text.contains("CARTESIAN_TRANSFORMATION_OPERATOR_2D"));
-        }
+        // A placed line is written as the line it places.
+        let expected = if matches!(&geometry, PcurveGeometry::Transformed(_)) {
+            assert!(!output_text.contains("CURVE_REPLICA"));
+            PcurveGeometry::Line(
+                cadmpeg_ir::geometry::pcurve::LinePcurve::try_new(
+                    Point2::new(6.0, 22.0),
+                    Point2::new(-8.0, 6.0),
+                )
+                .unwrap(),
+            )
+        } else {
+            geometry.clone()
+        };
         let decoded = StepCodec::default()
             .decode(
                 &mut Cursor::new(output_text.into_bytes()),
                 &DecodeOptions::default(),
             )
             .expect("decode exact pcurve");
-        assert_eq!(decoded.ir().model.pcurves[0].geometry, geometry);
+        assert_eq!(decoded.ir().model.pcurves[0].geometry, expected);
         assert_eq!(decoded.ir().model.bodies.len(), 1);
         assert!(decoded
             .report()
@@ -699,6 +704,7 @@ pub(crate) fn writer_round_trips_product_body_ownership() {
     ir.model
         .product_definitions
         .push(cadmpeg_ir::products::ProductDefinition {
+            sketches: Vec::default(),
             id: product.clone(),
             kind: cadmpeg_ir::products::ProductDefinitionKind::Part,
             source_name: Some("Cube part".into()),
@@ -745,7 +751,7 @@ pub(crate) fn writer_round_trips_product_body_ownership() {
     assert_eq!(decoded.ir().model.occurrences.len(), 1);
 }
 
-fn wire_body_ir(alpha: f32) -> CadIr {
+pub(super) fn wire_body_ir(alpha: f32) -> CadIr {
     let mut ir = unit_cube().expect("unit cube fixture is admitted");
     let edge = ir.model.edges[0].clone();
     let curve = edge.curve().cloned().expect("cube edge curve");
@@ -814,7 +820,7 @@ pub(crate) fn writer_round_trips_edge_based_wire_bodies() {
         Some(cadmpeg_ir::topology::Color::new(0.2, 0.4, 0.8, 1.0).expect("valid color"))
     );
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -1138,6 +1144,12 @@ fn periodic_two_rim_face_keeps_unclassified_bounds_through_export() {
             round_trip.ir().model.faces[0].loops,
             cadmpeg_ir::topology::FaceLoops::Unspecified { .. }
         ));
+        cadmpeg_measure::test_support::round_trip::measures_agree(
+            "periodic two-rim face",
+            decoded.ir(),
+            round_trip.ir(),
+        )
+        .expect("the round trip keeps its measured geometry");
     }
 }
 
@@ -1491,7 +1503,6 @@ fn analytic_surface_placements_preserve_orientation() {
 #[test]
 fn nurbs_curve_non_rational_uses_with_knots() {
     let n = NurbsCurve::from_lanes(
-        &cadmpeg_test_support::service_decode_context(),
         2,
         vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
         vec![
@@ -1502,7 +1513,6 @@ fn nurbs_curve_non_rational_uses_with_knots() {
         None,
         false,
     )
-    .expect("fixture constructor admission")
     .unwrap();
     let s = emit_curve_only(&CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(n)));
     assert!(s.contains("B_SPLINE_CURVE_WITH_KNOTS"));
@@ -1514,7 +1524,6 @@ fn nurbs_curve_non_rational_uses_with_knots() {
 #[test]
 fn nurbs_curve_rational_uses_complex_form() {
     let n = NurbsCurve::from_lanes(
-        &cadmpeg_test_support::service_decode_context(),
         2,
         vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
         vec![
@@ -1525,7 +1534,6 @@ fn nurbs_curve_rational_uses_complex_form() {
         Some(vec![1.0, 0.5, 1.0]),
         false,
     )
-    .expect("fixture constructor admission")
     .unwrap();
     let s = emit_curve_only(&CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(n)));
     assert!(s.contains("RATIONAL_B_SPLINE_CURVE"));
@@ -1535,7 +1543,6 @@ fn nurbs_curve_rational_uses_complex_form() {
 #[test]
 pub(crate) fn nurbs_surface_grid_orientation_is_u_major() {
     let n = NurbsSurface::from_lanes(
-        &cadmpeg_test_support::service_decode_context(),
         cadmpeg_ir::geometry::nurbs::NurbsSurfaceAxis::new(1, vec![0.0, 0.0, 1.0, 1.0], false),
         cadmpeg_ir::geometry::nurbs::NurbsSurfaceAxis::new(1, vec![0.0, 0.0, 1.0, 1.0], false),
         cadmpeg_ir::geometry::nurbs::NurbsSurfaceLanes::new(
@@ -1547,7 +1554,6 @@ pub(crate) fn nurbs_surface_grid_orientation_is_u_major() {
         ),
         false,
     )
-    .expect("fixture constructor admission")
     .unwrap();
     let s = emit_surface_only(&SurfaceGeometry::Solved(SolvedSurfaceGeometry::Nurbs(n)));
     assert!(s.contains("B_SPLINE_SURFACE_WITH_KNOTS"));
@@ -1610,11 +1616,7 @@ fn writer_orders_edge_loop_coedges_by_oriented_endpoints() {
     coedges.swap(0, 1);
     let vertex_uses = loop_.anchored_vertex_uses().to_vec();
     loop_
-        .replace_ring(
-            &cadmpeg_test_support::service_decode_context(),
-            coedges,
-            vertex_uses,
-        )
+        .replace_ring(coedges, vertex_uses)
         .expect("reordered loop ring remains valid");
 
     let mut bytes = Vec::new();
@@ -1636,7 +1638,7 @@ fn writer_orders_edge_loop_coedges_by_oriented_endpoints() {
         .expect("decode reordered edge loops");
     assert_eq!(decoded.ir().model.faces.len(), source.model.faces.len());
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 

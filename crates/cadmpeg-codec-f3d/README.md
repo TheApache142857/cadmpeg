@@ -8,7 +8,7 @@ appearances. Multi-document `.f3z` archives decode into one merged document.
 
 <!-- generated: capability f3d -->
 
-Support: L4 ([ladder](https://github.com/cadmpeg/cadmpeg/blob/main/docs/format-support.md#fusion-360-f3d)).
+Support: L5 ([ladder](https://github.com/cadmpeg/cadmpeg/blob/main/docs/format-support.md#fusion-360-f3d)).
 
 <!-- /generated: capability f3d -->
 
@@ -39,7 +39,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The result holds the decoded `CadIr` and a `DecodeReport`. Read
 `report.losses` before trusting geometry. Set
-`DecodeOptions::container_only` for archive metadata without B-rep decoding.
+`DecodeOptions::depth` to `DecodeDepth::Container` for archive metadata
+without B-rep decoding, or to `DecodeDepth::Geometry` for geometry and
+products without design intent.
 `F3dCodec::inspect` returns classified ZIP entries and B-rep header facts.
 
 ## Encode

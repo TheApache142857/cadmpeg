@@ -14,9 +14,7 @@ fn tested_parse_classed_sketch_relation(
     payload: &[u8],
     class: SketchRelationClass,
 ) -> Option<crate::design::decode::sketch::ParsedSketchRelation> {
-    crate::design::test_support::with_test_decode_context(|ctx| {
-        parse_classed_sketch_relation(ctx, payload, class).unwrap()
-    })
+    parse_classed_sketch_relation(payload, class).unwrap()
 }
 
 #[test]
@@ -114,11 +112,9 @@ fn indexed_record_search_requires_the_expected_identity() {
 
 #[test]
 fn genesis_relation_parses_u64_text_frame_mask_and_relation_ordinals() {
-    let mut auxiliary = Vec::new();
+    let mut auxiliary = vec![0];
     push_reference(&mut auxiliary, 2394);
     auxiliary.extend_from_slice(&[0u8; 6]);
-    // The second text-frame reference is absent.
-    auxiliary.push(0);
     let record = genesis_relation_record(
         &[(2394, 0), (2403, 0), (2404, 0)],
         2,
@@ -330,8 +326,8 @@ fn genesis_relation_parses_circular_pattern_auxiliary_run() {
         decode_pattern_definition(&record, &mut parsed),
         Some(
             crate::records::sketch_relations::SketchPatternDefinition::Circular {
-                angle_parameter: 336,
-                count_parameter: 333,
+                angle_parameter: Some(336),
+                count_parameter: Some(333),
                 evaluated_angle: cadmpeg_ir::scalar::FiniteReal::new(std::f64::consts::TAU)
                     .unwrap(),
                 evaluated_count: crate::records::sketch_relations::SketchPatternCount::try_from(3)
@@ -403,15 +399,15 @@ fn genesis_relation_parses_rectangular_pattern_auxiliary_run() {
         panic!("expected rectangular pattern definition");
     };
     assert_eq!(directions[0].evaluated_count.get(), 3);
-    assert_eq!(directions[0].count_parameter, 464);
+    assert_eq!(directions[0].count_parameter, Some(464));
     assert_eq!(directions[0].direction.get(), [1.0, 0.0, 0.0]);
     assert_eq!(directions[0].evaluated_distance.get(), 3.0);
-    assert_eq!(directions[0].distance_parameter, 470);
+    assert_eq!(directions[0].distance_parameter, Some(470));
     assert_eq!(directions[1].evaluated_count.get(), 1);
-    assert_eq!(directions[1].count_parameter, 467);
+    assert_eq!(directions[1].count_parameter, Some(467));
     assert_eq!(directions[1].direction.get(), [0.0, 1.0, 0.0]);
     assert_eq!(directions[1].evaluated_distance.get(), 0.5);
-    assert_eq!(directions[1].distance_parameter, 473);
+    assert_eq!(directions[1].distance_parameter, Some(473));
 }
 
 #[test]
@@ -432,47 +428,13 @@ fn genesis_entity_header_variant_resolves_suffix_and_id() {
         entity_id_offset,
         optional_slot_present,
         end,
-    } = parse_genesis_entity_header(&cadmpeg_test_support::service_decode_context(), &bytes, 0)
-        .unwrap()
-        .unwrap();
+    } = parse_genesis_entity_header(&bytes, 0).unwrap();
     assert_eq!(entity_id_offset, payload_start);
     assert_eq!(entity_id.suffix(), 201);
     assert_eq!(entity_id.as_str(), "0_201");
     assert!(!optional_slot_present);
     assert_eq!(end, bytes.len());
-    assert!(parse_settled_entity_header(
-        &cadmpeg_test_support::service_decode_context(),
-        &bytes,
-        0
-    )
-    .unwrap()
-    .is_none());
-}
-
-#[test]
-fn genesis_entity_header_id_refuses_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&3u32.to_le_bytes());
-    bytes.extend_from_slice(b"281");
-    bytes.extend_from_slice(&201u32.to_le_bytes());
-    bytes.extend_from_slice(&[0u8; 10]);
-    push_genesis_block(&mut bytes, 4);
-    bytes.extend_from_slice(&5u32.to_le_bytes());
-    for unit in "0_201".encode_utf16() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
-    }
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_retained_bytes = 4;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let error = parse_genesis_entity_header(&ctx, &bytes, 0).err().unwrap();
-    assert!(matches!(error,
-        cadmpeg_core::CodecError::ResourceLimit(limit)
-            if limit.dimension == ResourceDimension::RetainedBytes
-                && limit.operation == "f3d Design UTF-16 text"
-    ));
+    assert!(parse_settled_entity_header(&bytes, 0).is_none());
 }
 
 fn genesis_relation_record(
@@ -527,4 +489,44 @@ fn indexed_record_header_requires_a_complete_class_header() {
         assert_eq!(index_at(&header[..length], 0), None);
     }
     assert_eq!(index_at(&header, usize::MAX), None);
+}
+
+fn registered_type(
+    type_guid: &str,
+    entities: &[u64],
+    byte_offset: u64,
+) -> crate::records::entity_header::SegmentType {
+    crate::records::entity_header::SegmentType::try_new(
+        format!("f3d:Design/MetaStream.dat:design-type#{byte_offset}"),
+        crate::records::entity_header::SegmentTypeData {
+            byte_offset,
+            type_guid: type_guid.to_owned().try_into().unwrap(),
+            type_guid_offset: 4,
+            base_type_guid: crate::records::entity_header::BaseTypeGuid::Absent,
+            version: 1,
+            version_offset: 44,
+            module: "MSketch".into(),
+            entities: crate::records::identity::ReferenceRun::located(
+                entities
+                    .iter()
+                    .map(|value| crate::records::identity::Located {
+                        value: *value,
+                        offset: 100,
+                    })
+                    .collect(),
+            ),
+        },
+    )
+    .unwrap()
+}
+
+/// Relation records come from the relation-class registrations of the type
+/// table, not from a sketch member run; other registrations do not count.
+#[test]
+fn relation_records_are_the_relation_class_registrations() {
+    let relation = registered_type("60403D47-0C49-49B0-BDE8-1679608164A2", &[547, 548], 10);
+    let container = registered_type("44A64366-4BD3-4B24-881A-F94C206E8F2D", &[222], 20);
+    let indices =
+        crate::design::decode::sketch::registered_relation_record_indices([&relation, &container]);
+    assert_eq!(indices, [547, 548]);
 }

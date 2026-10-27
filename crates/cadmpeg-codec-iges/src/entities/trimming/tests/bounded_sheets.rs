@@ -12,6 +12,7 @@ use cadmpeg_ir::geometry::SurfaceGeometry;
 
 use cadmpeg_ir::math::Point2;
 
+use crate::loss::IgesLossCode;
 use crate::test_support::test_procedural_surfaces::trimmed_procedural_line_surface_of_revolution_file;
 use crate::test_support::test_procedural_surfaces::trimmed_procedural_line_surface_of_revolution_file_with_global;
 use crate::test_support::test_solids_and_structure::parametrically_bounded_plane_file;
@@ -77,8 +78,8 @@ fn decode_builds_a_parametrically_bounded_sheet() {
         "{:#?}",
         result.report().losses
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -141,8 +142,8 @@ fn decode_builds_an_ordered_multi_segment_bounded_sheet() {
         "{:#?}",
         result.report().losses
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -191,8 +192,8 @@ fn decode_accepts_a_bounded_sheet_join_within_global_resolution() {
         "{:#?}",
         result.report().losses
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -269,8 +270,8 @@ fn decode_converts_non_millimetre_resolution_before_sewing_a_bounded_sheet() {
         "{:#?}",
         result.report().losses
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -305,8 +306,8 @@ fn decode_sews_boundary_roundoff_with_declared_coordinate_significance() {
         "{:#?}",
         result.report().losses
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -373,8 +374,8 @@ fn decode_builds_a_valid_face_local_trimmed_sheet() {
         "{:#?}",
         result.report().losses
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -414,8 +415,8 @@ fn decode_builds_a_trimmed_sheet_from_a_native_circle_pcurve() {
         "{:#?}",
         result.report().losses
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -496,12 +497,14 @@ fn decode_maps_a_line_generatrix_pcurve_to_the_neutral_distance_parameter() {
     assert!((nurbs.control_points()[0].u - expected_u).abs() <= EPS_BOUNDARY_ENDPOINT_MATCH);
     assert!(nurbs.control_points()[0].v.abs() <= EPS_BOUNDARY_ENDPOINT_MATCH);
     assert!(
-        result.report().losses.is_empty(),
-        "{:#?}",
-        result.report().losses
+        matches!(
+            result.report().losses.as_slice(),
+            [loss] if loss.code == IgesLossCode::BoundaryWindingUnresolved.kind()
+        ),
+        "a boundary with no closed parameter-space image keeps its source traversal with one loss"
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -554,12 +557,14 @@ fn decode_unscales_procedural_pcurve_coordinates_before_neutral_mapping() {
     assert!((nurbs.control_points()[0].u - expected_u).abs() <= EPS_BOUNDARY_ENDPOINT_MATCH);
     assert!(nurbs.control_points()[0].v.abs() <= EPS_BOUNDARY_ENDPOINT_MATCH);
     assert!(
-        result.report().losses.is_empty(),
-        "{:#?}",
-        result.report().losses
+        matches!(
+            result.report().losses.as_slice(),
+            [loss] if loss.code == IgesLossCode::BoundaryWindingUnresolved.kind()
+        ),
+        "a boundary with no closed parameter-space image keeps its source traversal with one loss"
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -612,7 +617,7 @@ fn decode_builds_a_model_curve_only_trimmed_sheet() {
         "{:#?}",
         result.report().losses
     );
-    let validation = cadmpeg_ir::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+    let validation =
+        cadmpeg_ir::validate_neutral(result.ir(), Vec::new()).expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }

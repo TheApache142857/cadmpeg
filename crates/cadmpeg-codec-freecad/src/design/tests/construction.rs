@@ -16,33 +16,6 @@ use std::io::Cursor;
 mod binders;
 
 #[test]
-fn design_census_identity_refuses_at_retained_limit() {
-    let document = r#"<Document SchemaVersion="4" FileVersion="1">
-<Objects Count="1"><Object type="PartDesign::AdditiveBox" name="Box"/></Objects>
-<ObjectData Count="1"><Object name="Box"><Properties Count="3">
-<Property name="Length" type="App::PropertyLength"><Float value="1"/></Property>
-<Property name="Width" type="App::PropertyLength"><Float value="2"/></Property>
-<Property name="Height" type="App::PropertyLength"><Float value="3"/></Property>
-</Properties></Object></ObjectData></Document>"#;
-    let result = FcstdCodec
-        .decode(
-            &mut Cursor::new(archive(document)),
-            &DecodeOptions::default(),
-        )
-        .expect("design fixture");
-    let objects = result
-        .ir()
-        .native
-        .namespace("fcstd")
-        .expect("native namespace")
-        .arena_as::<crate::native::ObjectRecord>("objects")
-        .expect("objects");
-    crate::test_support::assert_retained_refusal_at(&[], "FreeCAD native child identity", |ctx| {
-        super::super::census(ctx, &objects, &result.ir().model.features)
-    });
-}
-
-#[test]
 fn transfers_partdesign_refine_and_fuzzy_post_processing() {
     let document = r#"<Document SchemaVersion="4" FileVersion="1">
 <Objects Count="2">
@@ -1925,4 +1898,102 @@ fn rejects_ambiguous_single_source_design_operands() {
             && loss.code.local_code() == "feature.native-kind-retained"
             && loss.severity == cadmpeg_ir::report::Severity::Blocking
     }));
+}
+
+#[test]
+fn indexed_subelement_selections_resolve_to_the_linked_shape() {
+    let document = r#"<Document SchemaVersion="4" FileVersion="1">
+<Objects Count="4">
+ <Object type="Part::Feature" name="Base" id="1"/>
+ <Object type="PartDesign::Thickness" name="Thickness" id="2"/>
+ <Object type="PartDesign::Fillet" name="Fillet" id="3"/>
+ <Object type="PartDesign::Chamfer" name="Chamfer" id="4"/>
+</Objects>
+<ObjectData Count="4">
+ <Object name="Base"><Properties Count="1">
+  <Property name="Shape" type="Part::PropertyPartShape"><Part file="Base.Shape.brp"/></Property>
+ </Properties></Object>
+ <Object name="Thickness"><Properties Count="2">
+  <Property name="Base" type="App::PropertyLinkSub"><LinkSub value="Base" count="1"><Sub value="Face1"/></LinkSub></Property>
+  <Property name="Value" type="App::PropertyLength"><Float value="1"/></Property>
+ </Properties></Object>
+ <Object name="Fillet"><Properties Count="2">
+  <Property name="Base" type="App::PropertyLinkSub"><LinkSub value="Base" count="1"><Sub value=";#1:2;:G.Edge2"/></LinkSub></Property>
+  <Property name="Radius" type="App::PropertyLength"><Float value="1"/></Property>
+ </Properties></Object>
+ <Object name="Chamfer"><Properties Count="2">
+  <Property name="Base" type="App::PropertyLinkSub"><LinkSub value="Base" count="2"><Sub value="Edge1"/><Sub value="Edge3"/></LinkSub></Property>
+  <Property name="Size" type="App::PropertyLength"><Float value="1"/></Property>
+ </Properties></Object>
+</ObjectData></Document>"#;
+    // One face bounded by two edges.
+    let brep = b"CASCADE Topology V1, (c) Matra-Datavision
+Locations 0
+Curve2ds 2
+1 0 0 1 0
+1 1 0 -1 0
+Curves 2
+1 0 0 0 1 0 0
+1 1 0 0 -1 0 0
+Polygon3D 0
+PolygonOnTriangulations 0
+Surfaces 1
+1 0 0 0 0 0 1 1 0 0 0 1 0
+Triangulations 0
+TShapes 8
+Ve 0.001 0 0 0 0 0 1001000 *
+Ve 0.001 1 0 0 0 0 1001000 *
+Ed 0.001 1 1 0 1 1 0 0 1 2 1 1 0 0 1 0 1001000 +8 0 -7 0 *
+Ed 0.001 1 1 0 1 2 0 0 1 2 2 1 0 0 1 0 1001000 +7 0 -8 0 *
+Wi 1001000 +6 0 +5 0 *
+Fa 0 0.001 1 0 1001000 +4 0 *
+Sh 1001000 +3 0 *
+So 1001000 +2 0 *
++1 0 *";
+    let bytes = archive_entries(&[
+        ("Document.xml", document.as_bytes()),
+        ("Base.Shape.brp", brep),
+    ]);
+    let result = FcstdCodec
+        .decode(&mut Cursor::new(bytes), &DecodeOptions::default())
+        .expect("subelement selections");
+    let model = &result.ir().model;
+    let operation = |name: &str| match model
+        .features
+        .iter()
+        .find(|feature| feature.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("{name}"))
+        .evaluation
+        .definition()
+    {
+        FeatureDefinition::PostProcess { operation, .. }
+        | FeatureDefinition::Operation(operation) => operation.clone(),
+    };
+    let FeatureOperation::Shell { removed_faces, .. } = operation("Thickness") else {
+        panic!("shell");
+    };
+    let cadmpeg_ir::features::FaceSelection::Resolved { faces, native } = removed_faces else {
+        panic!("resolved faces: {removed_faces:?}");
+    };
+    assert_eq!(faces.len(), 1);
+    assert!(model.faces.iter().any(|face| face.id == faces[0]));
+    assert_eq!(native, "fcstd:native:property#Thickness:Base");
+    let FeatureOperation::Fillet { groups, .. } = operation("Fillet") else {
+        panic!("fillet");
+    };
+    let cadmpeg_ir::features::EdgeSelection::Resolved { edges, .. } = &groups[0].edges else {
+        panic!("resolved edges: {:?}", groups[0].edges);
+    };
+    assert_eq!(edges.len(), 1);
+    assert!(model.edges.iter().any(|edge| edge.id == edges[0]));
+    // Edge3 does not exist, so the whole selection stays native.
+    let FeatureOperation::Chamfer { groups, .. } = operation("Chamfer") else {
+        panic!("chamfer");
+    };
+    assert!(matches!(
+        &groups[0].edges,
+        cadmpeg_ir::features::EdgeSelection::Native(native)
+            if native == "fcstd:native:property#Chamfer:Base"
+    ));
+    assert_valid_document(result.ir());
 }

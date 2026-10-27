@@ -46,6 +46,10 @@ later than the FOOTER offset. Other payloads remain exact opaque bytes. Entry
 framing is contiguous; invalid framing rejects the complete containing
 directory without bytewise recovery.
 
+A FOOTER offset of `0xffffffffffff` states that the file has no FOOTER region.
+The HEADER directory is then the complete directory, a file range ends no later
+than the file boundary, and the file has no fingerprint.
+
 The four-byte FOOTER fingerprint is retained exactly. The `/Root/` sentinel
 node carries UUID `611ec9b3-fa60-d111-8ad9-0800362fb302` across files.
 
@@ -139,7 +143,8 @@ indexed stream directory. Distinct indexed members have disjoint compressed
 extents; overlap rejects the directory. Supplemental members cannot overlap
 indexed members.
 An unindexed member is admitted only when its inflated bytes contain a complete
-Parasolid structural record or tombstone. Supplemental members are read in
+Parasolid structural record or, for a Deltas stream, a complete sequentially
+owned partition prefix. Supplemental members are read in
 physical order. Each enters the roster before the first existing member with
 a greater file offset, or at the end if none exists. Indexed members keep their
 relative row and word order. For a primary partition or plain stream, the counted header selects
@@ -601,7 +606,8 @@ FastLoad occurrence ordinal.
 ### 2.4 Legacy CFB envelope
 
 Legacy NX parts use the Compound File Binary envelope with the eight-byte header
-signature `d0 cf 11 e0 a1 b1 1a e1`. The CFB directory contains the
+signature `d0 cf 11 e0 a1 b1 1a e1`. The last DIFAT sector links to ENDOFCHAIN;
+a FREESECT link there is malformed. The CFB directory contains the
 `UG_PART/UG_PART` stream. The CFB signature alone does not identify NX; the
 `UG_PART/UG_PART` directory path is required.
 
@@ -909,6 +915,12 @@ variable binary64 array. The array count precedes the node index. The
 terminal ASCII `Z` (`5a`) ends that declaration; the first type-38 instance's
 index follows it. It is not a separate node tag. Type 90 `GROUP` has the
 two-byte nodetype `005a`.
+
+Type 91 `MEMBER_OF_FEATURE` has logical length 20: `dummy_node_id:u32 +4`,
+then the owning-feature, owner, next, previous, next-member, and
+previous-member references. Its owner reference is non-null. A complete
+`MEMBER_OF_FEATURE` frame and the type-38 inline schema header each begin a
+record, so each bounds the fixed record before it.
 
 ### 4.2 Deltas-stream framing
 
@@ -1271,7 +1283,7 @@ referenced list and its instances resolve.
 | Entity   | Rule                                                                                                                                                                                                                                                                                                                                       |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | vertices | FIN-referenced VERTEX nodes; coordinates from same-stream POINT nodes                                                                                                                                                                                                                                                                      |
-| edges    | one per EDGE node; native endpoint incidence is `EDGE.fin → FIN.vertex` and `FIN.other_fin → FIN.vertex`, with null `other_fin` falling back to `FIN.forward_fin → FIN.vertex`; canonical start/end order follows increasing curve parameter; the carrier resolves through non-null `EDGE.curve`, otherwise through the owning `FIN.curve` |
+| edges    | one per EDGE node; `FIN.vertex` is the vertex at the end of its FIN, and a FIN begins at `FIN.other_fin → FIN.vertex`, or at `FIN.backward_fin → FIN.vertex` when `other_fin` is null; a forward `EDGE.fin` runs along its EDGE and a reversed one against it; the EDGE runs along its curve when the curve's common-header sense is `+` and against it when the sense is `-`; canonical start/end order follows the curve direction and each coedge sense is relative to that order; the carrier resolves through non-null `EDGE.curve`, otherwise through the owning `FIN.curve` |
 | loops    | walked from `FACE.loop` through the null-terminated LOOP chain; each FIN ring closes at its first FIN with reciprocal forward/backward links; non-null partner FINs reciprocally reference one another and carry the same EDGE                                                                                                             |
 | faces    | one per FACE node, with resolved surface when available                                                                                                                                                                                                                                                                                    |
 | bodies   | one per validated body-shape SHELL                                                                                                                                                                                                                                                                                                         |
@@ -1945,7 +1957,7 @@ A sketch mixed pair is `04 e0 48 0e 02 03 80 84, 30, first:shifted_f64_suffix[7]
 
 A sketch scalar-vector lane is one of two exact forms: `25 25 41 00 04 01 03 01 c0 45 04 04 80 86 81 02 00 01 00, atom+, 00`; or `25 25 41 00 04 01 07 01 c0 45 10 00 80 86 02 00 01 00, atom+, 00`. Each atom is one nonzero shifted binary64 or shifted binary32 scalar atom: binary64 uses marker `20..3f` or `a0..bf` and eight bytes, while binary32 uses marker `40..5f` or `c0..df` and four bytes. The final `00` is the lane terminator and is not a scalar value. Every atom decodes to a finite value. The lane retains its exact discriminator, ordered values and raw atoms, payload-relative discriminator, atom, and terminator offsets, and absolute source offsets. The lane does not assign a point, curve, constraint, unit, coordinate-space, or placement role to its values.
 
-A datum-coordinate-system fixed pair has one of two exact forms: `0b 02 03 01 03 01 c0 45 04 00 80 86 02 00 03, 30, first:i56 BE, 00, 30, second:i56 BE`; or `80 8d 00 ff 80 81 01 02 01 00 00 00 87 d7 01 01 01 01 02 a5 30 21 a5 30 21 01 00 01 af ff df 02 01 02, 30, first:i56 BE, 00, 30, second:i56 BE`. Each signed atom has value `i56 / 2^55`. The pair retains the datum operation and payload identities, exact discriminator, both decoded dimensionless values, both exact seven-byte two's-complement payloads, payload-relative offsets, and absolute source offsets. The frame does not assign an origin, axis, orientation, sketch coordinate, or constraint role to either value.
+A datum-coordinate-system fixed pair has one of two exact forms: `0b 02 03 01 03 01 c0 45 04 00 80 86 02 00 03, 30, first:i56 BE, 00, 30, second:i56 BE`; or `80 8d 00 ff 80 81 01 02 01 00 00 00 87 d7 01 01 01 01 02 a5 30 21 a5 30 21 01 00 01 af ff df 02 01 02, 30, first:i56 BE, 00, 30, second:i56 BE`. Each signed atom has value `i56 / 2^55`. Its binary64 projection rounds the exact rational to nearest with ties to even; the exact seven-byte atom remains unchanged. The pair retains the datum operation and payload identities, exact discriminator, both decoded dimensionless values, both exact seven-byte two's-complement payloads, payload-relative offsets, and absolute source offsets. The frame does not assign an origin, axis, orientation, sketch coordinate, or constraint role to either value.
 
 A sketch payload name field is `66, compact_type, 03, declared_len:u8, text[declared_len-2], 00`. The compact type is non-null; its decoded value, exact serialized token, payload offset, and absolute source offset are retained. At reconstructed payload offset zero, the type-free form is `03, declared_len:u8, text[declared_len-2], 00`; it has no compact type. In both forms text is nonempty printable ASCII. A complete name field opens a named payload interval ending exclusively at the next complete name field or the reconstructed payload boundary. Framed shifted-binary64 scalars, fixed pairs, and mixed pairs within that interval are retained independently in payload order. Bytes preceding the first complete name field remain outside named intervals.
 
@@ -2036,9 +2048,7 @@ the neutral distance unresolved; missing or multiply owned base surfaces retain
 only the native selection. Procedural surfaces in other bodies of the same
 stream do not participate.
 
-A `BLEND` operation with exactly one segment-bound output image projects when that body's region, shell, and face ownership graph contains at least one BLEND_SURF and every owned BLEND_SURF has a circular cross-section. Procedural surfaces in other bodies of the same stream do not participate. The output body's BLEND_SURF identities define the result set. When every construction has two distinct resolved supports, their unordered support graph is complete bipartite, and every support surface owns one unique distinct face, the operation projects as a face blend over the two deterministic graph partitions. Each connected component places its lowest surface identity in the first partition; a missing cross-pair, odd cycle, unresolved support, duplicate face, or non-unique surface-to-face relation leaves the input-edge selection unresolved and projects the operation as a fillet. When every construction has a finite nonzero constant radius with one common absolute bit pattern, that magnitude is the blend radius. Multiple constant magnitudes retain constant-law form without assigning one radius. Exclusively linear or curve-driven laws retain variable-law form. Mixed laws retain an unresolved radius form. An unbound output, an incomplete ownership graph, a body without BLEND_SURF, or any owned conic or polynomial blend cross-section leaves the operation native.
-
-The `FACE_BLEND` operation label uses the same owned circular BLEND_SURF projection as `BLEND`. A complete bipartite support graph resolves its two face selections and radius law. When the owned result carriers resolve but their support graph does not, the operation remains a face blend with unresolved face selections and the resolved radius form. `BLEND` uses an unresolved edge-selected fillet for the same fallback.
+The `BLEND` operation label identifies an edge-blend construction, and `FACE_BLEND` identifies a face-blend construction. Output-body BLEND_SURF membership does not assign carriers, support faces, radius, or radius-law form to an individual operation. A body can contain surfaces associated with several operations. The GROUP-owned FEAT and FACE-owned FACR integer-key relation is structural and does not establish face creation direction.
 
 The structured extrusion branch begins `32 00 00` after its unique body-reference field, followed by one shifted-IEEE binary64 scalar whose finite value and exact eight-byte encoding are retained. A counted fixed-width lane follows as `01, count:u8, (3d, extended_compact_index, 00)[count-1]`, where `count >= 2`. Each wrapped index uses exactly `80..fe, low:u8` and decodes as `(marker-80)*256+low`; direct and null forms are invalid in this lane. The complete fixed-width atoms and their exact source offsets are retained. Two counted compact-index lanes follow, each framed `01, count:u8, index[count-1]` with `count >= 2`. Compact indices use `00..7f` as direct values, `80..fe, low:u8` as `(marker-80)*256+low`, and `ff` as null; null is invalid in these lanes. Both lanes retain their decoded indices, exact tokens, and exact source offsets. Indices in all three lanes address offset-only OM data blocks under the unique-resolution rule used by profile references. The branch ends `00 01, object_index, 00 00`, using the feature object-index form. The terminal object index retains its exact token and offset and equals the body object index anchoring the branch.
 
@@ -2357,7 +2367,7 @@ Canonical `66 32 03, declared_length, printable_text, 00` string frames are deco
 
 The payload ends with one terminal lane: `extended_compact_index[0], extended_compact_index[1], 01 03 02 01 02 01 01 01 00 00 00, tail[3], 00`. Each index uses the two-byte `80..fe, low:u8` form. The ordered indices, exact two-byte tokens, their exact offsets, and the three uninterpreted tail bytes are retained. A direct, null, or truncated index, malformed fixed byte, missing terminal zero, trailing byte, or multiple complete end-anchored parses rejects the lane atomically.
 
-The operation labels `CPROJ` and `CPROJ_CMB` identify projected-curve constructions. Neutral projection retains unresolved source-path, target-face, direction, and directionality fields.
+The `CPROJ` operation projects a source curve section onto a target face or plane with a projection-direction method and projection options. The `CPROJ_CMB` operation combines two curve sections with two projection-direction option objects, curve-fit controls, and curve options. The combined construction does not define a target-face selection. Its two-section, two-direction relation is distinct from a source path projected onto target faces. Storage-reference order does not assign these semantic input roles.
 
 The first payload byte of a `CPROJ` or `CPROJ_CMB` operation is a one-based class-declaration index in its owning OM section. The class ordinal is that byte minus one. A `CPROJ` payload selects `UGS::CPROJ_hidden_normal_parms` or `UGS::CPROJ_vector_feature_parms`; a `CPROJ_CMB` payload selects `UGS::CPROJ_CMB_feature_parms`. In a hidden-normal counted lane, the pair-element leader is one greater than the payload leader and selects `UGS::CPROJ_lookup_table` in the same section.
 

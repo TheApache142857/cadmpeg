@@ -74,7 +74,7 @@ fn inline_display_appearance(name: &str, rgb: [u8; 3]) -> Vec<u8> {
 fn feature_visual_record(source_id: u32, timestamp: u32, rgb: [u8; 3]) -> Vec<u8> {
     let mut record = vec![0; feature_visual::LEN];
     for (offset, value) in [
-        (feature_visual::VERSION, feature_visual::VERSION_VALUE),
+        (feature_visual::PRELUDE, 0),
         (feature_visual::FEATURE_SOURCE_ID, source_id),
         (feature_visual::FEATURE_TIMESTAMP, timestamp),
         (
@@ -171,7 +171,7 @@ fn display_colors(bytes: Vec<u8>) -> Vec<[u8; 3]> {
         .model
         .tessellations
         .iter()
-        .map(|tessellation| {
+        .filter_map(|tessellation| {
             let binding = result
                 .ir()
                 .model
@@ -179,8 +179,7 @@ fn display_colors(bytes: Vec<u8>) -> Vec<[u8; 3]> {
                 .iter()
                 .find(|binding| {
                     binding.target == AppearanceTarget::Tessellation(tessellation.id.to_string())
-                })
-                .unwrap();
+                })?;
             let color = colors[&binding.appearance];
             let table_index = tessellation
                 .id
@@ -190,11 +189,11 @@ fn display_colors(bytes: Vec<u8>) -> Vec<[u8; 3]> {
                 .unwrap()
                 .parse::<usize>()
                 .unwrap();
-            (
+            Some((
                 table_index,
                 [color.r(), color.g(), color.b()]
                     .map(|value| truncate_f64_to_u8(f64::from((value * 255.0).round())).unwrap()),
-            )
+            ))
         })
         .collect::<Vec<_>>();
     colors.sort_by_key(|(table_index, _)| *table_index);
@@ -227,15 +226,7 @@ fn visual_states_feature_assignment_decodes_identity_and_color() {
         &visual_states,
     ));
 
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
-        &source,
-        &arena,
-        &cadmpeg_core::decode::DecodePolicy::service(),
-    )
-    .unwrap();
-    let assignments =
-        super::feature_assignments(&ctx, &crate::test_support::container::scan(&source)).unwrap();
+    let assignments = super::feature_assignments(&crate::test_support::container::scan(&source));
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0].feature_source_id.value(), 36);
     assert_eq!(assignments[0].feature_timestamp, 0x6a81_f0f4);
@@ -261,7 +252,7 @@ fn display_body_and_face_assignments_use_structural_precedence() {
 }
 
 #[test]
-fn persistent_surface_sources_bind_feature_appearances() {
+fn unresolved_history_and_display_state_do_not_bind_feature_appearances() {
     let classes = [
         "moFromSktEntSurfIdRep_c",
         "moFromSktEnt3IntSurfIdRep_c",
@@ -286,9 +277,7 @@ fn persistent_surface_sources_bind_feature_appearances() {
         (44, 20, [239, 0, 0]),
         (51, 30, [7, 255, 43]),
     ];
-    let mut expected = vec![[236, 255, 0]; 6];
-    expected.extend([[239, 0, 0]; 4]);
-    expected.extend([[7, 255, 43]; 2]);
+    let expected: Vec<[u8; 3]> = Vec::new();
     assert_eq!(
         display_colors(display_fixture([128; 3], &faces, &[], &features)),
         expected
@@ -296,9 +285,7 @@ fn persistent_surface_sources_bind_feature_appearances() {
 }
 
 #[test]
-fn display_feature_binding_refuses_retained_limit() {
-    use cadmpeg_core::decode::ResourceDimension;
-
+fn unresolved_feature_scope_withholds_display_fallback() {
     let source = display_fixture(
         [128; 3],
         &[vec![("moFromSktEntSurfIdRep_c", 36, 1)]],
@@ -306,22 +293,16 @@ fn display_feature_binding_refuses_retained_limit() {
         &[(36, 10, [236, 255, 0])],
     );
     let result = SldprtCodec
-        .decode(&mut Cursor::new(source.clone()), &DecodeOptions::default())
+        .decode(&mut Cursor::new(source), &DecodeOptions::default())
         .unwrap();
-    assert!(result.ir().model.appearance_bindings.iter().any(|binding| {
-        binding.source_entity_id.as_deref() == Some("Contents/DisplayLists::DisplayFace[0]")
-    }));
-
-    let limit = cadmpeg_test_support::decode::resource_refusal_at(
-        &SldprtCodec,
-        &source,
-        &mut DecodeOptions::default(),
-        ResourceDimension::RetainedBytes,
-        "retain SLDPRT DisplayFace source identity",
-        0,
+    assert!(
+        !result.ir().model.appearance_bindings.iter().any(|binding| {
+            matches!(
+                binding.target,
+                cadmpeg_ir::appearance::AppearanceTarget::Tessellation(_)
+            )
+        })
     );
-    assert_eq!(limit.dimension, ResourceDimension::RetainedBytes);
-    assert_eq!(limit.operation, "retain SLDPRT DisplayFace source identity");
 }
 
 #[test]
@@ -344,7 +325,7 @@ fn face_local_wins_and_conflicting_or_missing_feature_sources_do_not_guess() {
             &[(0, [0, 0, 255])],
             &[(36, 10, [255, 0, 0]), (44, 20, [0, 255, 0])],
         )),
-        [[0, 0, 255], [128; 3], [128; 3]]
+        [[0, 0, 255]]
     );
 }
 
@@ -400,8 +381,12 @@ fn decode_preserves_ambiguous_materials_without_fabricating_ownership() {
         .expect("a finite position is a point"),
     );
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(result.ir(), result.source_fidelity(), &mut encoded)
-        .unwrap();
+    crate::test_support::plan_fixture_write_with_native_envelope(
+        result.ir(),
+        result.source_fidelity(),
+        &mut encoded,
+    )
+    .unwrap();
     let regenerated = SldprtCodec
         .decode(&mut Cursor::new(encoded), &DecodeOptions::default())
         .unwrap();
@@ -520,7 +505,7 @@ fn decode_does_not_bind_color_to_an_unemitted_face() {
     );
     assert!(
         cadmpeg_ir::validate_neutral(result.ir(), result.report().losses.clone())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -563,84 +548,13 @@ fn decode_binds_adjacent_entity53_color_to_disc14_face() {
 }
 
 #[test]
-fn appearance_searches_refuse_marker_free_ranges() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
-    use cadmpeg_core::CodecError;
-    let mut source = outer_header();
-    source.extend(make_block(0x43, "ThirdPtyStore/VisualStates", &[0; 64]));
-    let scan = crate::test_support::container::scan(&source);
-    let section = scan.sections().next().unwrap();
-    for (work, operation, route) in [
-        (0, "scan SLDPRT appearance definitions", 0),
-        (0, "scan inline SLDPRT appearances", 1),
-        (64, "scan SLDPRT feature appearance markers", 2),
-    ] {
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_work_units = work;
-        let arena = DecodeArena::new();
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let error = match route {
-            0 => super::definitions(&ctx, &scan).unwrap_err(),
-            1 => super::inline_definitions(&ctx, section, 0, 64).unwrap_err(),
-            _ => super::feature_assignments(&ctx, &scan).unwrap_err(),
-        };
-        assert!(matches!(error, CodecError::ResourceLimit(limit) if limit.operation == operation));
-    }
-}
-
-#[test]
-fn appearance_face_class_search_refuses_without_assignments() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
-    let payload = [&[0xff, 0xff, 1, 0, 1, 0][..], b"x", &[0; 64]].concat();
-    let mut source = outer_header();
-    source.extend(make_block(0x43, "DisplayLists", &payload));
-    let scan = crate::test_support::container::scan(&source);
-    let mut display_source = outer_header();
-    display_source.extend(make_block(
-        0x43,
-        "DisplayLists",
-        &crate::test_support::tessellation::display_list_payload(),
-    ));
-    let display_scan = crate::test_support::container::scan(&display_source);
-    let faces = crate::tessellation::section_display_faces(
-        &cadmpeg_test_support::service_decode_context(),
-        display_scan.sections().next().unwrap(),
-    )
-    .unwrap();
-
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_work_units = u64::try_from(payload.len() + 65).unwrap();
-    let arena = DecodeArena::new();
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let error =
-        super::display_assignments(&ctx, scan.sections().next().unwrap(), &faces).unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit) if limit.operation == "match SLDPRT face appearance classes")
-    );
-}
-
-fn unicode_appearance_source() -> (Vec<u8>, usize) {
+fn appearance_utf16_name_decodes() {
     let mut payload = material_payload("x", [32, 64, 128]);
     let length = payload.len();
     payload[length - 2..].copy_from_slice(&0x0800_u16.to_le_bytes());
     let mut source = outer_header();
     source.extend(make_block(0x43, "", &payload));
-    (source, length)
-}
-
-#[test]
-fn appearance_utf16_refuses_exact_retained_budget() {
-    let (source, _) = unicode_appearance_source();
     let scan = crate::test_support::container::scan(&source);
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_retained_bytes = 2;
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root");
-    assert!(
-        matches!(super::definitions(&ctx, &scan), Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-        if limit.dimension == cadmpeg_core::decode::ResourceDimension::RetainedBytes && limit.additional == 3 && limit.operation == "retain SLDPRT appearance name")
-    );
     let arena = cadmpeg_core::decode::DecodeArena::new();
     let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
         &[],
@@ -649,22 +563,7 @@ fn appearance_utf16_refuses_exact_retained_budget() {
     )
     .expect("empty root");
     assert_eq!(
-        super::definitions(&ctx, &scan).expect("service appearance")[0].name,
+        super::definitions(&ctx, &scan).expect("decode the appearance definitions")[0].name,
         "ࠀ"
-    );
-}
-
-#[test]
-fn appearance_utf16_refuses_work_before_decode() {
-    let (source, length) = unicode_appearance_source();
-    let scan = crate::test_support::container::scan(&source);
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_work_units = cadmpeg_core::decode::u64_from_index(length);
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root");
-    assert!(
-        matches!(super::definitions(&ctx, &scan), Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-        if limit.dimension == cadmpeg_core::decode::ResourceDimension::WorkUnits && limit.operation == "decode SLDPRT appearance name")
     );
 }

@@ -224,10 +224,10 @@ blend?
 identity, partition-local GROUP node, endpoint tag, and write-state body-image
 object. Endpoint tags `10`, `12`, and `15` select the body-image field.
 The `BLEND` and `FACE_BLEND` labels with body-write frames identify edge-blend
-and face-blend operations. When the owned circular blend-carrier projection is
-complete, the corresponding neutral family and constant radius are available.
-The edge or face selections and created-face relation remain separate
-questions. GROUP member XMTs are checked against the exact same-family node in
+and face-blend operations. Current body-owned blend carriers do not establish
+which carriers belong to an individual historical operation. The operation
+family is known; its input selections, radius, radius-law form, and created-face
+relation remain unresolved. GROUP member XMTs are checked against the exact same-family node in
 the delta-merged partition graph before the guarded unique-node fallback; this
 resolves current topology identities without assigning creation provenance.
 Explicit Boolean operations independently require the body-image object to
@@ -269,6 +269,14 @@ prove absence from an earlier construction state.
 
 **Conflict.** Neither the common-frame state lane nor the saved-toggle stream identifies a feature suppression value. A status row identifies an object and retains a code, but the code has no suppression meaning by itself. A roll-forward relation row retains two counter-row ordinal endpoints in the worked Drone tables, but a counter-row ordinal does not identify an operation or a typed suppression value. The operation identity, state-object identity, and typed state value require separate unique joins. The `78` member code does not supply the missing class reference. The OM declarations and product-anchored value lane do not provide a relation from a class declaration to an object record or from an object record to a typed state value. The Parasolid `UGS/ObjectState` lane provides a character value and, when present, a topology owner, but no operation owner or suppression domain.
 
+**Note.** Independent raw replay of the three worked Drone tables establishes
+38, 38, and 17 groups and 1,073, 1,109, and 1,447 counter rows, respectively.
+Their 261 endpoint uses all address the adjacent counter map. The −90° specimen
+contains a complete raw group and counter table even when those arenas emit no
+rows. An emitted zero therefore does not establish raw absence or group-census
+completeness. These tables provide no independently identified suppressed
+operation or complete operation-to-state-object join.
+
 ### OM-11. `DELETE` construction-payload fields
 
 **Question.** Which fields in the concatenated `DELETE` construction payload encode its operands and construction parameters?
@@ -279,7 +287,7 @@ prove absence from an earlier construction state.
 
 **Conflict.** Physical column boundaries split inner frames. Consecutive block ordinals and physical adjacency do not establish field boundaries. A repeated inner header does not identify operands or delimit every following field.
 
-The worked spur-gear-housing payload repeats `2d fb 7c df d9 d7 bd bb 00 00 00 50 28 00 00 2a` at payload-relative offsets `0`, `177`, and `354`. Directory-bounded offset-table candidates without the admitted product frame require a separate store-grammar proof; monotonic offsets alone do not establish an OM store.
+**Note.** The worked spur-gear-housing payload repeats `2d fb 7c df d9 d7 bd bb 00 00 00 50 28 00 00 2a` at payload-relative offsets `0`, `177`, and `354`. Directory-bounded offset-table candidates without the admitted product frame require a separate store-grammar proof; monotonic offsets alone do not establish an OM store.
 
 ### OM-12. Arrangement-specific component state
 
@@ -307,9 +315,9 @@ role relation. A parameter-class name does not identify a physical projection di
 
 ### OM-16. `CPROJ_CMB` construction-reference roles
 
-**Question.** Which `CPROJ_CMB` construction references select the source curves, target surfaces, directions, and combination controls?
+**Question.** Which bounded `CPROJ_CMB` fields identify its two curve sections, two projection-direction option objects, curve-fit controls, and curve options?
 
-**Known.** `siemens_nx.md` §7.1 "A `CPROJ_CMB` payload contains at most one construction-reference graph framed as" defines both complete storage graphs, serialized reference occurrences, block resolution, and logical payload.
+**Known.** `siemens_nx.md` §7.1 "A `CPROJ_CMB` payload contains at most one construction-reference graph framed as" defines both complete storage graphs, serialized reference occurrences, block resolution, and logical payload. The operation has two curve-section subjects and two projection-direction option objects; it does not establish a target-face relation.
 
 **Need.** We must know the roles to construct the combined projected curves.
 
@@ -783,7 +791,7 @@ The closure test only exercises already-populated `ParasolidAttributeFieldUse` v
 
 **Question.** Which serialized relation binds a physical material to a Parasolid face identity?
 
-**Known.** `siemens_nx.md` §2.3 "Each `/Root/materialsTif/<name>` file entry contains one TIFF stream." and `siemens_nx.md` §9.4 "The type-81 definition reference selects an attribute class when it equals" define preview and texture assets, the material-texture catalog, and topology-owned Parasolid attributes. `siemens_nx.md` §7.1 "An explicit display-color assignment addresses a face when" defines the complete face appearance relation; a palette color is not a physical-material assignment.
+**Known.** `siemens_nx.md` §2.3 "Each `/Root/materialsTif/<name>` file entry contains one TIFF stream." and `siemens_nx.md` §9.4 "The type-81 definition reference selects an attribute class when it equals" define preview and texture assets, the material-texture catalog, and topology-owned Parasolid attributes. `siemens_nx.md` §7.1 "An explicit display-color assignment remains native source metadata." defines the display-color relation; a palette color is not a physical-material assignment.
 
 **Need.** We must know the relation to assign physical-material state to neutral faces without treating a display color, texture asset, or topology attribute as a material identity.
 ### AM-11. JT 9 high-degree lane count

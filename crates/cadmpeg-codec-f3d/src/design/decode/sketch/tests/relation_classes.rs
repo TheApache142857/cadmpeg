@@ -1,21 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use cadmpeg_core::decode::u64_from_index;
-
 mod cast_limits;
 
 use crate::design::decode::sketch::{
     admit_sketch_relation, decode_pattern_definition, parse_classed_sketch_relation,
-    relation_mask_width, SketchRelationClass, SketchRelationMaskWidth,
+    rectangular_pattern_flags, relation_mask_width, SketchRelationClass, SketchRelationMaskWidth,
 };
 use crate::records::sketch_relations::{SketchPatternDefinition, SketchPatternDirection};
 use crate::test_support::push_reference_u64;
 
 #[test]
-fn sketch_relation_assembly_refuses_collection_and_retained_limits() {
+fn sketch_relation_assembly_admits_a_plain_relation() {
     use crate::records::decal::DesignRecordHeader;
     use crate::records::sketch_relations::SketchRelationDefinition;
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
 
     let record = relation_record(&[(300, 0)], &[], 201, 1, &[300]);
     let header = DesignRecordHeader {
@@ -24,114 +21,12 @@ fn sketch_relation_assembly_refuses_collection_and_retained_limits() {
         class_tag: crate::records::references::DesignClassTag::try_from("298".to_owned()).unwrap(),
         byte_offset: 0,
     };
-    for (collection_limit, retained_limit, auxiliary, dimension, operation) in [
-        (
-            Some(0),
-            None,
-            false,
-            ResourceDimension::CollectionItems,
-            "f3d sketch relation output",
-        ),
-        (
-            Some(3),
-            None,
-            true,
-            ResourceDimension::CollectionItems,
-            "f3d sketch relation auxiliary output",
-        ),
-        (
-            None,
-            Some(u64_from_index(
-                crate::ids::native_scope("BulkStream.dat").len(),
-            )),
-            false,
-            ResourceDimension::RetainedBytes,
-            "f3d sketch relation ID",
-        ),
-        (
-            None,
-            Some(u64_from_index(
-                format!(
-                    "{}:sketch-relation#7",
-                    crate::ids::native_scope("BulkStream.dat")
-                )
-                .len(),
-            )),
-            false,
-            ResourceDimension::RetainedBytes,
-            "f3d sketch relation raw bytes",
-        ),
-    ] {
-        let mut parsed = tested_parse_classed_sketch_relation(&record, SketchRelationClass::Plain)
-            .expect("plain relation parse");
-        if auxiliary {
-            parsed
-                .auxiliary_references
-                .push(crate::records::identity::Located {
-                    value: 301,
-                    offset: 0,
-                });
-        }
-        let definition =
-            SketchRelationDefinition::new(parsed.state, None).expect("plain relation definition");
-        let error = if retained_limit.is_some() {
-            crate::test_support::resource_refusal_at(dimension, operation, 0, |ctx| {
-                let mut parsed =
-                    tested_parse_classed_sketch_relation(&record, SketchRelationClass::Plain)
-                        .expect("plain relation parse");
-                if auxiliary {
-                    parsed
-                        .auxiliary_references
-                        .push(crate::records::identity::Located {
-                            value: 301,
-                            offset: 0,
-                        });
-                }
-                let definition = SketchRelationDefinition::new(parsed.state, None)
-                    .expect("plain relation definition");
-                admit_sketch_relation(
-                    ctx,
-                    &mut Vec::new(),
-                    "BulkStream.dat",
-                    &header,
-                    &record,
-                    parsed,
-                    definition,
-                )
-            })
-        } else {
-            let arena = DecodeArena::new();
-            let mut policy = DecodePolicy::default();
-            if let Some(limit) = collection_limit {
-                policy.limits.max_collection_items = limit;
-            }
-            let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            admit_sketch_relation(
-                &ctx,
-                &mut Vec::new(),
-                "BulkStream.dat",
-                &header,
-                &record,
-                parsed,
-                definition,
-            )
-            .expect_err("resource limit must refuse relation assembly")
-        };
-        assert!(
-            matches!(error, cadmpeg_core::CodecError::ResourceLimit(failure)
-            if failure.dimension == dimension && failure.operation == operation)
-        );
-    }
     let parsed = tested_parse_classed_sketch_relation(&record, SketchRelationClass::Plain)
         .expect("plain relation parse");
     let definition =
         SketchRelationDefinition::new(parsed.state, None).expect("plain relation definition");
-    let arena = DecodeArena::new();
-    let policy = DecodePolicy::default();
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
     let mut admitted = Vec::new();
     admit_sketch_relation(
-        &ctx,
         &mut admitted,
         "BulkStream.dat",
         &header,
@@ -155,79 +50,7 @@ fn tested_parse_classed_sketch_relation(
     payload: &[u8],
     class: SketchRelationClass,
 ) -> Option<crate::design::decode::sketch::ParsedSketchRelation> {
-    crate::design::test_support::with_test_decode_context(|ctx| {
-        parse_classed_sketch_relation(ctx, payload, class).unwrap()
-    })
-}
-
-#[test]
-fn sketch_relation_collections_refuse_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-
-    let paired = relation_record(&[(300, 0)], &[], 201, 1, &[300]);
-    let mut frame_members = Vec::new();
-    push_reference_u64(&mut frame_members, 300);
-    push_reference_u64(&mut frame_members, 301);
-    let text_frame = relation_record(&[], &frame_members, 201, 1, &[]);
-    let mut glyph_members = Vec::new();
-    push_glyph_run(&mut glyph_members, 2, 5.0);
-    let text_path = relation_record(&[], &glyph_members, 201, 1, &[]);
-
-    for (record, class, limit, operation) in [
-        (
-            &paired,
-            SketchRelationClass::Plain,
-            0,
-            "f3d sketch relation paired members",
-        ),
-        (
-            &paired,
-            SketchRelationClass::Plain,
-            1,
-            "f3d sketch relation return members",
-        ),
-        (
-            &text_frame,
-            SketchRelationClass::TextFrame,
-            0,
-            "f3d sketch auxiliary relation references",
-        ),
-        (
-            &text_frame,
-            SketchRelationClass::TextFrame,
-            1,
-            "f3d sketch auxiliary relation references",
-        ),
-        (
-            &text_path,
-            SketchRelationClass::TextPath {
-                leading_flag: false,
-            },
-            0,
-            "f3d sketch text glyph transforms",
-        ),
-        (
-            &text_path,
-            SketchRelationClass::TextPath {
-                leading_flag: false,
-            },
-            1,
-            "f3d sketch auxiliary relation references",
-        ),
-    ] {
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::default();
-        policy.limits.max_collection_items = limit;
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let error = parse_classed_sketch_relation(&ctx, record, class)
-            .err()
-            .expect("collection limit must refuse the relation");
-        assert!(
-            matches!(error, cadmpeg_core::CodecError::ResourceLimit(failure)
-            if failure.dimension == ResourceDimension::CollectionItems
-                && failure.operation == operation)
-        );
-    }
+    parse_classed_sketch_relation(payload, class).unwrap()
 }
 
 /// One absent reference.
@@ -506,8 +329,8 @@ fn circular_pattern_relation_reads_its_parameters_and_tables() {
     assert_eq!(
         decode_pattern_definition(&record, &mut parsed),
         Some(SketchPatternDefinition::Circular {
-            angle_parameter: 336,
-            count_parameter: 333,
+            angle_parameter: Some(336),
+            count_parameter: Some(333),
             evaluated_angle: cadmpeg_ir::scalar::FiniteReal::new(std::f64::consts::TAU).unwrap(),
             evaluated_count: crate::records::sketch_relations::SketchPatternCount::try_from(3)
                 .unwrap(),
@@ -539,7 +362,16 @@ fn circular_pattern_relation_reads_populated_tables_and_absent_parameters() {
     assert_eq!(parsed.owner_reference, 201);
     assert!(parsed.auxiliary_references.is_empty());
     assert_eq!(parsed.parsed_end, record.len());
-    assert_eq!(decode_pattern_definition(&record, &mut parsed), None);
+    assert_eq!(
+        decode_pattern_definition(&record, &mut parsed),
+        Some(SketchPatternDefinition::Circular {
+            angle_parameter: None,
+            count_parameter: None,
+            evaluated_angle: cadmpeg_ir::scalar::FiniteReal::new(std::f64::consts::TAU).unwrap(),
+            evaluated_count: crate::records::sketch_relations::SketchPatternCount::try_from(6)
+                .unwrap(),
+        })
+    );
 }
 
 #[test]
@@ -579,9 +411,9 @@ fn rectangular_pattern_relation_reads_a_nonempty_reference_run_before_its_clause
     assert!(matches!(
         parsed.class_members,
         super::super::RelationClassMembers::Rectangular {
-            clauses: Some(clauses),
+            clauses,
             ..
-        } if clauses.as_slice() == &parsed.auxiliary_references[1..5]
+        } if clauses.map(|clause| [(clause.count_parameter, clause.count_offset + 5), (clause.distance_parameter, clause.direction_offset + 33)]).into_iter().flatten().eq(parsed.auxiliary_references[1..5].iter().map(|row| (Some(row.value), row.offset)))
     ));
     assert_eq!(parsed.parsed_end, record.len());
     assert_eq!(
@@ -591,18 +423,18 @@ fn rectangular_pattern_relation_reads_a_nonempty_reference_run_before_its_clause
                 SketchPatternDirection {
                     evaluated_count:
                         crate::records::sketch_relations::SketchPatternCount::try_from(3).unwrap(),
-                    count_parameter: 464,
+                    count_parameter: Some(464),
                     direction: [1.0, 0.0, 0.0].try_into().unwrap(),
                     evaluated_distance: cadmpeg_ir::scalar::FiniteReal::new(3.0).unwrap(),
-                    distance_parameter: 470,
+                    distance_parameter: Some(470),
                 },
                 SketchPatternDirection {
                     evaluated_count:
                         crate::records::sketch_relations::SketchPatternCount::try_from(1).unwrap(),
-                    count_parameter: 467,
+                    count_parameter: Some(467),
                     direction: [0.0, 1.0, 0.0].try_into().unwrap(),
                     evaluated_distance: cadmpeg_ir::scalar::FiniteReal::new(0.5).unwrap(),
-                    distance_parameter: 473,
+                    distance_parameter: Some(473),
                 },
             ],
         })
@@ -638,9 +470,9 @@ fn rectangular_pattern_relation_reads_clauses_after_an_empty_reference_run() {
     assert!(matches!(
         parsed.class_members,
         super::super::RelationClassMembers::Rectangular {
-            clauses: Some(clauses),
+            clauses,
             ..
-        } if clauses.as_slice() == &parsed.auxiliary_references[0..4]
+        } if clauses.map(|clause| [(clause.count_parameter, clause.count_offset + 5), (clause.distance_parameter, clause.direction_offset + 33)]).into_iter().flatten().eq(parsed.auxiliary_references[0..4].iter().map(|row| (Some(row.value), row.offset)))
     ));
     assert_eq!(parsed.parsed_end, record.len());
     let Some(SketchPatternDefinition::Rectangular { directions }) =
@@ -683,9 +515,9 @@ fn rectangular_pattern_retains_nonempty_count_with_an_absent_reference() {
     assert!(matches!(
         parsed.class_members,
         super::super::RelationClassMembers::Rectangular {
-            clauses: Some(clauses),
+            clauses,
             ..
-        } if clauses.as_slice() == &parsed.auxiliary_references[0..4]
+        } if clauses.map(|clause| [(clause.count_parameter, clause.count_offset + 5), (clause.distance_parameter, clause.direction_offset + 33)]).into_iter().flatten().eq(parsed.auxiliary_references[0..4].iter().map(|row| (Some(row.value), row.offset)))
     ));
     assert!(matches!(
         decode_pattern_definition(&record, &mut parsed),
@@ -694,7 +526,7 @@ fn rectangular_pattern_retains_nonempty_count_with_an_absent_reference() {
 }
 
 #[test]
-fn rectangular_pattern_withholds_when_a_clause_reference_is_absent() {
+fn rectangular_pattern_withholds_an_invalid_count_beside_a_null_parameter() {
     let mut class_members = vec![0, 0, 0];
     class_members.extend_from_slice(&2u32.to_le_bytes());
     // The first counted-run reference uses the segment form. Its trailing
@@ -740,7 +572,7 @@ fn rectangular_pattern_withholds_when_a_clause_reference_is_absent() {
     ));
     assert!(matches!(
         parsed.class_members,
-        super::super::RelationClassMembers::Rectangular { clauses: None, .. }
+        super::super::RelationClassMembers::Rectangular { clauses, .. } if clauses[0].count_parameter.is_none()
     ));
     assert_eq!(decode_pattern_definition(&record, &mut parsed), None);
 }
@@ -868,4 +700,49 @@ fn text_path_glyph_constructor_rejects_non_finite_source_coefficients() {
         )
         .is_none());
     }
+}
+
+#[test]
+fn fixture_relation_frames_retain_source_bytes_and_rectangular_flags() {
+    let cases = crate::test_support::sketch_relations::relation_fixture_records();
+    assert_eq!(
+        cases.len(),
+        crate::test_support::verification::case_count(8, 300)
+    );
+    for case in cases {
+        let relation = case.decode();
+        assert_eq!(
+            relation.raw_bytes(),
+            case.source_hex.as_ref(),
+            "{}",
+            case.label
+        );
+        assert_eq!(
+            rectangular_pattern_flags(relation.raw_bytes()),
+            case.rectangular_flags,
+            "{}",
+            case.label
+        );
+        let json = serde_json::to_string(&relation).unwrap();
+        let restored: crate::records::sketch_relations::SketchRelation =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, relation, "{}", case.label);
+    }
+}
+
+#[test]
+fn text_frame_center_does_not_substitute_for_an_absent_text_reference() {
+    let mut class_members = Vec::new();
+    push_reference_u64(&mut class_members, 2394);
+    push_absent_reference(&mut class_members);
+    let record = relation_record(
+        &[(2394, 0), (2403, 0)],
+        &class_members,
+        201,
+        0x100_0000_0000,
+        &[2403],
+    );
+    let mut parsed =
+        tested_parse_classed_sketch_relation(&record, SketchRelationClass::TextFrame).unwrap();
+    assert_eq!(decode_pattern_definition(&record, &mut parsed), None);
 }

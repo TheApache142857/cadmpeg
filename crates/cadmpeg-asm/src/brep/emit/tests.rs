@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    emit_carrier_curve, emit_coedges, emit_containers, emit_edges, emit_faces, emit_loops,
-    emit_vertices, into_support_sides, CoedgeDecodeInputs, ContainerInputs, CurveSenseRefs,
+    clamp_to_knot_domain, emit_carrier_curve, emit_coedges, emit_edges, emit_faces, emit_vertices,
+    into_support_sides, CoedgeDecodeInputs, CurveSenseRefs,
 };
 use crate::brep::records::{FaceSidedness, TolerantCoedgeExtension};
-use crate::brep::{AsmBrep, Carriers, Reachable, WireShellTopology};
+use crate::brep::{AsmBrep, Carriers, Reachable};
 use crate::nurbs;
 use crate::nurbs::proc_curve::{
     EmbeddedSurfaceOffset, EmbeddedSurfaceOffsetLayout, ProceduralCurveConstruction,
@@ -19,160 +19,8 @@ use cadmpeg_ir::ids::{CurveId, SurfaceId};
 use cadmpeg_ir::topology::Sense;
 use std::collections::HashSet;
 
-#[test]
-fn body_source_stream_copy_refuses_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use std::collections::HashMap;
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_retained_bytes = cadmpeg_core::decode::u64_from_index(
-        super::super::id(crate::asm_format!("f3d"), 1)
-            .as_str()
-            .len()
-            + 4 * std::mem::size_of::<crate::brep::records::BodyNativeKey>(),
-    );
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let records = [Record {
-        index: 1,
-        name: "body".into(),
-        tokens: vec![Token::Long(0), Token::Long(7)].into(),
-        offset: 0,
-        len: 0,
-    }];
-    let by_index = HashMap::from([(1, &records[0])]);
-    let error = emit_containers(
-        &ctx,
-        &mut AsmBrep::default(),
-        ContainerInputs {
-            records: &records,
-            bytes: &[],
-            by_index: &by_index,
-            reach: &Reachable::default(),
-            wire: &WireShellTopology::default(),
-            stream: "folder/source.brp",
-            header_scale: 1.0,
-            format: crate::asm_format!("f3d"),
-        },
-    )
-    .expect_err("stream name exceeds zero retained bytes");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected resource refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::RetainedBytes);
-    assert_eq!(limit.operation, "ASM body source stream");
-}
-
-#[test]
-fn edge_continuity_copy_refuses_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use std::collections::HashMap;
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_retained_bytes = cadmpeg_core::decode::u64_from_index(
-        4 * (std::mem::size_of::<cadmpeg_ir::topology::Edge>()
-            + std::mem::size_of::<crate::brep::records::EdgeOwnership>()
-            + std::mem::size_of::<crate::brep::records::EdgeContinuity>()),
-    );
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let mut tokens = vec![Token::Long(0); 11];
-    tokens[3] = Token::Ref(1);
-    tokens[5] = Token::Ref(2);
-    tokens[10] = Token::Str("G1".into());
-    let records = [Record {
-        index: 4,
-        name: "edge".into(),
-        tokens: tokens.into(),
-        offset: 0,
-        len: 0,
-    }];
-    let by_index = HashMap::from([(4, &records[0])]);
-    let reach = Reachable {
-        edges: HashSet::from([4]),
-        vertices: HashSet::from([1, 2]),
-        ..Reachable::default()
-    };
-    let error = emit_edges(
-        &ctx,
-        &mut AsmBrep::default(),
-        &records,
-        &by_index,
-        &reach,
-        CurveSenseRefs {
-            reversed_curve_refs: &HashSet::new(),
-            forward_curve_refs: &HashSet::new(),
-        },
-        crate::asm_format!("f3d"),
-    )
-    .expect_err("edge continuity exceeds zero retained bytes");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected resource refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::RetainedBytes);
-    assert_eq!(limit.operation, "ASM edge continuity text");
-}
-
-#[test]
-fn loop_ring_members_refuse_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use std::collections::HashMap;
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 5;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let record = |index, name: &str, refs: &[i64]| Record {
-        index,
-        name: name.into(),
-        tokens: refs.iter().copied().map(Token::Ref).collect(),
-        offset: 0,
-        len: 0,
-    };
-    let records = [
-        record(0, "loop", &[-1, -1, -1, -1, 1, 3]),
-        record(1, "coedge", &[-1, -1, -1, 2]),
-        record(2, "coedge", &[-1, -1, -1, 1]),
-    ];
-    let by_index: HashMap<_, _> = records
-        .iter()
-        .map(|record| {
-            (
-                i64::try_from(record.index).expect("test value fits"),
-                record,
-            )
-        })
-        .collect();
-    let reach = Reachable {
-        loops: HashSet::from([0]),
-        coedges: HashSet::from([1, 2]),
-        ..Reachable::default()
-    };
-    let error = emit_loops(
-        &ctx,
-        &mut AsmBrep::default(),
-        &records,
-        &by_index,
-        &reach,
-        crate::asm_format!("f3d"),
-    )
-    .expect_err("duplicate-check set exceeds remaining collection items");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected resource refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::CollectionItems);
-    assert_eq!(limit.operation, "loop ring members");
-}
-
 fn subtype_table(records: &[Record]) -> nurbs::toks::SubtypeTable {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::service();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    nurbs::toks::SubtypeTable::from_records(&ctx, records).unwrap()
+    nurbs::toks::SubtypeTable::from_records(records)
 }
 
 #[test]
@@ -181,14 +29,12 @@ fn support_sides_move_pcurve_storage() {
     use cadmpeg_ir::math::Point2;
 
     let pcurve = cadmpeg_ir::geometry::pcurve::PcurveNurbs::from_lanes(
-        &cadmpeg_test_support::service_decode_context(),
         1,
         vec![0.0, 0.0, 1.0, 1.0],
         vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)],
         None,
         false,
     )
-    .expect("fixture pcurve construction admission")
     .unwrap();
     let knot_address = pcurve.knots().as_slice().as_ptr();
     let sides = into_support_sides(
@@ -207,275 +53,6 @@ fn support_sides_move_pcurve_storage() {
     };
     assert_eq!(nurbs.knots().as_slice().as_ptr(), knot_address);
     assert!(sides[1].pcurve.is_none());
-}
-
-#[test]
-fn reversed_nurbs_carrier_copy_refuses_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use cadmpeg_ir::math::Point3;
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 3;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let curve = NurbsCurve::from_lanes(
-        &cadmpeg_test_support::service_decode_context(),
-        1,
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
-        None,
-        false,
-    )
-    .expect("fixture constructor admission")
-    .unwrap();
-    let mut carriers = Carriers::default();
-    carriers
-        .curve_geo
-        .insert(4, CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(curve)));
-    let error = emit_carrier_curve(
-        &ctx,
-        &mut AsmBrep::default(),
-        4,
-        &mut carriers,
-        &HashSet::from([4]),
-        &HashSet::from([4]),
-        crate::asm_format!("f3d"),
-    )
-    .expect_err("four knots exceed three collection items");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected resource refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::CollectionItems);
-    assert_eq!(limit.operation, "ASM reversed carrier curve");
-}
-
-#[test]
-fn procedural_source_id_refuses_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let mut sources = Vec::<(i64, SurfaceId)>::new();
-    let error = super::append_source_id(
-        &ctx,
-        &mut sources,
-        1,
-        "f3d:child:surface#1",
-        "ASM procedural support sources",
-    )
-    .expect_err("one support source exceeds zero items");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected collection refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::CollectionItems);
-}
-
-#[test]
-fn procedural_child_id_refuses_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_retained_bytes = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let mut sources = Vec::<(i64, CurveId)>::new();
-    let error = super::append_source_id(
-        &ctx,
-        &mut sources,
-        1,
-        "f3d:child:curve#1",
-        "ASM procedural curve child sources",
-    )
-    .expect_err("one child id exceeds zero retained bytes");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected retained refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::RetainedBytes);
-}
-
-#[test]
-fn emitted_vertex_blend_boundaries_refuse_collection_limit() {
-    use crate::nurbs::proc_surface::{
-        EmbeddedVertexBlend, EmbeddedVertexBlendBoundary, EmbeddedVertexBlendBoundaryGeometry,
-    };
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use cadmpeg_ir::math::{Point3, Vector3};
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let construction = EmbeddedVertexBlend {
-        revision: None,
-        boundaries: vec![EmbeddedVertexBlendBoundary {
-            boundary_type: false,
-            magic: Vector3::new(0.0, 0.0, 0.0),
-            u_smoothing: false,
-            v_smoothing: false,
-            fullness: 0.0,
-            geometry: EmbeddedVertexBlendBoundaryGeometry::Degenerate {
-                location: Point3::new(0.0, 0.0, 0.0),
-                normals: [Vector3::new(0.0, 0.0, 1.0); 2],
-            },
-        }],
-        grid_size: 1,
-        fit_tolerance: cadmpeg_ir::geometry::FitTolerance::try_new(0.0).unwrap(),
-    };
-    let error = super::emit_vertex_blend_surface(
-        &ctx,
-        &mut AsmBrep::default(),
-        1,
-        construction,
-        crate::asm_format!("f3d"),
-    )
-    .expect_err("boundary allocation must refuse");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected collection refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::CollectionItems);
-}
-
-#[test]
-fn unknown_carrier_source_copy_refuses_retained_limit_before_emission() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let bytes = b"opaque";
-    let records = [Record {
-        index: 0,
-        name: "unknown".into(),
-        tokens: Vec::<Token>::new().into(),
-        offset: 0,
-        len: bytes.len(),
-    }];
-    let reach = Reachable {
-        undecoded_carriers: HashSet::from([0]),
-        ..Reachable::default()
-    };
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_retained_bytes = cadmpeg_core::decode::u64_from_index(bytes.len() - 1);
-    let (ctx, _) = DecodeContext::from_root_bytes(bytes, &arena, &policy).unwrap();
-    let mut out = AsmBrep::default();
-    let error = super::emit_passthrough_unknowns(
-        &ctx,
-        &mut out,
-        &records,
-        bytes,
-        &reach,
-        crate::asm_format!("f3d"),
-    )
-    .expect_err("unknown source exceeds retained limit");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected resource refusal, got {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::RetainedBytes);
-    assert!(out.unknowns.is_empty());
-
-    let arena = DecodeArena::new();
-    let policy = DecodePolicy::service();
-    let (ctx, _) = DecodeContext::from_root_bytes(bytes, &arena, &policy).unwrap();
-    super::emit_passthrough_unknowns(
-        &ctx,
-        &mut out,
-        &records,
-        bytes,
-        &reach,
-        crate::asm_format!("f3d"),
-    )
-    .expect("service profile admits unknown source");
-    assert_eq!(out.unknowns.len(), 1);
-}
-
-#[test]
-fn unknown_passthrough_output_refuses_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let bytes = b"opaque";
-    let records = [Record {
-        index: 0,
-        name: "unknown".into(),
-        tokens: Vec::<Token>::new().into(),
-        offset: 0,
-        len: bytes.len(),
-    }];
-    let reach = Reachable {
-        undecoded_carriers: HashSet::from([0]),
-        ..Reachable::default()
-    };
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(bytes, &arena, &policy).unwrap();
-    let mut out = AsmBrep::default();
-    let error = super::emit_passthrough_unknowns(
-        &ctx,
-        &mut out,
-        &records,
-        bytes,
-        &reach,
-        crate::asm_format!("f3d"),
-    )
-    .expect_err("the emitted unknown vector must be charged");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected collection refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::CollectionItems);
-    assert!(out.unknowns.is_empty());
-}
-
-#[test]
-fn emitted_vertices_refuse_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let records = [Record {
-        index: 0,
-        name: "vertex".into(),
-        tokens: vec![
-            Token::Ref(-1),
-            Token::Long(-1),
-            Token::Ref(-1),
-            Token::Ref(-1),
-            Token::Long(0),
-            Token::Ref(1),
-        ]
-        .into(),
-        offset: 0,
-        len: 0,
-    }];
-    let by_index = [(0, &records[0])].into_iter().collect();
-    let reach = Reachable {
-        vertices: HashSet::from([0]),
-        points: HashSet::from([1]),
-        ..Reachable::default()
-    };
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let mut out = AsmBrep::default();
-    let error = emit_vertices(
-        &ctx,
-        &mut out,
-        &records,
-        &by_index,
-        &reach,
-        crate::asm_format!("f3d"),
-    )
-    .expect_err("the emitted vertex vector must be charged");
-    let CodecError::ResourceLimit(limit) = error else {
-        panic!("expected collection refusal: {error:?}");
-    };
-    assert_eq!(limit.dimension, ResourceDimension::CollectionItems);
-    assert!(out.vertices.is_empty());
 }
 
 #[test]
@@ -539,16 +116,19 @@ fn face_sidedness_retains_the_decode_time_carrier_flip() {
                 )
             })
             .collect();
-        let arena = cadmpeg_core::decode::DecodeArena::new();
-        let policy = cadmpeg_core::decode::DecodePolicy::service();
-        let (ctx, _) =
-            cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let (_, inward) = super::super::topology::decode_analytic_carriers(&ctx, &records).unwrap();
+        let (_, inward) = super::super::topology::decode_analytic_carriers(&records).unwrap();
         let reach = Reachable {
             faces: HashSet::from([0]),
             ..Reachable::default()
         };
         let mut out = AsmBrep::default();
+        let arena = cadmpeg_core::decode::DecodeArena::new();
+        let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
+            &[],
+            &arena,
+            &cadmpeg_core::decode::DecodePolicy::default(),
+        )
+        .unwrap();
         emit_faces(
             &ctx,
             &mut out,
@@ -633,15 +213,7 @@ fn tolerant_coedge_extension_retains_the_release_band() {
             ..Reachable::default()
         };
         let mut out = AsmBrep::default();
-        let arena = cadmpeg_core::decode::DecodeArena::new();
-        let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
-            &[],
-            &arena,
-            &cadmpeg_core::decode::DecodePolicy::default(),
-        )
-        .unwrap();
         emit_coedges(
-            &ctx,
             &mut out,
             &records,
             CoedgeDecodeInputs {
@@ -690,15 +262,7 @@ fn tolerant_coedge_source_refuses_nonfinite_interval() {
         ..Reachable::default()
     };
     let mut out = AsmBrep::default();
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
-        &[],
-        &arena,
-        &cadmpeg_core::decode::DecodePolicy::default(),
-    )
-    .unwrap();
     let error = emit_coedges(
-        &ctx,
         &mut out,
         &records,
         CoedgeDecodeInputs {
@@ -768,12 +332,7 @@ fn tolerant_vertex_uses_the_third_double_for_evaluation_and_unset_state() {
                 ..Reachable::default()
             };
             let mut out = AsmBrep::default();
-            let arena = cadmpeg_core::decode::DecodeArena::new();
-            let policy = cadmpeg_core::decode::DecodePolicy::service();
-            let (ctx, _) =
-                cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
             emit_vertices(
-                &ctx,
                 &mut out,
                 &records,
                 &by_index,
@@ -835,12 +394,7 @@ fn tolerant_vertex_refuses_nonfinite_leading_tolerance_at_read() {
         points: HashSet::from([1]),
         ..Reachable::default()
     };
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::service();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
     let error = emit_vertices(
-        &ctx,
         &mut AsmBrep::default(),
         &records,
         &by_index,
@@ -932,7 +486,7 @@ fn reversed_intcurve_context_uses_the_parsed_cache_domain() {
             &table,
         )
         .transpose()
-        .expect("resource allocation did not fail")
+        .expect("decode the procedural curve")
         .unwrap();
         assert_eq!(
             nurbs_curve_parameter_domain(&parsed.curve),
@@ -966,7 +520,6 @@ fn reversed_intcurve_context_uses_the_parsed_cache_domain() {
             Some(if reversed { [-5.0, -2.0] } else { [2.0, 5.0] })
         );
         emit_carrier_curve(
-            &asm_decode_ctx,
             &mut out,
             4,
             &mut carriers,
@@ -1024,12 +577,7 @@ fn evaluated_and_absent_vertex_slots_have_distinct_native_tail_wires() {
             ..Reachable::default()
         };
         let mut out = AsmBrep::default();
-        let arena = cadmpeg_core::decode::DecodeArena::new();
-        let policy = cadmpeg_core::decode::DecodePolicy::service();
-        let (ctx, _) =
-            cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
         emit_vertices(
-            &ctx,
             &mut out,
             &records,
             &by_index,
@@ -1150,20 +698,13 @@ fn procedural_curve_admission_failures_keep_the_carrier() {
     use cadmpeg_ir::geometry::{IntcurveSupportContext, IntcurveSupportSide, SilhouetteKind};
     use cadmpeg_ir::math::{Point3, Vector3};
 
-    let resource_arena = cadmpeg_core::decode::DecodeArena::new();
-    let (resource_ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
-        &[],
-        &resource_arena,
-        &cadmpeg_core::decode::DecodePolicy::default(),
-    )
-    .expect("test decode context");
-
     for (source, cause) in [
         (
             ProceduralCurveSource::Cached {
                 construction: Box::new(ProceduralCurveConstruction::Exact),
                 cache_fit_tolerance: Some(-1.0),
                 parsed_domain: Some([0.0, 1.0]),
+                reversed: false,
             },
             "invalid procedural curve cache tolerance",
         ),
@@ -1171,19 +712,18 @@ fn procedural_curve_admission_failures_keep_the_carrier() {
             ProceduralCurveSource::Cached {
                 construction: Box::new(ProceduralCurveConstruction::Subset((
                     NurbsCurve::from_lanes(
-                        &cadmpeg_test_support::service_decode_context(),
                         1,
                         vec![0.0, 0.0, 1.0, 1.0],
                         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
                         None,
                         false,
                     )
-                    .expect("fixture constructor admission")
                     .unwrap(),
                     [2.0, 1.0],
                 ))),
                 cache_fit_tolerance: None,
                 parsed_domain: Some([0.0, 1.0]),
+                reversed: false,
             },
             "subset-curve range is not finite and ordered",
         ),
@@ -1196,7 +736,6 @@ fn procedural_curve_admission_failures_keep_the_carrier() {
         );
         carriers.procedural_curve_defs.insert(4, source);
         emit_carrier_curve(
-            &resource_ctx,
             &mut out,
             4,
             &mut carriers,
@@ -1236,14 +775,6 @@ fn failed_procedural_curves_discard_only_their_candidate_children() {
     use super::super::ProceduralCurveSource;
     use crate::nurbs::proc_curve::{EmbeddedIntersection, SupportSlot};
     use cadmpeg_ir::math::Point3;
-
-    let resource_arena = cadmpeg_core::decode::DecodeArena::new();
-    let (resource_ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
-        &[],
-        &resource_arena,
-        &cadmpeg_core::decode::DecodePolicy::default(),
-    )
-    .expect("test decode context");
 
     for (parameter_range, distance, tolerance, cause) in [
         (
@@ -1304,14 +835,12 @@ fn failed_procedural_curves_discard_only_their_candidate_children() {
                         base_v_range: [0.0, 1.0],
                         base_range: [0.0, 1.0],
                         base: NurbsCurve::from_lanes(
-                            &cadmpeg_test_support::service_decode_context(),
                             1,
                             vec![0.0, 0.0, 1.0, 1.0],
                             vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
                             None,
                             false,
                         )
-                        .expect("fixture constructor admission")
                         .unwrap(),
                         distance,
                         shift: 0.0,
@@ -1320,10 +849,10 @@ fn failed_procedural_curves_discard_only_their_candidate_children() {
                 )),
                 cache_fit_tolerance: tolerance,
                 parsed_domain: Some([0.0, 1.0]),
+                reversed: false,
             },
         );
         emit_carrier_curve(
-            &resource_ctx,
             &mut out,
             4,
             &mut carriers,
@@ -1424,9 +953,7 @@ fn invalid_embedded_use_curve_interval_keeps_independent_coedges() {
         ..Reachable::default()
     };
     let mut out = AsmBrep::default();
-    let ctx = cadmpeg_test_support::service_decode_context();
     emit_coedges(
-        &ctx,
         &mut out,
         &records,
         CoedgeDecodeInputs {
@@ -1495,9 +1022,7 @@ fn tolerant_coedge_parameters_follow_the_stored_base_layout() {
             ..Reachable::default()
         };
         let mut out = AsmBrep::default();
-        let ctx = cadmpeg_test_support::service_decode_context();
         emit_coedges(
-            &ctx,
             &mut out,
             &records,
             CoedgeDecodeInputs {
@@ -1552,9 +1077,7 @@ fn legacy_tolerant_edge_tolerance_does_not_require_a_revision_field() {
                 ..Reachable::default()
             };
             let mut out = AsmBrep::default();
-            let ctx = cadmpeg_test_support::service_decode_context();
             emit_edges(
-                &ctx,
                 &mut out,
                 &records,
                 &HashMap::new(),
@@ -1574,6 +1097,369 @@ fn legacy_tolerant_edge_tolerance_does_not_require_a_revision_field() {
                 (value > 0.0).then_some(0.2)
             );
             assert!(out.tolerant_edge_tails.is_empty());
+        }
+    }
+}
+
+#[test]
+fn faces_sharing_one_name_record_charge_each_name_copy() {
+    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
+    use cadmpeg_core::CodecError;
+
+    const FACES: usize = 1 << 7;
+    const NAME: usize = 1 << 10;
+    let name = FACES;
+    let name_ref = i64::try_from(name).unwrap();
+    let mut records = (0..FACES)
+        .map(|index| Record {
+            index,
+            name: "face".into(),
+            tokens: [name_ref, -1, -1, -1, -1, 1_000_000, -1, 1_000_001]
+                .map(Token::Ref)
+                .to_vec()
+                .into(),
+            offset: 0,
+            len: 0,
+        })
+        .collect::<Vec<_>>();
+    records.push(Record {
+        index: name,
+        name: "string_attrib-name_attrib-gen-attrib".into(),
+        tokens: vec![Token::Str("name".into()), Token::Str("n".repeat(NAME))].into(),
+        offset: 0,
+        len: 0,
+    });
+    let by_index = records
+        .iter()
+        .map(|record| (i64::try_from(record.index).unwrap(), record))
+        .collect();
+    let reach = Reachable {
+        faces: (0..FACES)
+            .map(|face| i64::try_from(face).unwrap())
+            .collect(),
+        ..Reachable::default()
+    };
+    let emit = |policy: &DecodePolicy| {
+        let arena = DecodeArena::new();
+        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, policy).unwrap();
+        let mut out = AsmBrep::default();
+        let result = emit_faces(
+            &ctx,
+            &mut out,
+            &records,
+            &by_index,
+            &reach,
+            &HashSet::new(),
+            crate::asm_format!("f3d"),
+        );
+        result.map(|()| out)
+    };
+    let out = emit(&DecodePolicy::service()).unwrap();
+    assert_eq!(out.faces.len(), FACES);
+    assert!(out
+        .faces
+        .iter()
+        .all(|face| face.name.as_deref().is_some_and(|name| name.len() == NAME)));
+
+    let mut policy = DecodePolicy::service();
+    policy.limits.max_retained_bytes = cadmpeg_core::decode::u64_from_index(FACES * NAME / 2);
+    let Err(CodecError::ResourceLimit(limit)) = emit(&policy) else {
+        panic!("expected a retained-bytes refusal");
+    };
+    assert_eq!(limit.dimension, ResourceDimension::RetainedBytes);
+}
+
+#[test]
+fn unknown_carrier_source_copy_refuses_retained_limit_before_emission() {
+    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
+    use cadmpeg_core::CodecError;
+
+    let bytes = b"opaque";
+    let records = [Record {
+        index: 0,
+        name: "unknown".into(),
+        tokens: Vec::<Token>::new().into(),
+        offset: 0,
+        len: bytes.len(),
+    }];
+    let reach = Reachable {
+        undecoded_carriers: HashSet::from([0]),
+        ..Reachable::default()
+    };
+    let arena = DecodeArena::new();
+    let mut policy = DecodePolicy::service();
+    policy.limits.max_retained_bytes = cadmpeg_core::decode::u64_from_index(bytes.len() - 1);
+    let (ctx, _) = DecodeContext::from_root_bytes(bytes, &arena, &policy).unwrap();
+    let mut out = AsmBrep::default();
+    let error = super::emit_passthrough_unknowns(
+        &ctx,
+        &mut out,
+        &records,
+        bytes,
+        &reach,
+        crate::asm_format!("f3d"),
+    )
+    .expect_err("unknown source exceeds retained limit");
+    let CodecError::ResourceLimit(limit) = error else {
+        panic!("expected resource refusal, got {error:?}");
+    };
+    assert_eq!(limit.dimension, ResourceDimension::RetainedBytes);
+    assert!(out.unknowns.is_empty());
+
+    let arena = DecodeArena::new();
+    let policy = DecodePolicy::service();
+    let (ctx, _) = DecodeContext::from_root_bytes(bytes, &arena, &policy).unwrap();
+    super::emit_passthrough_unknowns(
+        &ctx,
+        &mut out,
+        &records,
+        bytes,
+        &reach,
+        crate::asm_format!("f3d"),
+    )
+    .expect("emit the passthrough unknown record");
+    assert_eq!(out.unknowns.len(), 1);
+}
+
+#[test]
+fn a_tolerant_coedge_interval_off_its_knot_domain_by_noise_names_the_domain_end() {
+    let lower = 0.995_674_133_300_779;
+    let upper = 1.0;
+    let curve = NurbsCurve::from_lanes(
+        1,
+        vec![lower, lower, upper, upper],
+        vec![
+            cadmpeg_ir::math::Point3::new(0.0, 0.0, 0.0),
+            cadmpeg_ir::math::Point3::new(1.0, 0.0, 0.0),
+        ],
+        None,
+        false,
+    )
+    .unwrap();
+    let interval =
+        |start: f64, end: f64| cadmpeg_ir::topology::ParameterInterval::new([start, end]).unwrap();
+    // Ends outside the domain by less than the knot-relative tolerance.
+    let noisy = interval(0.995_674_133_300_731_2, upper + 2.0e-13);
+    assert_eq!(
+        clamp_to_knot_domain(noisy, &curve).endpoints(),
+        [lower, upper]
+    );
+    // Ends inside the domain and ends farther out stay as stored.
+    let inside = interval(0.996, 0.999);
+    assert_eq!(
+        clamp_to_knot_domain(inside, &curve).endpoints(),
+        [0.996, 0.999]
+    );
+    let outside = interval(0.99, 1.001);
+    assert_eq!(
+        clamp_to_knot_domain(outside, &curve).endpoints(),
+        [0.99, 1.001]
+    );
+}
+
+/// The support pcurves of a cached intcurve follow every reversal of its
+/// cache: a reversed curve record reverses them, and an edge use that
+/// reverses the cache again restores them.
+#[test]
+fn a_reversed_intcurve_cache_reverses_its_support_pcurves() {
+    use crate::brep::ProceduralCurveSource;
+    use crate::nurbs::proc_curve::{EmbeddedIntersection, SupportSlot};
+    use cadmpeg_ir::geometry::ProceduralCurveDefinition;
+    use cadmpeg_ir::math::{Point2, Point3};
+
+    for (record_reversed, edge_reversed, expected) in [
+        (false, false, [0.0, 2.0]),
+        (true, false, [-2.0, -0.0]),
+        (true, true, [0.0, 2.0]),
+    ] {
+        let pcurve = cadmpeg_ir::geometry::pcurve::PcurveNurbs::from_lanes(
+            1,
+            vec![0.0, 0.0, 2.0, 2.0],
+            vec![Point2::new(0.0, 0.0), Point2::new(1.0, 3.0)],
+            None,
+            false,
+        )
+        .expect("pcurve");
+        let cache = NurbsCurve::from_lanes(
+            1,
+            vec![0.0, 0.0, 2.0, 2.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 3.0, 0.0)],
+            None,
+            false,
+        )
+        .expect("cache");
+        let mut out = AsmBrep::default();
+        let mut carriers = Carriers::default();
+        carriers
+            .curve_geo
+            .insert(4, CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(cache)));
+        carriers.procedural_curve_defs.insert(
+            4,
+            ProceduralCurveSource::Cached {
+                construction: Box::new(ProceduralCurveConstruction::Intersection(
+                    EmbeddedIntersection {
+                        surfaces: [
+                            SupportSlot::Surface(SurfaceGeometry::Solved(
+                                SolvedSurfaceGeometry::Unknown { record: None },
+                            )),
+                            SupportSlot::Absent,
+                        ],
+                        pcurves: [Some(pcurve), None],
+                        parameter_range: [0.0, 2.0],
+                        discontinuities: std::array::from_fn(|_| Vec::new()),
+                    },
+                    false,
+                )),
+                cache_fit_tolerance: None,
+                parsed_domain: Some([0.0, 2.0]),
+                reversed: record_reversed,
+            },
+        );
+        let edge_reversed_refs = if edge_reversed {
+            HashSet::from([4])
+        } else {
+            HashSet::new()
+        };
+        emit_carrier_curve(
+            &mut out,
+            4,
+            &mut carriers,
+            &edge_reversed_refs,
+            &HashSet::new(),
+            crate::asm_format!("f3d"),
+        )
+        .expect("carrier emission succeeds");
+        let [(_, procedural)] = out.procedural_curves.as_slice() else {
+            panic!("one procedural curve")
+        };
+        let ProceduralCurveDefinition::Intersection { context, .. } = procedural.definition()
+        else {
+            panic!("intersection definition")
+        };
+        assert_eq!(
+            context.parameter_range().endpoints(),
+            expected,
+            "record {record_reversed}, edge {edge_reversed}"
+        );
+    }
+}
+
+/// A `subset_int_cur` runs against its parent once for a reversed record and
+/// once for an edge use that reverses it. The subset sense is the net
+/// direction, so localization moves the cache and the edge range onto the
+/// local parameter for all four combinations.
+#[test]
+fn a_reversed_subset_record_localizes_its_cache_and_edge_ranges() {
+    use crate::brep::ProceduralCurveSource;
+    use cadmpeg_ir::eval::admission::EvaluationAdmission;
+    use cadmpeg_ir::eval::decode::curve_point;
+    use cadmpeg_ir::geometry::ProceduralCurveDefinition;
+    use cadmpeg_ir::ids::{EdgeId, VertexId};
+    use cadmpeg_ir::math::Point3;
+    use cadmpeg_ir::topology::{Edge, EdgeCarrier};
+
+    let line = |knots: [f64; 2], start: Point3, end: Point3| {
+        NurbsCurve::from_lanes(
+            1,
+            vec![knots[0], knots[0], knots[1], knots[1]],
+            vec![start, end],
+            None,
+            false,
+        )
+        .expect("line spline")
+    };
+    let at = |geometry: &CurveGeometry, parameter: f64| {
+        curve_point(EvaluationAdmission::Standard, geometry, parameter)
+            .expect("finite point")
+            .get()
+    };
+    let parent = line(
+        [0.0, 2.0],
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(2.0, 4.0, 0.0),
+    );
+    let parent_geometry = CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(parent.clone()));
+    for record_reversed in [false, true] {
+        for edge_reversed in [false, true] {
+            let mut cache = line(
+                [0.5, 1.5],
+                Point3::new(0.5, 1.0, 0.0),
+                Point3::new(1.5, 3.0, 0.0),
+            );
+            if record_reversed {
+                cache.reverse_parameterization();
+            }
+            let mut out = AsmBrep::default();
+            let mut carriers = Carriers::default();
+            carriers
+                .curve_geo
+                .insert(4, CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(cache)));
+            carriers.procedural_curve_defs.insert(
+                4,
+                ProceduralCurveSource::Cached {
+                    construction: Box::new(ProceduralCurveConstruction::Subset((
+                        parent.clone(),
+                        [0.5, 1.5],
+                    ))),
+                    cache_fit_tolerance: None,
+                    parsed_domain: None,
+                    reversed: record_reversed,
+                },
+            );
+            let edge_reversed_refs = if edge_reversed {
+                HashSet::from([4])
+            } else {
+                HashSet::new()
+            };
+            emit_carrier_curve(
+                &mut out,
+                4,
+                &mut carriers,
+                &edge_reversed_refs,
+                &HashSet::new(),
+                crate::asm_format!("f3d"),
+            )
+            .expect("carrier emission succeeds");
+            let label = format!("record {record_reversed}, edge {edge_reversed}");
+            let [(owner, procedural)] = out.procedural_curves.as_slice() else {
+                panic!("one procedural curve")
+            };
+            let ProceduralCurveDefinition::Subset(subset) = procedural.definition() else {
+                panic!("subset definition")
+            };
+            let forward = record_reversed == edge_reversed;
+            assert_eq!(*subset.sense(), forward, "{label}");
+            let native = if forward { [0.6, 1.0] } else { [-1.0, -0.6] };
+            let mut edges = vec![Edge {
+                id: EdgeId::mint("test:asm:edge#0").unwrap(),
+                carrier: EdgeCarrier::new(Some(owner.clone()), Some(native)).unwrap(),
+                start: VertexId::mint("test:asm:vertex#0").unwrap(),
+                end: VertexId::mint("test:asm:vertex#1").unwrap(),
+                tolerance: None,
+            }];
+            let owner = owner.clone();
+            let procedurals = out.procedural_curves.clone();
+            crate::brep::subsets::localize_subsets(
+                &mut out.curves,
+                &mut edges,
+                &mut [],
+                &procedurals,
+            )
+            .expect("localization succeeds");
+            let expected = if forward { [0.1, 0.5] } else { [0.5, 0.9] };
+            let local = edges[0].param_range().unwrap().get();
+            for (actual, expected) in local.iter().zip(expected) {
+                assert!((actual - expected).abs() < 1.0e-12, "{label}: {local:?}");
+            }
+            let curve = out.curves.iter().find(|curve| curve.id == owner).unwrap();
+            for local in [0.0, 0.25, 1.0] {
+                let parent_parameter = if forward { 0.5 + local } else { 1.5 - local };
+                let distance = Point3::distance(
+                    at(&curve.geometry, local),
+                    at(&parent_geometry, parent_parameter),
+                );
+                assert!(distance < 1.0e-12, "{label} at {local}: {distance}");
+            }
         }
     }
 }

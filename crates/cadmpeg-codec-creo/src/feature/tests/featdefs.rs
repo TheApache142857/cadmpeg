@@ -53,7 +53,7 @@ fn scan_decodes_featdefs_records_and_parameter_frames() {
         .expect("decode");
     let definitions =
         &result.ir().native.namespace("creo").unwrap().arenas()["feature_definitions"];
-    let definition_fields = definitions[0].fields();
+    let definition_fields = definitions[0].fields().unwrap();
     let frames = definition_fields["parameter_frames"]
         .as_array()
         .expect("parameter frames");
@@ -152,7 +152,7 @@ fn scan_decodes_featdefs_feature_local_outlines() {
         .expect("decode");
     let definitions =
         &result.ir().native.namespace("creo").unwrap().arenas()["feature_definitions"];
-    let definition_fields = definitions[0].fields();
+    let definition_fields = definitions[0].fields().unwrap();
     let outlines = definition_fields["outlines"].as_array().expect("outlines");
     assert_eq!(outlines.len(), 2);
     assert_eq!(outlines[0]["phase"], "pre_rollback");
@@ -430,7 +430,7 @@ fn scan_decodes_featdefs_segtab_line_and_arc_rows() {
         .expect("decode");
     let native_sketch = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0];
     assert_eq!(
-        crate::test_support::native_bytes(&native_sketch.fields()["segments"][0]["body"]),
+        crate::test_support::native_bytes(&native_sketch.fields().unwrap()["segments"][0]["body"]),
         [2, 0, 0, 0, 7, 8, 246, 0, 0, 246, 246, 42, 226]
     );
     let sketch = result
@@ -556,49 +556,64 @@ fn scan_retains_typed_special_segment_rows_in_native_sketch_records() {
         .decode(&mut Cursor::new(data), &DecodeOptions::default())
         .expect("decode");
     let sketch = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0];
-    assert_eq!(sketch.fields()["circle_segments"][0]["external_id"], 20);
-    assert_eq!(sketch.fields()["circle_segments"][0]["center_id"], 2);
     assert_eq!(
-        sketch.fields()["circle_segments"][0]["radius_dimension_id"],
-        1
-    );
-    assert_eq!(sketch.fields()["point_segments"][0]["external_id"], 21);
-    assert_eq!(sketch.fields()["point_segments"][0]["point_id"], 3);
-    assert_eq!(
-        sketch.fields()["centered_line_segments"][0]["external_id"],
-        22
-    );
-    assert_eq!(sketch.fields()["centered_line_segments"][0]["center_id"], 2);
-    assert_eq!(
-        sketch.fields()["centered_line_segments"][1]["external_id"],
-        23
-    );
-    assert_eq!(sketch.fields()["centered_line_segments"][1]["center_id"], 0);
-    assert_eq!(
-        sketch.fields()["reference_line_segments"][0]["external_id"],
-        24
+        sketch.fields().unwrap()["circle_segments"][0]["external_id"],
+        20
     );
     assert_eq!(
-        sketch.fields()["reference_line_segments"][0]["point_ids"][0],
-        10
-    );
-    assert_eq!(
-        sketch.fields()["reference_line_segments"][0]["point_ids"][1],
-        11
-    );
-    assert_eq!(
-        sketch.fields()["bounded_curve_segments"][0]["external_id"],
-        25
-    );
-    assert_eq!(
-        sketch.fields()["bounded_curve_segments"][0]["point_ids"][0],
+        sketch.fields().unwrap()["circle_segments"][0]["center_id"],
         2
     );
     assert_eq!(
-        sketch.fields()["bounded_curve_segments"][0]["point_ids"][1],
+        sketch.fields().unwrap()["circle_segments"][0]["radius_dimension_id"],
+        1
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["point_segments"][0]["external_id"],
+        21
+    );
+    assert_eq!(sketch.fields().unwrap()["point_segments"][0]["point_id"], 3);
+    assert_eq!(
+        sketch.fields().unwrap()["centered_line_segments"][0]["external_id"],
+        22
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["centered_line_segments"][0]["center_id"],
+        2
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["centered_line_segments"][1]["external_id"],
+        23
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["centered_line_segments"][1]["center_id"],
+        0
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["reference_line_segments"][0]["external_id"],
+        24
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["reference_line_segments"][0]["point_ids"][0],
+        10
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["reference_line_segments"][0]["point_ids"][1],
+        11
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["bounded_curve_segments"][0]["external_id"],
+        25
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["bounded_curve_segments"][0]["point_ids"][0],
+        2
+    );
+    assert_eq!(
+        sketch.fields().unwrap()["bounded_curve_segments"][0]["point_ids"][1],
         3
     );
-    assert!(sketch.fields()["opaque_segments"]
+    assert!(sketch.fields().unwrap()["opaque_segments"]
         .as_array()
         .is_some_and(Vec::is_empty));
     let coverage = result.report();
@@ -721,7 +736,8 @@ fn scan_decodes_featdefs_ent_tab_trimmed_entities() {
         .decode(&mut Cursor::new(data), &DecodeOptions::default())
         .expect("decode");
     let trim_entities = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0]
-        .fields()["trim_entities"];
+        .fields()
+        .unwrap()["trim_entities"];
     assert_eq!(
         trim_entities.as_array().expect("trim entity array").len(),
         3
@@ -754,7 +770,8 @@ fn scan_decodes_featdefs_vert_tab_entity_pairs() {
         .decode(&mut Cursor::new(data), &DecodeOptions::default())
         .expect("decode");
     let trim_vertices = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0]
-        .fields()["trim_vertices"];
+        .fields()
+        .unwrap()["trim_vertices"];
     assert_eq!(
         trim_vertices.as_array().expect("trim vertex array").len(),
         1
@@ -835,7 +852,8 @@ fn scan_decodes_featdefs_generated_entity_order_table() {
         .decode(&mut Cursor::new(data), &DecodeOptions::default())
         .expect("decode");
     let order_rows = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0]
-        .fields()["order_rows"];
+        .fields()
+        .unwrap()["order_rows"];
     assert_eq!(order_rows.as_array().expect("order row array").len(), 2);
     assert_eq!(order_rows[0]["external_id"], 283);
     assert_eq!(order_rows[1]["internal_id"], 12);
@@ -998,8 +1016,9 @@ fn scan_decodes_counted_featdefs_constraint_relations() {
     let result = CreoCodec
         .decode(&mut Cursor::new(data), &DecodeOptions::default())
         .expect("decode");
-    let sketch_fields =
-        result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0].fields();
+    let sketch_fields = result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0]
+        .fields()
+        .unwrap();
     let headers = sketch_fields["table_headers"]
         .as_array()
         .expect("table headers");
@@ -1147,7 +1166,8 @@ fn scan_decodes_featdefs_saved_line_prototype_and_replay() {
         .decode(&mut Cursor::new(data), &DecodeOptions::default())
         .expect("decode");
     let native_saved = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0]
-        .fields()["saved_entities"];
+        .fields()
+        .unwrap()["saved_entities"];
     for (native, expected) in native_saved
         .as_array()
         .expect("saved entity array")
@@ -1207,8 +1227,9 @@ fn scan_decodes_featdefs_saved_circular_and_dummy_entities() {
     let result = CreoCodec
         .decode(&mut Cursor::new(data), &DecodeOptions::default())
         .expect("decode");
-    let saved = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0].fields()
-        ["saved_entities"];
+    let saved = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"][0]
+        .fields()
+        .unwrap()["saved_entities"];
     assert_eq!(saved.as_array().expect("saved entity array").len(), 3);
     assert_eq!(saved[0]["kind"], "arc");
     assert_eq!(saved[1]["kind"], "circle");
@@ -1221,4 +1242,33 @@ fn scan_decodes_featdefs_saved_circular_and_dummy_entities() {
         let body = crate::test_support::native_bytes(&native["body"]);
         assert_eq!(&body, expected);
     }
+}
+
+#[test]
+fn parameter_transform_in_an_unrelated_section_has_no_definition_owner() {
+    let definition =
+        b"feat_defs_40\0local_sys\0\xf9\x04\x03\x0f\x18\xe5\x0f\x18\xe5\x0f\x18\xe5\xe0\x01owned_end\0\xf6".to_vec();
+    let mut unrelated = b"\xe0\x02transf\0\xf9\x04\x03".to_vec();
+    unrelated.extend([0xe4; 12]);
+    let data = build_prt("c", &[("FeatDefs", definition), ("Opaque", unrelated)]);
+    let scan = container::scan_bytes_ok(data);
+
+    let [definition] = scan.features.definitions.as_slice() else {
+        panic!("one bounded feature definition");
+    };
+    assert_eq!(definition.parameter_frames.len(), 1);
+    assert_eq!(
+        definition.parameter_frames[0].kind,
+        crate::feature::definitions::FeatureParameterFrameKind::LocalSystem
+    );
+    assert_eq!(
+        definition.parameter_frames[0].body,
+        [0x0f, 0x18, 0xe5, 0x0f, 0x18, 0xe5, 0x0f, 0x18, 0xe5]
+    );
+    assert_eq!(
+        definition.parameter_frames[0]
+            .decoded_values
+            .map(cadmpeg_ir::units::FiniteVector::get),
+        Some([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+    );
 }

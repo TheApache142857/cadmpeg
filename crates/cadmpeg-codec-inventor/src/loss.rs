@@ -52,12 +52,55 @@ pub(crate) enum InventorLossCode {
     FeatureRecordMalformed,
     /// An optional feature label is empty and has no neutral display name.
     FeatureLabelUnusable,
+    /// Sketch curves carry entity flags whose construction meaning is
+    /// unresolved.
+    SketchConstructionUnresolved,
+    /// A sketch-point paired association has no neutral relation semantics.
+    SketchPairedAssociationUnprojected,
+    /// Profile-body records do not decode, so the profiles that select them
+    /// stay native.
+    FeatureProfileBodyUndecoded,
+    /// A feature label name stores unpaired UTF-16 surrogates, which the
+    /// neutral name replaces.
+    FeatureLabelNameReplaced,
     /// Typed feature records have an operation graph that is not closed.
     FeatureOperationGraphOpen,
-    /// Inventor operations retain native result-body identity with unresolved state.
+    /// Thread annotations retain sizing and termination operands only natively.
+    FeatureThreadDefinitionPartial,
+    /// Thicken selections and thickness side remain native operands.
+    FeatureThickenOperandsNative,
+    /// Shell operations retain construction controls only natively.
+    FeatureShellDefinitionPartial,
+    /// Attachment type-9 modes, Boolean controls, and states have no construction map.
+    FeatureSheetMetalAttachmentControlsNative,
+    /// Separate bends retain unresolved attachment and scalar controls.
+    FeatureSheetMetalBendControlsNative,
+    /// Projected attached plates retain construction controls in native records.
+    FeatureSheetMetalAttachmentControlsRetained,
+    /// Projected bends retain construction controls in native records.
+    FeatureSheetMetalBendControlsRetained,
+    /// Projected sheet-metal relief and transition forms remain in native style records.
+    FeatureSheetMetalStyleFormsNative,
+    /// Revolve operands differ from the admitted construction forms.
+    FeatureRevolveOperandsNative,
+    /// Revolve extents retain unresolved angular termination operands.
+    FeatureRevolveExtentNative,
+    /// Fixed-angle revolutions retain an unresolved direction control.
+    FeatureRevolveDirectionNative,
+    /// A projected revolve retains an unresolved Boolean control natively.
+    FeatureRevolveControlUnresolved,
+    /// Sweep construction controls have no exact neutral interpretation.
+    FeatureSweepControlsUnresolved,
+    /// Loft construction controls and section conditions have no exact neutral interpretation.
+    FeatureLoftControlsUnresolved,
+    /// Inventor operations retain unresolved suppression and dependency state.
     FeatureStateUnresolved,
     /// Parameter records have a unit or expression graph that is not closed.
     ParameterGraphOpen,
+    /// Parameter records have an expression whose text passes the local cap.
+    ParameterExpressionBounded,
+    /// Parameter records whose parameter table has no established owning model.
+    ParameterScopeUnresolved,
     /// Sketch, entity, or constraint records have a neutral graph that is not closed.
     SketchGraphOpen,
     /// `RSe` contains unpaired metadata or bulk streams.
@@ -102,6 +145,8 @@ pub(crate) enum InventorLossCode {
     KernelHeaderMetadataUnresolved,
     /// An optional kernel tolerance cannot enter document units.
     KernelHeaderToleranceUnresolved,
+    /// The compound container uses an admitted noncanonical encoding.
+    ContainerNoncanonical,
 }
 
 impl InventorLossCode {
@@ -119,9 +164,29 @@ impl InventorLossCode {
         Self::SketchRecordMalformed,
         Self::FeatureRecordMalformed,
         Self::FeatureLabelUnusable,
+        Self::SketchConstructionUnresolved,
+        Self::SketchPairedAssociationUnprojected,
+        Self::FeatureProfileBodyUndecoded,
+        Self::FeatureLabelNameReplaced,
         Self::FeatureOperationGraphOpen,
+        Self::FeatureThreadDefinitionPartial,
+        Self::FeatureThickenOperandsNative,
+        Self::FeatureShellDefinitionPartial,
+        Self::FeatureSheetMetalAttachmentControlsNative,
+        Self::FeatureSheetMetalBendControlsNative,
+        Self::FeatureSheetMetalAttachmentControlsRetained,
+        Self::FeatureSheetMetalBendControlsRetained,
+        Self::FeatureSheetMetalStyleFormsNative,
+        Self::FeatureRevolveOperandsNative,
+        Self::FeatureRevolveExtentNative,
+        Self::FeatureRevolveDirectionNative,
+        Self::FeatureRevolveControlUnresolved,
+        Self::FeatureSweepControlsUnresolved,
+        Self::FeatureLoftControlsUnresolved,
         Self::FeatureStateUnresolved,
         Self::ParameterGraphOpen,
+        Self::ParameterExpressionBounded,
+        Self::ParameterScopeUnresolved,
         Self::SketchGraphOpen,
         Self::RseStreamUnpaired,
         Self::PropertySetStreamMalformed,
@@ -144,6 +209,7 @@ impl InventorLossCode {
         Self::KernelCarrierUnparseable,
         Self::KernelHeaderMetadataUnresolved,
         Self::KernelHeaderToleranceUnresolved,
+        Self::ContainerNoncanonical,
     ];
 
     /// The stable string identifier. This is the gating contract.
@@ -163,9 +229,35 @@ impl InventorLossCode {
             Self::SketchRecordMalformed => "sketch.record-malformed",
             Self::FeatureRecordMalformed => "feature.record-malformed",
             Self::FeatureLabelUnusable => "feature.label-unusable",
+            Self::SketchConstructionUnresolved => "sketch.construction-unresolved",
+            Self::SketchPairedAssociationUnprojected => "sketch.paired-association-unprojected",
+            Self::FeatureProfileBodyUndecoded => "feature.profile-body-undecoded",
+            Self::FeatureLabelNameReplaced => "feature.label-name-replaced",
             Self::FeatureOperationGraphOpen => "feature.operation-graph-open",
+            Self::FeatureThreadDefinitionPartial => "feature.thread-definition-partial",
+            Self::FeatureThickenOperandsNative => "feature.thicken-operands-native",
+            Self::FeatureShellDefinitionPartial => "feature.shell-definition-partial",
+            Self::FeatureSheetMetalAttachmentControlsNative => {
+                "feature.sheet-metal-attachment-controls-native"
+            }
+            Self::FeatureSheetMetalBendControlsNative => "feature.sheet-metal-bend-controls-native",
+            Self::FeatureSheetMetalAttachmentControlsRetained => {
+                "feature.sheet-metal-attachment-controls-retained"
+            }
+            Self::FeatureSheetMetalBendControlsRetained => {
+                "feature.sheet-metal-bend-controls-retained"
+            }
+            Self::FeatureSheetMetalStyleFormsNative => "feature.sheet-metal-style-forms-native",
+            Self::FeatureRevolveOperandsNative => "feature.revolve-operands-native",
+            Self::FeatureRevolveExtentNative => "feature.revolve-extent-native",
+            Self::FeatureRevolveDirectionNative => "feature.revolve-direction-native",
+            Self::FeatureRevolveControlUnresolved => "feature.revolve-control-unresolved",
+            Self::FeatureSweepControlsUnresolved => "feature.sweep-controls-unresolved",
+            Self::FeatureLoftControlsUnresolved => "feature.loft-controls-unresolved",
             Self::FeatureStateUnresolved => "feature.state-unresolved",
             Self::ParameterGraphOpen => "parameter.graph-open",
+            Self::ParameterExpressionBounded => "parameter.expression-bounded",
+            Self::ParameterScopeUnresolved => "parameter.scope-unresolved",
             Self::SketchGraphOpen => "sketch.graph-open",
             Self::RseStreamUnpaired => "rse.stream-unpaired",
             Self::PropertySetStreamMalformed => "property-set.stream-malformed",
@@ -188,6 +280,7 @@ impl InventorLossCode {
             Self::KernelCarrierUnparseable => "source.kernel-carrier-unparseable",
             Self::KernelHeaderMetadataUnresolved => "source.kernel-header-metadata-unresolved",
             Self::KernelHeaderToleranceUnresolved => "source.kernel-header-tolerance-unresolved",
+            Self::ContainerNoncanonical => "container.noncanonical",
         }
     }
 
@@ -220,15 +313,36 @@ impl InventorLossCode {
             | Self::ProteinStreamMalformed
             | Self::UfrxTableMalformed => LossTaxonomy::DecodeDiagnostic,
             Self::KernelCarrierUnparseable => LossTaxonomy::RecordNotTyped,
-            Self::KernelHeaderMetadataUnresolved => LossTaxonomy::NoncanonicalSourceSyntax,
+            Self::KernelHeaderMetadataUnresolved | Self::ContainerNoncanonical => {
+                LossTaxonomy::NoncanonicalSourceSyntax
+            }
             Self::KernelHeaderToleranceUnresolved => LossTaxonomy::GeometryNotTransferred,
             Self::FeatureOperationGraphOpen
+            | Self::FeatureThreadDefinitionPartial
+            | Self::FeatureThickenOperandsNative
+            | Self::FeatureShellDefinitionPartial
+            | Self::FeatureSheetMetalAttachmentControlsNative
+            | Self::FeatureSheetMetalBendControlsNative
+            | Self::FeatureSheetMetalAttachmentControlsRetained
+            | Self::FeatureSheetMetalBendControlsRetained
+            | Self::FeatureSheetMetalStyleFormsNative
+            | Self::FeatureRevolveOperandsNative
+            | Self::FeatureRevolveExtentNative
+            | Self::FeatureRevolveDirectionNative
+            | Self::FeatureRevolveControlUnresolved
+            | Self::FeatureSweepControlsUnresolved
+            | Self::FeatureLoftControlsUnresolved
+            | Self::FeatureProfileBodyUndecoded
+            | Self::SketchConstructionUnresolved
+            | Self::SketchPairedAssociationUnprojected
             | Self::FeatureStateUnresolved
             | Self::SketchGraphOpen => LossTaxonomy::FeatureHistoryRetained,
-            Self::ParameterGraphOpen => LossTaxonomy::ParametricRecordOmitted,
-            Self::MetadataPropertyUnmapped | Self::FeatureLabelUnusable => {
-                LossTaxonomy::MetadataNotTransferred
-            }
+            Self::ParameterGraphOpen
+            | Self::ParameterExpressionBounded
+            | Self::ParameterScopeUnresolved => LossTaxonomy::ParametricRecordOmitted,
+            Self::MetadataPropertyUnmapped
+            | Self::FeatureLabelUnusable
+            | Self::FeatureLabelNameReplaced => LossTaxonomy::MetadataNotTransferred,
             Self::ProteinCatalogUndecodable
             | Self::ProteinAssetRejected
             | Self::ProteinAppearanceAbsent
@@ -294,9 +408,29 @@ mod tests {
                 "sketch.record-malformed",
                 "feature.record-malformed",
                 "feature.label-unusable",
+                "sketch.construction-unresolved",
+                "sketch.paired-association-unprojected",
+                "feature.profile-body-undecoded",
+                "feature.label-name-replaced",
                 "feature.operation-graph-open",
+                "feature.thread-definition-partial",
+                "feature.thicken-operands-native",
+                "feature.shell-definition-partial",
+                "feature.sheet-metal-attachment-controls-native",
+                "feature.sheet-metal-bend-controls-native",
+                "feature.sheet-metal-attachment-controls-retained",
+                "feature.sheet-metal-bend-controls-retained",
+                "feature.sheet-metal-style-forms-native",
+                "feature.revolve-operands-native",
+                "feature.revolve-extent-native",
+                "feature.revolve-direction-native",
+                "feature.revolve-control-unresolved",
+                "feature.sweep-controls-unresolved",
+                "feature.loft-controls-unresolved",
                 "feature.state-unresolved",
                 "parameter.graph-open",
+                "parameter.expression-bounded",
+                "parameter.scope-unresolved",
                 "sketch.graph-open",
                 "rse.stream-unpaired",
                 "property-set.stream-malformed",
@@ -319,6 +453,7 @@ mod tests {
                 "source.kernel-carrier-unparseable",
                 "source.kernel-header-metadata-unresolved",
                 "source.kernel-header-tolerance-unresolved",
+                "container.noncanonical",
             ]
         );
     }

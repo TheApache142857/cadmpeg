@@ -18,10 +18,14 @@ use crate::records::feature::patterns;
 use crate::records::feature::patterns::DesignCircularPatternConstruction;
 use crate::records::feature::patterns::DesignRectangularPatternConstruction;
 use crate::records::feature::patterns::DesignRectangularPatternInstances;
+use crate::records::feature::patterns::RectangularPatternSearchCap;
+use crate::records::feature::patterns::{
+    MAX_RECTANGULAR_PATTERN_INSTANCES, MAX_RECTANGULAR_PATTERN_RECORD_BYTES,
+    MAX_RECTANGULAR_PATTERN_SCANNED_BYTES, RECTANGULAR_PATTERN_RUN_WORK,
+};
 use crate::records::feature::scope::DesignParameterScope;
 use crate::records::parameters::DesignParameterOwner;
-use cadmpeg_core::decode::DecodeContext;
-use cadmpeg_core::decode::View;
+use cadmpeg_core::decode::{View, WorkBudget};
 use cadmpeg_core::CodecError;
 use cadmpeg_ir::scalar::FiniteReal;
 
@@ -30,7 +34,6 @@ const EPS_SCOPES_EXACT_RECTANGULAR_PATTERN_INSTANCES_E8: f64 = 1.0e-8;
 const EPS_SCOPES_SAME_TRANSFORM_BASIS_E10: f64 = 1.0e-10;
 
 pub(super) fn exact_rectangular_pattern_construction(
-    ctx: &DecodeContext<'_>,
     bytes: &[u8],
     records: &IndexedRecordOffsets,
     scope: &DesignParameterScope,
@@ -49,14 +52,7 @@ pub(super) fn exact_rectangular_pattern_construction(
         if lanes.next().is_some() {
             return None;
         }
-        if let Err(error) = ctx.stable_sort_by(
-            &mut ordered_lanes,
-            |left, right| left.local_ordinal().cmp(&right.local_ordinal()),
-            |_| 0,
-            "sort f3d rectangular pattern lanes",
-        ) {
-            return Some(Err(error));
-        }
+        ordered_lanes.sort_by_key(|left| left.local_ordinal());
         let [u_count, v_count, u_extent, v_extent] = ordered_lanes;
         if [u_count, v_count, u_extent, v_extent]
             .iter()
@@ -91,30 +87,263 @@ pub(super) fn exact_rectangular_pattern_construction(
                     v_extent.evaluated_value_offset(),
                 ],
                 instances: None,
+                instance_search_cap: None,
+                directions: Vec::new(),
+                secondary_direction: None,
             },
         )
         .ok()?;
-        Some(Ok(construction))
+        Some(construction)
     })();
-    let Some(construction) = parsed else {
+    let Some(mut construction) = parsed else {
         return Ok(None);
     };
-    let mut construction = construction?;
-    let instances = exact_rectangular_pattern_instances(ctx, bytes, records, scope, &construction)?;
+    let directions = exact_rectangular_pattern_directions(bytes, records, scope);
+    let secondary = exact_rectangular_pattern_secondary_direction(
+        bytes,
+        records,
+        scope,
+        &construction,
+        &directions,
+    );
     construction
-        .try_set_instances(instances)
+        .try_set_secondary_direction(secondary)
         .map_err(CodecError::malformed)?;
+    if directions.len() + usize::from(construction.secondary_direction().is_some())
+        == construction.active_direction_count()
+    {
+        construction
+            .try_set_directions(directions)
+            .map_err(CodecError::malformed)?;
+    }
+    if construction
+        .directions()
+        .first()
+        .is_none_or(|record| record.distance_type != 7)
+    {
+        match exact_rectangular_pattern_instances(bytes, records, scope, &construction) {
+            InstanceSearch::Resolved(instances) => construction
+                .try_set_instances(Some(*instances))
+                .map_err(CodecError::malformed)?,
+            InstanceSearch::Unresolved => {}
+            InstanceSearch::Capped(cap) => construction
+                .mark_instance_search_capped(cap)
+                .map_err(CodecError::malformed)?,
+        }
+    }
     Ok(Some(construction))
 }
 
-fn exact_rectangular_pattern_instances(
-    ctx: &DecodeContext<'_>,
+/// The direction records of a rectangular-pattern scope, in reference order.
+fn exact_rectangular_pattern_directions(
+    bytes: &[u8],
+    records: &IndexedRecordOffsets,
+    scope: &DesignParameterScope,
+) -> Vec<patterns::DesignRectangularPatternDirection> {
+    let mut directions = Vec::new();
+    for (record_index, selection_record_index) in scope
+        .reference_members()
+        .values()
+        .zip(scope.reference_members().values().skip(1))
+    {
+        for (start, paired_at) in records.frames(*record_index) {
+            if let Some(direction) = exact_rectangular_pattern_direction(
+                bytes,
+                start,
+                paired_at,
+                *record_index,
+                *selection_record_index,
+                scope.record_index,
+            ) {
+                directions.push(direction);
+            }
+        }
+    }
+    directions
+}
+
+fn exact_rectangular_pattern_direction(
+    bytes: &[u8],
+    start: usize,
+    paired_at: usize,
+    record_index: u32,
+    selection_record_index: u32,
+    scope_record_index: u32,
+) -> Option<patterns::DesignRectangularPatternDirection> {
+    use crate::layout::rectangular_pattern_direction_record as frame;
+
+    use crate::layout::rectangular_pattern_spacing_direction_record as spacing;
+
+    let distance_type = View::u32_le_at(bytes, start + frame::FIXED_EIGHT)?;
+    let shift = match (paired_at.checked_sub(start)?, distance_type) {
+        (frame::LEN, 8) => 0,
+        (spacing::LEN, 7) if bytes.get(start + spacing::SPACING_FLAG) == Some(&0) => 1,
+        _ => return None,
+    };
+    let header = start + frame::INDEXED_HEADER;
+    let (class_tag, after_tag) =
+        lp_ascii_filtered_view(bytes, header, 0..=2000, u8::is_ascii_graphic)?;
+    let selection_kind = View::u32_le_at(bytes, start + frame::SELECTION_KIND)?;
+    if class_tag.len() != 3
+        || !class_tag.bytes().all(|byte| byte.is_ascii_digit())
+        || after_tag != header + 7
+        || View::u32_le_at(bytes, after_tag) != Some(record_index)
+        || bytes.get(start + frame::ZERO_RUN_10..start + frame::SELECTION_KIND) != Some(&[0; 10])
+        || !matches!(selection_kind, 8 | 16)
+        || bytes.get(start + frame::ZERO_RUN_16..start + frame::FIXED_EIGHT) != Some(&[0; 16])
+        || (0..3).any(|lane| {
+            View::f64_le_at(bytes, start + shift + frame::NEGATIVE_ONES + lane * 8) != Some(-1.0)
+        })
+        || View::u32_le_at(bytes, start + shift + frame::SELECTION_COUNT) != Some(1)
+        || marked_record_reference(bytes, start + shift + frame::SELECTION_REFERENCE)
+            != Some(selection_record_index)
+        || bytes.get(start + shift + frame::ZERO_RUN_2..start + shift + frame::AUXILIARY_COUNT)
+            != Some(&[0; 2])
+        || View::u32_le_at(bytes, start + shift + frame::AUXILIARY_COUNT) != Some(1)
+        || marked_record_reference(bytes, start + shift + frame::AUXILIARY_REFERENCE).is_none()
+        || View::u64_le_at(bytes, start + shift + frame::ROLE) != Some(0x0000_0004_0000_0000)
+        || bytes
+            .get(start + shift + frame::ZERO_RUN_AFTER_ROLE..start + shift + frame::OPAQUE_INDEX)
+            != Some(&[0; 10])
+    {
+        return None;
+    }
+    let opaque_index = View::u32_le_at(bytes, start + shift + frame::OPAQUE_INDEX)?;
+    if opaque_index == 0
+        || !View::f64_le_at(bytes, start + shift + frame::OPAQUE_SCALAR)?.is_finite()
+        || View::u32_le_at(bytes, start + shift + frame::OPAQUE_INDEX_REPEAT) != Some(opaque_index)
+        || marked_record_reference(bytes, start + shift + frame::INDEX_PLUS_TWO_REFERENCE)
+            != record_index.checked_add(2)
+        || bytes.get(start + shift + frame::SEPARATOR_FLAG) != Some(&1)
+        || bytes.get(
+            start + shift + frame::SEPARATOR_ZERO_RUN
+                ..start + shift + frame::INDEX_PLUS_ONE_REFERENCE,
+        ) != Some(&[0; 2])
+        || marked_record_reference(bytes, start + shift + frame::INDEX_PLUS_ONE_REFERENCE)
+            != record_index.checked_add(1)
+        || bytes.get(start + shift + frame::SCOPE_SEPARATOR) != Some(&0)
+        || marked_record_reference(bytes, start + shift + frame::SCOPE_REFERENCE)
+            != Some(scope_record_index)
+    {
+        return None;
+    }
+    let (paired_class_tag, paired_after_tag) =
+        lp_ascii_filtered_view(bytes, paired_at, 0..=2000, u8::is_ascii_graphic)?;
+    if paired_class_tag.len() != 3
+        || !paired_class_tag.bytes().all(|byte| byte.is_ascii_digit())
+        || paired_after_tag != paired_at + 7
+        || View::u32_le_at(bytes, paired_after_tag) != Some(record_index)
+    {
+        return None;
+    }
+    let direction = patterns::DesignRectangularPatternDirection {
+        record_index,
+        selection_record_index,
+        selection_kind,
+        distance_type,
+        origin: finite_reals_at(bytes, start + frame::ORIGIN)?,
+        origin_offset: u64::try_from(start.checked_add(frame::ORIGIN)?).ok()?,
+        displacement: finite_reals_at(bytes, start + frame::DISPLACEMENT)?,
+        displacement_offset: u64::try_from(start.checked_add(frame::DISPLACEMENT)?).ok()?,
+    };
+    direction.direction().is_some().then_some(direction)
+}
+
+fn exact_rectangular_pattern_secondary_direction(
     bytes: &[u8],
     records: &IndexedRecordOffsets,
     scope: &DesignParameterScope,
     construction: &DesignRectangularPatternConstruction,
-) -> Result<Option<DesignRectangularPatternInstances>, CodecError> {
-    let parsed = (|| {
+    directions: &[patterns::DesignRectangularPatternDirection],
+) -> Option<crate::records::identity::Located<[FiniteReal; 3]>> {
+    use crate::layout::rectangular_pattern_payload_prefix as prefix;
+    use crate::layout::rectangular_pattern_payload_suffix as suffix;
+
+    let [direction] = directions else {
+        return None;
+    };
+    if construction.active_direction_count() != 2 || direction.distance_type != 7 {
+        return None;
+    }
+    let mut found = None;
+    for (_, offsets) in records.records() {
+        for &start in offsets {
+            let owners = construction.owner_record_indices;
+            if bytes.get(start + prefix::ZERO_HEAD..start + prefix::FLAG) != Some(&[0; 8])
+                || bytes.get(start + prefix::FLAG) != Some(&1)
+                || View::u32_le_at(bytes, start + prefix::COUNT) != Some(2)
+                || bytes.get(start + prefix::ZERO_MIDDLE..start + prefix::V_COUNT) != Some(&[0; 4])
+                || bytes.get(start + prefix::ZERO_TAIL..start + prefix::SENTINEL) != Some(&[0; 9])
+                || View::u32_le_at(bytes, start + prefix::SENTINEL) != Some(u32::MAX)
+                || bytes.get(start + prefix::ZERO_DISTANCE..start + prefix::V_COUNT_REPEAT)
+                    != Some(&[0; 2])
+                || [
+                    (prefix::U_COUNT, owners[0]),
+                    (prefix::V_COUNT, owners[1]),
+                    (prefix::U_DISTANCE, owners[2]),
+                    (prefix::V_DISTANCE, owners[3]),
+                    (prefix::V_COUNT_REPEAT, owners[1]),
+                    (prefix::U_DIRECTION, direction.record_index),
+                ]
+                .into_iter()
+                .any(|(offset, index)| {
+                    marked_record_reference(bytes, start + offset) != Some(index)
+                })
+            {
+                continue;
+            }
+            let end = next_indexed_record_offset(bytes, start + prefix::LEN)?;
+            if end.checked_sub(start)? < prefix::LEN + suffix::LEN {
+                continue;
+            }
+            let tail = end - suffix::LEN;
+            let seed_group = marked_record_reference(bytes, tail + suffix::SEED_GROUP)?;
+            if marked_record_reference(bytes, tail + suffix::U_COUNT) != Some(owners[0])
+                || marked_record_reference(bytes, tail + suffix::SCOPE) != Some(scope.record_index)
+                || !scope
+                    .reference_members()
+                    .values()
+                    .any(|index| *index == seed_group)
+                || bytes.get(tail + suffix::ZERO_TAIL..end) != Some(&[0; 4])
+            {
+                continue;
+            }
+            let Some(value) = finite_reals_at::<3>(bytes, start + prefix::V_DIRECTION) else {
+                continue;
+            };
+            cadmpeg_ir::units::UnitVector3::normalized(cadmpeg_ir::math::Vector3::from(
+                value.map(FiniteReal::get),
+            ))?;
+            let candidate = crate::records::identity::Located {
+                value,
+                offset: u64::try_from(start + prefix::V_DIRECTION).ok()?,
+            };
+            if found.replace(candidate).is_some() {
+                return None;
+            }
+        }
+    }
+    found
+}
+
+/// Outcome of the rectangular-pattern instance search.
+#[derive(Debug, PartialEq)]
+enum InstanceSearch {
+    /// One exact instance run.
+    Resolved(Box<DesignRectangularPatternInstances>),
+    /// No unique exact instance run.
+    Unresolved,
+    /// The search stopped at a local cap.
+    Capped(RectangularPatternSearchCap),
+}
+
+fn exact_rectangular_pattern_instances(
+    bytes: &[u8],
+    records: &IndexedRecordOffsets,
+    scope: &DesignParameterScope,
+    construction: &DesignRectangularPatternConstruction,
+) -> InstanceSearch {
+    (|| {
         let mut active = [
             (construction.u_count(), construction.u_extent()),
             (construction.v_count(), construction.v_extent()),
@@ -126,12 +355,10 @@ fn exact_rectangular_pattern_instances(
             return None;
         }
         let count = usize::try_from(count).ok()?;
-        if count > 4_096 {
-            return Some(Err(ctx.refuse_codec_limit(
-                "F3D rectangular pattern search count",
-                4_096,
-                u64_from_index(count),
-            )));
+        if count > MAX_RECTANGULAR_PATTERN_INSTANCES {
+            return Some(InstanceSearch::Capped(
+                RectangularPatternSearchCap::Instances,
+            ));
         }
         if scope.reference_members().len() != count.checked_add(6)?
             || !scope
@@ -145,13 +372,6 @@ fn exact_rectangular_pattern_instances(
         }
 
         let mut record_indices = Vec::new();
-        if let Err(error) = ctx.reserve_vec(
-            &mut record_indices,
-            count,
-            "f3d rectangular pattern record indices",
-        ) {
-            return Some(Err(error));
-        }
         record_indices.push(*scope.reference_members().values().next()?);
         record_indices.extend(
             scope
@@ -159,42 +379,15 @@ fn exact_rectangular_pattern_instances(
                 .values_in(6..count.checked_add(5)?)?
                 .copied(),
         );
-        let reference_count = scope.reference_members().len();
 
         let mut reference_starts = Vec::new();
-        if let Err(error) = ctx.reserve_vec(
-            &mut reference_starts,
-            reference_count,
-            "f3d rectangular pattern reference starts",
-        ) {
-            return Some(Err(error));
-        }
         for record_index in scope.reference_members().values() {
             reference_starts.push((*record_index, records.first_at_or_after(0, *record_index)?));
         }
 
         let mut candidates = Vec::new();
-        if let Err(error) = ctx.reserve_vec(
-            &mut candidates,
-            count,
-            "f3d rectangular pattern candidate groups",
-        ) {
-            return Some(Err(error));
-        }
         let mut scanned_bytes = 0_usize;
         for record_index in &record_indices {
-            let Some(range_work) = u64_from_index(reference_starts.len()).checked_mul(2) else {
-                return Some(Err(ctx.refuse_codec_limit(
-                    "index F3D rectangular pattern candidate range",
-                    0,
-                    u64::MAX,
-                )));
-            };
-            if let Err(error) =
-                ctx.charge_work(range_work, "index F3D rectangular pattern candidate range")
-            {
-                return Some(Err(error));
-            }
             let start = reference_starts
                 .iter()
                 .find_map(|(candidate, offset)| (candidate == record_index).then_some(*offset))?;
@@ -203,42 +396,30 @@ fn exact_rectangular_pattern_instances(
                 .filter_map(|(_, offset)| (*offset > start).then_some(*offset))
                 .min()?;
             let span = end.checked_sub(start)?;
-            let Some(total) = scanned_bytes.checked_add(span) else {
-                return Some(Err(ctx.refuse_codec_limit(
-                    "F3D rectangular pattern aggregate span",
-                    16_777_216,
-                    u64::MAX,
-                )));
+            if span > MAX_RECTANGULAR_PATTERN_RECORD_BYTES {
+                return Some(InstanceSearch::Capped(
+                    RectangularPatternSearchCap::RecordBytes,
+                ));
+            }
+            let Some(total) = scanned_bytes
+                .checked_add(span)
+                .filter(|total| *total <= MAX_RECTANGULAR_PATTERN_SCANNED_BYTES)
+            else {
+                return Some(InstanceSearch::Capped(
+                    RectangularPatternSearchCap::ScannedBytes,
+                ));
             };
             scanned_bytes = total;
-            if span > 1_048_576 {
-                return Some(Err(ctx.refuse_codec_limit(
-                    "F3D rectangular pattern record span",
-                    1_048_576,
-                    u64_from_index(span),
-                )));
-            }
-            if scanned_bytes > 16_777_216 {
-                return Some(Err(ctx.refuse_codec_limit(
-                    "F3D rectangular pattern aggregate span",
-                    16_777_216,
-                    u64_from_index(scanned_bytes),
-                )));
-            }
-            let candidate = match exact_rigid_transform_candidates(ctx, bytes, start, end) {
-                Ok(Some(candidate)) => candidate,
-                Ok(None) => return None,
-                Err(error) => return Some(Err(error)),
-            };
-            candidates.push(candidate);
+            candidates.push(exact_rigid_transform_candidates(bytes, start, end)?);
         }
         let first_candidates = candidates.first()?;
         let final_candidates = candidates.last()?;
+        let budget = WorkBudget::new(RECTANGULAR_PATTERN_RUN_WORK);
         let mut runs = Vec::new();
         for first in first_candidates {
             for final_candidate in final_candidates {
-                if let Err(error) = ctx.charge_work(24, "match F3D rectangular pattern endpoints") {
-                    return Some(Err(error));
+                if !budget.charge() {
+                    return Some(InstanceSearch::Capped(RectangularPatternSearchCap::RunWork));
                 }
                 if !same_transform_basis(&first.0, &final_candidate.0) {
                     continue;
@@ -252,21 +433,16 @@ fn exact_rectangular_pattern_instances(
                 }
 
                 let mut run = Vec::new();
-                if let Err(error) =
-                    ctx.reserve_vec(&mut run, count, "f3d rectangular pattern candidate run")
-                {
-                    return Some(Err(error));
-                }
                 run.push(*first);
                 let mut unique = true;
                 for (ordinal, record_candidates) in candidates[1..count - 1].iter().enumerate() {
                     let fraction = f64_from_index(ordinal + 1)? / f64_from_index(count - 1)?;
                     let mut matched = None;
                     for candidate in record_candidates {
-                        if let Err(error) =
-                            ctx.charge_work(24, "match F3D rectangular pattern intermediate")
-                        {
-                            return Some(Err(error));
+                        if !budget.charge() {
+                            return Some(InstanceSearch::Capped(
+                                RectangularPatternSearchCap::RunWork,
+                            ));
                         }
                         if same_transform_basis(&first.0, &candidate.0)
                             && translation_delta(&first.0, &candidate.0)
@@ -295,39 +471,21 @@ fn exact_rectangular_pattern_instances(
                 }
                 if unique {
                     run.push(*final_candidate);
-
-                    if let Err(error) =
-                        ctx.reserve_vec(&mut runs, 1, "f3d rectangular pattern matching runs")
-                    {
-                        return Some(Err(error));
-                    }
                     runs.push(run);
                 }
             }
         }
-        if let Err(error) = ctx.stable_sort_by(
-            &mut runs[..],
-            |a, b| {
-                a.iter()
-                    .map(|(_, offset)| *offset)
-                    .cmp(b.iter().map(|(_, offset)| *offset))
-            },
-            |_| 0,
-            "sort f3d design pattern 1",
-        ) {
-            return Some(Err(error));
-        }
+        runs.sort_by(|a, b| {
+            a.iter()
+                .map(|(_, offset)| *offset)
+                .cmp(b.iter().map(|(_, offset)| *offset))
+        });
         runs.dedup_by(|left, right| left == right);
         let [run] = runs.as_slice() else {
             return None;
         };
 
         let mut instances = Vec::new();
-        if let Err(error) =
-            ctx.reserve_vec(&mut instances, count, "f3d rectangular pattern instances")
-        {
-            return Some(Err(error));
-        }
         for (record_index, (value, offset)) in record_indices.into_iter().zip(run) {
             instances.push(patterns::DesignPatternInstance {
                 record_index,
@@ -337,74 +495,56 @@ fn exact_rectangular_pattern_instances(
                 },
             });
         }
-        Some(Ok(DesignRectangularPatternInstances::Bodies(instances)))
-    })();
-    parsed.transpose()
+        Some(InstanceSearch::Resolved(Box::new(
+            DesignRectangularPatternInstances::Bodies(instances),
+        )))
+    })()
+    .unwrap_or(InstanceSearch::Unresolved)
 }
 
 type TransformCandidate = (crate::records::sketch_placement::SketchPlacementMatrix, u64);
 
 fn exact_rigid_transform_candidates(
-    ctx: &DecodeContext<'_>,
     bytes: &[u8],
     start: usize,
     end: usize,
-) -> Result<Option<Vec<TransformCandidate>>, CodecError> {
-    let parsed = (|| {
-        /// The single byte image of `1.0_f64`, the last lane of a rigid
-        /// transform's fixed `0 0 0 1` bottom row.
-        const ONE_F64_LE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0xF0, 0x3F];
-        let last_exclusive = end.checked_sub(127)?;
-        if start >= last_exclusive || end > bytes.len() {
-            // An exhaustive scan over this range finds nothing or aborts on its
-            // first out-of-bounds sixteen-lane read.
-            return None;
+) -> Option<Vec<TransformCandidate>> {
+    /// The single byte image of `1.0_f64`, the last lane of a rigid
+    /// transform's fixed `0 0 0 1` bottom row.
+    const ONE_F64_LE: [u8; 8] = [0, 0, 0, 0, 0, 0, 0xF0, 0x3F];
+    let last_exclusive = end.checked_sub(127)?;
+    if start >= last_exclusive || end > bytes.len() {
+        // An exhaustive scan over this range finds nothing or aborts on its
+        // first out-of-bounds sixteen-lane read.
+        return None;
+    }
+    let mut candidates = Vec::new();
+    // A valid transform carries exactly `1.0` at lane fifteen and a zero of
+    // either sign at lanes twelve to fourteen. Locate the fixed `1.0` image
+    // (it cannot overlap itself, so every occurrence surfaces) and read the
+    // full sixteen-lane frame only at surviving offsets.
+    for hit in memchr::memmem::find_iter(&bytes[start + 120..end], &ONE_F64_LE) {
+        let offset = start + hit;
+        let zero_lanes_valid = (0..3).all(|lane| {
+            let at = offset + 96 + lane * 8;
+            bytes[at..at + 7].iter().all(|byte| *byte == 0)
+                && (bytes[at + 7] == 0 || bytes[at + 7] == 0x80)
+        });
+        if !zero_lanes_valid {
+            continue;
         }
-        let mut candidates = Vec::new();
-        // A valid transform carries exactly `1.0` at lane fifteen and a zero of
-        // either sign at lanes twelve to fourteen. Locate the fixed `1.0` image
-        // (it cannot overlap itself, so every occurrence surfaces) and read the
-        // full sixteen-lane frame only at surviving offsets.
-        if let Err(error) = ctx.charge_work(
-            u64_from_index(end - start - 120),
-            "scan F3D rectangular pattern matrices",
-        ) {
-            return Some(Err(error));
+        let values = f64s_at::<16>(bytes, offset)?;
+        let mut transform = [[0.0; 4]; 4];
+        for (ordinal, value) in values.into_iter().enumerate() {
+            transform[ordinal / 4][ordinal % 4] = value;
         }
-        for hit in memchr::memmem::find_iter(&bytes[start + 120..end], &ONE_F64_LE) {
-            if let Err(error) = ctx.charge_work(152, "validate F3D rectangular pattern matrix") {
-                return Some(Err(error));
-            }
-            let offset = start + hit;
-            let zero_lanes_valid = (0..3).all(|lane| {
-                let at = offset + 96 + lane * 8;
-                bytes[at..at + 7].iter().all(|byte| *byte == 0)
-                    && (bytes[at + 7] == 0 || bytes[at + 7] == 0x80)
-            });
-            if !zero_lanes_valid {
-                continue;
-            }
-            let values = f64s_at::<16>(bytes, offset)?;
-            let mut transform = [[0.0; 4]; 4];
-            for (ordinal, value) in values.into_iter().enumerate() {
-                transform[ordinal / 4][ordinal % 4] = value;
-            }
-            if let Ok(transform) =
-                crate::records::sketch_placement::SketchPlacementMatrix::try_from(transform)
-            {
-                if let Err(error) = ctx.reserve_vec(
-                    &mut candidates,
-                    1,
-                    "f3d rectangular pattern transform candidates",
-                ) {
-                    return Some(Err(error));
-                }
-                candidates.push((transform, u64::try_from(offset).ok()?));
-            }
+        if let Ok(transform) =
+            crate::records::sketch_placement::SketchPlacementMatrix::try_from(transform)
+        {
+            candidates.push((transform, u64::try_from(offset).ok()?));
         }
-        (!candidates.is_empty()).then_some(Ok(candidates))
-    })();
-    parsed.transpose()
+    }
+    (!candidates.is_empty()).then_some(candidates)
 }
 
 fn same_transform_basis(
@@ -430,7 +570,6 @@ fn translation_delta(
 }
 
 pub(super) fn exact_circular_pattern_construction_with_owners(
-    ctx: &DecodeContext<'_>,
     bytes: &[u8],
     records: &IndexedRecordOffsets,
     scope: &DesignParameterScope,
@@ -455,13 +594,6 @@ pub(super) fn exact_circular_pattern_construction_with_owners(
                     *selection_record_index,
                     scope.record_index,
                 ) {
-                    if let Err(error) = ctx.reserve_vec(
-                        &mut axis_candidates,
-                        1,
-                        "f3d circular pattern axis candidates",
-                    ) {
-                        return Some(Err(error));
-                    }
                     axis_candidates.push(CircularPatternAxisCandidate {
                         axis,
                         axis_record_index: *record_index,
@@ -473,7 +605,6 @@ pub(super) fn exact_circular_pattern_construction_with_owners(
         for record_index in scope.reference_members().values() {
             for (start, paired_at) in records.frames(*record_index) {
                 let candidate = match exact_legacy_circular_pattern_axis(
-                    ctx,
                     bytes,
                     records,
                     start,
@@ -485,13 +616,6 @@ pub(super) fn exact_circular_pattern_construction_with_owners(
                     Err(error) => return Some(Err(error)),
                 };
                 if let Some((axis, selection_record_index)) = candidate {
-                    if let Err(error) = ctx.reserve_vec(
-                        &mut axis_candidates,
-                        1,
-                        "f3d circular pattern axis candidates",
-                    ) {
-                        return Some(Err(error));
-                    }
                     axis_candidates.push(CircularPatternAxisCandidate {
                         axis,
                         axis_record_index: *record_index,
@@ -524,13 +648,6 @@ pub(super) fn exact_circular_pattern_construction_with_owners(
         });
         let mut count_candidates = Vec::new();
         for candidate in owner_count_candidates {
-            if let Err(error) = ctx.reserve_vec(
-                &mut count_candidates,
-                1,
-                "f3d circular pattern count candidates",
-            ) {
-                return Some(Err(error));
-            }
             count_candidates.push(candidate);
         }
         if count_candidates.is_empty() {
@@ -538,25 +655,11 @@ pub(super) fn exact_circular_pattern_construction_with_owners(
                 if let Some((count, count_offset)) =
                     exact_fixed_pattern_count(bytes, records, *record_index, scope.record_index)
                 {
-                    if let Err(error) = ctx.reserve_vec(
-                        &mut count_candidates,
-                        1,
-                        "f3d circular pattern count candidates",
-                    ) {
-                        return Some(Err(error));
-                    }
                     count_candidates.push((count, *record_index, count_offset));
                 }
             }
         }
-        if let Err(error) = ctx.sort_unstable_by(
-            &mut count_candidates,
-            Ord::cmp,
-            |_| 0,
-            "sort f3d circular pattern count candidates",
-        ) {
-            return Some(Err(error));
-        }
+        count_candidates.sort_unstable_by(Ord::cmp);
         count_candidates.dedup();
         let [(count, count_record_index, count_offset)] = count_candidates.as_slice() else {
             return None;
@@ -574,13 +677,6 @@ pub(super) fn exact_circular_pattern_construction_with_owners(
         });
         let mut angle_candidates = Vec::new();
         for candidate in owner_angle_candidates {
-            if let Err(error) = ctx.reserve_vec(
-                &mut angle_candidates,
-                1,
-                "f3d circular pattern angle candidates",
-            ) {
-                return Some(Err(error));
-            }
             angle_candidates.push(candidate);
         }
         if angle_candidates.is_empty() {
@@ -595,30 +691,16 @@ pub(super) fn exact_circular_pattern_construction_with_owners(
                     continue;
                 };
 
-                if let Err(error) = ctx.reserve_vec(
-                    &mut angle_candidates,
-                    1,
-                    "f3d circular pattern angle candidates",
-                ) {
-                    return Some(Err(error));
-                }
                 angle_candidates.push((angle, *record_index, scalar.value_offset));
             }
         }
-        if let Err(error) = ctx.stable_sort_by(
-            &mut angle_candidates[..],
-            |left, right| {
-                left.0
-                    .get()
-                    .total_cmp(&right.0.get())
-                    .then_with(|| left.1.cmp(&right.1))
-                    .then_with(|| left.2.cmp(&right.2))
-            },
-            |_| 0,
-            "sort f3d design pattern 2",
-        ) {
-            return Some(Err(error));
-        }
+        angle_candidates.sort_by(|left, right| {
+            left.0
+                .get()
+                .total_cmp(&right.0.get())
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+        });
         angle_candidates.dedup();
         let [(angle, angle_record_index, angle_offset)] = angle_candidates.as_slice() else {
             return None;
@@ -664,7 +746,6 @@ fn select_circular_pattern_axis(candidates: &[CircularPatternAxisCandidate]) -> 
 }
 
 fn exact_legacy_circular_pattern_axis(
-    ctx: &DecodeContext<'_>,
     bytes: &[u8],
     records: &IndexedRecordOffsets,
     start: usize,
@@ -788,16 +869,8 @@ fn exact_legacy_circular_pattern_axis(
         {
             return None;
         }
-        let count = wrappers.iter().flatten().count();
 
         let mut retained_wrappers = Vec::new();
-        if let Err(error) = ctx.reserve_vec(
-            &mut retained_wrappers,
-            count,
-            "f3d circular pattern historical axis wrappers",
-        ) {
-            return Some(Err(error));
-        }
         for (_, wrapper) in wrappers.into_iter().flatten() {
             retained_wrappers.push(wrapper);
         }

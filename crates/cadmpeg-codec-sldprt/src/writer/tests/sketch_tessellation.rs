@@ -125,7 +125,7 @@ fn semantic_writer_round_trips_planar_and_spatial_sketch_space() {
         ));
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -184,7 +184,7 @@ fn semantic_writer_applies_line_sketch_edits() {
     }
 
     let mut written = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut written,
@@ -244,7 +244,7 @@ fn semantic_writer_applies_compressed_line_sketch_edits() {
     }
 
     let mut written = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut written,
@@ -356,7 +356,7 @@ fn semantic_writer_applies_circle_sketch_edits() {
     }
 
     let mut written = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut written,
@@ -414,7 +414,7 @@ fn semantic_writer_applies_ellipse_sketch_edits() {
     }
 
     let mut written = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut written,
@@ -511,7 +511,7 @@ fn semantic_writer_applies_bounded_arc_sketch_edits() {
     }
 
     let mut written = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut written,
@@ -551,37 +551,29 @@ fn semantic_writer_applies_rational_and_non_rational_sketch_nurbs_edits() {
                     return;
                 };
                 curve
-                    .try_map_control_points(
-                        |pole_index, point| {
-                            let mut point = point.get();
-                            if pole_index == 1 {
-                                point.v += 250.0;
-                            }
-                            cadmpeg_ir::units::FinitePoint2::new(point).ok_or(())
-                        },
-                        &cadmpeg_test_support::service_decode_context(),
-                    )
-                    .expect("pole edit admission")
+                    .try_map_control_points(|pole_index, point| {
+                        let mut point = point.get();
+                        if pole_index == 1 {
+                            point.v += 250.0;
+                        }
+                        cadmpeg_ir::units::FinitePoint2::new(point).ok_or(())
+                    })
                     .unwrap();
                 if let Some(mut weights) = curve.pole_rows().weights() {
                     weights[1] = 0.75;
                     let poles = cadmpeg_ir::geometry::pcurve::PcurveNurbsPoles::from_lanes(
-                        &cadmpeg_test_support::service_decode_context(),
                         curve.pole_rows().raw_points(),
                         Some(weights),
-                    )
-                    .expect("fixture pcurve construction admission");
+                    );
                     {
                         let replacement = poles.unwrap();
                         edit::replace(curve, |previous| {
                             cadmpeg_ir::geometry::pcurve::PcurveNurbs::new(
-                                &cadmpeg_test_support::service_decode_context(),
                                 previous.degree(),
                                 previous.knots().to_vec(),
                                 replacement,
                                 previous.periodic(),
                             )
-                            .expect("fixture pcurve construction admission")
                         })
                     }
                     .unwrap();
@@ -593,7 +585,7 @@ fn semantic_writer_applies_rational_and_non_rational_sketch_nurbs_edits() {
     }
 
     let mut written = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut written,
@@ -643,7 +635,7 @@ fn semantic_writer_preserves_opaque_auxiliary_blocks() {
     );
 
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -719,7 +711,7 @@ fn semantic_writer_round_trips_all_supported_lanes_together() {
     });
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -778,9 +770,7 @@ fn semantic_writer_round_trips_all_supported_lanes_together() {
             assert_eq!(block.type_id, 0x77);
         }
         assert!(scan.directory.iter().any(|entry| {
-            entry.name == section
-                && cadmpeg_core::decode::index_from_u32(entry.size) == block.uncomp_sz()
-                && entry.type_id == block.type_id
+            entry.name == section && entry.size == block.comp_sz && entry.type_id == block.type_id
         }));
     }
 }
@@ -811,7 +801,7 @@ fn semantic_writer_preserves_display_list_geometry() {
         .unwrap();
 
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,

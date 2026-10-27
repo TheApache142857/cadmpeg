@@ -140,17 +140,15 @@ Optional side ranges, locations, and other doubles can occur after the actual of
 
 **Note.** The complete decoder and its structured grammar establish conforming records only; they do not establish the layout of a rejected branch.
 
-### GC-33. Cone pcurve chart sign and scale
+### GC-33. Generator scale of a cone pcurve chart
 
-**Question.** What gives the sign and scale of the axial coordinate of a pcurve on a native `cone` support?
+**Question.** On a native `cone` with nonzero `sine`, is the axial distance of a pcurve point the first chart coordinate times `|cosine| × u_scale` or times `u_scale`?
 
-**Known.** `asm.md` §6.2 states that the first cone-chart coordinate is multiplied by `direction * cosine * u_scale`, with `direction` selected by `sine * cosine`. `native_support_chart` and `normalize_pcurve_for_surface_record` in `nurbs/proc_curve.rs` implement that formula.
+**Known.** `asm.md` §6.2 "An embedded or face-bound pcurve on an analytic support" states `d = first × |cosine| × u_scale` along the native axis. Pcurves on circular cylinders with `cosine = 1` and with `cosine = -1` reach their edge vertices with `d = first × u_scale` along the native axis and the azimuth measured toward `axis × x`. The sign of `cosine` therefore does not change the chart. On a cylinder `|cosine| = 1`, so these pcurves do not separate the two scales. `analytic_support` in `nurbs/proc_curve.rs` implements the stated rule.
 
-**Conflict.** The current rule was written from the implementation change and synthetic token tests; no SAT/SAB witness in the corpus has yet separated this formula from the preceding `direction * u_scale` interpretation. The parse-failure branch also substitutes the canonical chart with no loss.
+**Need.** A pcurve with known edge vertices on a cone with nonzero `sine` separates the two scales. With the wrong scale, every cone pcurve point has the wrong axial distance, and `cadmpeg check` reports the miss at the edge vertices.
 
-**Need.** A cone pcurve with a negative cosine, an offset-derived `u_scale`, and a known surface position would distinguish the chart direction and scale. Without that evidence, the current text is a promotion of the implementation's choice, not proof that the file format uses it.
-
-**Note.** QA sweep locations: `crates/cadmpeg-asm/src/nurbs/proc_curve.rs:79-164`; the synthetic tests are at `:3111-3145`. A test that supplies tokens constructed by the same rule is counter-evidence only for arithmetic consistency, not for the native rule.
+**Note.** The unit tests in `nurbs/support_chart/tests.rs` construct vertices from the stated rule. They test the agreement of the chart conversion with the decoded cone frame for each sign of `sine` and `cosine`; they are not evidence for the native scale.
 
 ### GC-34. Pcurve interval eligibility tolerance
 
@@ -168,13 +166,11 @@ If an endpoint overshoots by less than the hard-coded tolerance, the decoder sil
 
 **Question.** Which member of an embedded blend support gives the surface-normal side of that support?
 
-**Known.** `cadmpeg-ir` defines `BlendSupport.reversed` as selecting the opposite surface-normal side. `emit_blend_surface` writes `reversed: false` at both support construction sites. The embedded support readers in `nurbs/proc_curve.rs` consume and discard a Boolean after analytic support fields: the plane, cone, sphere, and torus branches each read one such Boolean. `asm.md` §6.2 gives the top-level analytic layouts without assigning this trailing Boolean to a support-reversal member.
+**Known.** `cadmpeg-ir` defines `BlendSupport.reversed` as selecting the opposite surface-normal side. `emit_blend_surface` writes `reversed: false` at both support construction sites. The embedded support readers in `nurbs/proc_curve.rs` consume one Boolean after the analytic support fields of a plane, cone, sphere, or torus. `asm.md` §6.2 assigns that Boolean: it is the v-sense logical of a plane, sphere, or torus and the u-sense logical of a cone. It selects a parameter direction, not the surface-normal side. No other embedded support field is known to select the normal side, so `BlendSupport.reversed` has no reader on this path.
 
-If the discarded Boolean is the support reversal, every reversed blend support is emitted on the wrong side. If it is another native field, `BlendSupport.reversed` has no reader and the neutral field is misleading. In both cases the current code selects a meaning without evidence.
+**Need.** A paired support/face specimen or an authoritative field description must give the native member that selects the normal side of an embedded blend support, or show that no such member exists. The answer determines whether the neutral field must be populated or removed from this path.
 
-**Need.** A paired support/face specimen or an authoritative field description must bind the Boolean to surface reversal or to another native member. The answer determines whether the neutral field must be populated or removed from this path.
-
-**Note.** QA sweep locations: `crates/cadmpeg-asm/src/nurbs/proc_curve.rs:2481-2583,2631-2733`, `crates/cadmpeg-asm/src/nurbs/blend.rs:384-440`, and `crates/cadmpeg-asm/src/brep/emit.rs:2441-2483`. The field is structurally consumed, but no current specification paragraph assigns its semantics.
+**Note.** QA sweep locations: `crates/cadmpeg-asm/src/nurbs/proc_curve.rs:2481-2583,2631-2733`, `crates/cadmpeg-asm/src/nurbs/blend.rs:384-440`, and `crates/cadmpeg-asm/src/brep/emit.rs:2441-2483`.
 
 ### GC-36. Ownership and width of decoded NURBS cache blocks
 
@@ -211,6 +207,82 @@ identity that does not own the admitted carrier.
 **Note.** Do not use first-definition order as construction identity. Reject an ambiguous owner when
 the record grammar does not identify one construction.
 
+### GC-38. Reversed-sense pcurve charts
+
+**Question.** Does a `TRUE` v-sense logical (`reverse_v`) negate the second pcurve chart coordinate of a plane, sphere, or torus, and does a `TRUE` cone u-sense logical (`reversed`) negate the first cone chart coordinate?
+
+**Known.** `asm.md` §6.2 states both negations. In authored streams, the `forward_v` plane, sphere, and torus charts and the `forward` cylinder chart reach their edge vertices. No authored stream has a face-bound pcurve on a `reverse_v` plane, sphere, or torus, on a `reversed` cone, on a sphere with a negative radius, or on a torus with a negative minor radius. In the fifteen available Fusion designs, face-bound pcurves lie only on `forward_v` planes, spheres, and tori and on `forward` cylinders; the 54 `reverse_v` plane faces and the 205 `reversed` cylinder faces carry none, and no face lies on a `reversed` cone with nonzero `sine`, a sphere with a negative radius, or a torus with a negative minor radius. `analytic_support` in `nurbs/proc_curve.rs` implements the stated rule.
+
+**Need.** A pcurve with known edge vertices on each of these supports, in a stream a modeller wrote, confirms the rule. A wrong sign mirrors the pcurve in the support chart, and `cadmpeg check` reports the miss at the edge vertices.
+
+**Note.** Builder fixtures do contain these pcurves. `nurbs/support_chart/tests.rs` has one on every listed support, `nurbs/pcurve/tests/side_charts.rs` has blend pcurves on `reverse_v` planes and on a `reversed` inward cylinder, and the `cadmpeg-codec-sat` decode tests have a triangle on a `reverse_v` plane. Each fixture places its vertices by the stated rule, so it tests that the decoder follows the rule; it is not evidence for the native convention.
+
+### GC-39. Chart of the secondary blend pcurves
+
+**Question.** In which chart are the secondary and tertiary pcurves of a rolling-ball side, the secondary and tertiary pcurves of a rolling-ball third side, the second pcurve of a G2 blend side, the tertiary pcurve of a G2 first-side `none` branch, and the post pcurve of a variable blend stored?
+
+**Known.** `asm.md` §6.2 gives the support chart of the primary side pcurve, which is the contact track. The layouts store the other pcurves after the same support, but no field relates them to that support or to another surface. The decoder keeps their stored control points. In the eight available Fusion designs, the 1120 rolling-ball sides store `nullbs` in the primary, secondary, and tertiary slots, the decoded variable blends store no post pcurve, and no record is a G2 blend.
+
+**Need.** A stream with one of these pcurves present, together with the surface whose chart reproduces a known point of the construction, gives the chart. A pcurve on an analytic support then converts with the rule of §6.2, and the F3D writer inverts it.
+
+### GC-40. Support parameters of a revolved conic
+
+**Question.** How does the neutral model state an intersection support whose pcurves use the parameters of a `rot_spl_sur` construction with an `ellipse` profile, when the solved B-spline surface of that construction has other parameters at the same points?
+
+**Known.** `asm.md` §6.3 `rot_spl_sur` gives the profile curve, axis, and solved surface. In an `int_int_cur` whose support is such a surface, the support pcurve stores the conic angle of the profile `ellipse` as U and the right-handed revolution angle about the stored axis direction as V. The solved surface uses rational quadratic arcs whose knots are the same angles; between knots its parameter is not the angle. One stream with an oblate revolved ellipse misses its intcurve end points by 0.065 mm and 0.104 mm when the pcurve is evaluated on the solved surface, and by less than `1e-8` mm when the same parameters are evaluated on the exact revolution or mapped through the half-angle relation of each rational arc.
+
+**Need.** The support contract and the pcurve evaluation require the exact construction. The decoder can state the exact revolution with a conic directrix, but a direct procedural carrier cannot keep the solved surface and its fit tolerance, and a procedural carrier with a solved cache evaluates on the cache.
+
+**Conflict.** `cad-ir.md` reads `cache_fit_tolerance` as the deviation between the construction and its solved carrier at the same parameters. These solved surfaces agree with the construction in position, not in parameters. The model needs a decision: retain such a cache without evaluation precedence, map pcurves into the cache parameters, or keep the support pcurve out of the contract.
+
+### GC-41. Origin of the `helix_int_cur` apex term
+
+**Question.** Does the apex term of a `helix_int_cur` count revolutions from angle zero or from the interval start `t0`?
+
+**Known.** `asm.md` §6.3 `helix_int_cur` counts the pitch term from angle zero: the edge endpoints of helices with a nonzero `t0` lie on their vertices only with `q=t/(2π)`. The formula of that paragraph and the evaluator apply the same `q` to the apex term. No decoded helix has both a nonzero `t0` and a nonzero apex factor, and at `t0=0` the two origins agree.
+
+**Need.** A conical helix with a nonzero `t0` and a nonzero apex factor, together with its edge vertices, separates the two origins. A wrong origin offsets the radius of every evaluated point by the same length.
+
+### GC-42. Profile angle of a `helix_spl_circ`
+
+**Question.** Which point of the profile circle does a profile parameter `u` select, and what does the angle stored before the path control?
+
+**Known.** `asm.md` §6.3 `helix_spl_circ` gives the swept circle. The stored angle is `0`, `π`, or `-π`. The map `u ↦ C(t)+r·(-cos(u+a)·ρ̂(t)+sin(u+a)·n)`, with `a` the stored angle and `ρ̂(t)` the unit vector of `ρ(t)`, puts the pcurves of helix and spline edges on their edges. It puts some pcurves of circular cap edges a quarter or half turn away from their edges. On two coil faces with `a=0`, a zero apex factor, and a path interval starting at `t=0`, every trim pcurve endpoint, including the `u=±π` ends of the circular cap-edge pcurves, maps onto its edge vertex, and `u=±π` gives the outer seam helix at distance `|major|+r` from the axis.
+
+**Need.** A writer that emits pcurves on this surface needs the map. A rule that also holds for the cap-edge pcurves settles it.
+
+### GC-43. Tangential and apex terms of a `helix_spl_line` profile
+
+**Question.** Does the `y` coefficient of a `helix_spl_line` direction scale `τ(t)`, and does the profile vector include the apex factor's radial scale?
+
+**Known.** `asm.md` §6.3 `helix_spl_circ` gives the linear surface `S(u,t)` with `y` on `τ(t)` and no apex scale. Every decoded direction has `y=0`, and every decoded path has a zero apex factor, so neither term is observed.
+
+**Need.** A thread surface with a tangential profile component or on a conical path, together with its edges, fixes both terms.
+
+### GC-44. Blend supports whose cache misses the intersection curve
+
+**Question.** Which contract does an `int_int_cur` meet when its support is a blend spline surface whose solved cache lies farther from the intersection curve than the cache fit tolerance?
+
+**Known.** `asm.md` §6.3 "**`int_int_cur`** has context-first" states the construction as the intersection of the two ordered supports, each with a BS2 parameter curve. An embedded `spline` support decodes to its solved NURBS cache; its subtype and its cache fit tolerance are not retained. For `rb_blend_spl_sur` and `srf_srf_v_bl_spl_sur` supports the cache fit tolerance is at most `0.01` mm, but the intersection curve endpoints lie up to `0.033` mm from the cache surface, and the support pcurve endpoints mapped through the cache lie up to `0.066` mm from them. The edges on these curves carry no tolerance. `asm.md` §6.3 "**`var_blend_spl_sur` / `srf_srf_v_bl_spl_sur`**" defines an approximation-current integer: `0` marks a cache that does not describe the surface.
+
+**Need.** The approximation-current values and cache fit tolerances of the failing supports, together with the exact blend surface evaluated at the support pcurve endpoints, show whether the cache or the pcurve departs from the construction. That evidence fixes the endpoint contract of such a support.
+
+### GC-45. Shift and scale of a reversed `off_surf_int_cur`
+
+**Question.** How do the shift and scale of an `off_surf_int_cur` relate the curve parameter to the parameter of its base curve, and how does a reversed record sense change that relation?
+
+**Known.** `asm.md` §6.3 "**`off_surf_int_cur`**" stores base-surface U and V intervals, a base curve with its interval, and distance, shift, and scale doubles; it does not state the map that shift and scale define. `asm.md` §6.6 "An `intcurve` or `spline` record" states that a reversed intcurve parameterizes as the negation of its cache and keeps its support pcurves on the subtype parameter. The decoder restates the support context of a reversed record on `-t`, swaps the two base endpoints so that each stays paired with its context endpoint, and keeps the base ranges, shift, and scale as stored.
+
+**Need.** A reversed and a forward `off_surf_int_cur` on the same base curve, with the base-curve parameter of known points on the cache, give the map and whether reversal negates scale or moves shift.
+
+### GC-46. Selector of a reversed `sss_int_cur`
+
+**Question.** Does the integer selector of an `sss_int_cur` choose an intersection branch by the direction of the curve, so that a reversed record selects another branch?
+
+**Known.** `asm.md` §6.3 "**`sss_int_cur`**" stores the surface-related prefix, an integer selector, and a third support surface with its BS2 parameter curve. It does not state what the selector chooses. The decoder restates the support context and the third side of a reversed record on `-t` and keeps the selector as stored.
+
+**Need.** A reversed and a forward `sss_int_cur` through the same three supports, with their selectors, show whether the selector depends on the curve direction.
+
 ## 2. Topology
 
 ### TG-01. Missing partner coedge substitution
@@ -229,13 +301,13 @@ If one coedge of a valid pair is dropped because its face carrier is unavailable
 
 **Question.** Which native member gives an ASM body's `Solid`, `Sheet`, or `General` kind?
 
-**Known.** `asm.md` §5.2 documents the body flags/history field and topology links but does not define a body-kind member. `classify_body_kinds` in `brep/geometry.rs` sets `Wire` or `General` from visible topology, then labels a face-bearing body `Solid` when every counted edge has exactly two coedge uses and `Sheet` otherwise. It runs only after model transfer and records no inference or loss.
+**Known.** `asm.md` §5.2 documents the body flags/history field and topology links but does not define a body-kind member. `classify_body_kinds` in `brep/geometry.rs` sets `Wire` or `General` from visible topology, then labels a face-bearing body `Solid` through `faced_body_kind`: every counted edge has as many forward as reversed coedge uses, and at least one edge is counted. Edges that collapse to a point (null or `degenerate_curve` carrier and one vertex, `asm.md` §6.3) are not counted, because a point loop at a cone apex or sphere pole bounds no area. A non-manifold edge with a balanced partner cycle (`asm.md` §5.2) closes its faces like a two-use edge. Any other face-bearing body is `Sheet`. The rule runs only after model transfer and records no inference or loss. The source-less F3D writer applies the same rule to refuse a body whose declared kind contradicts its topology.
 
-If a closed sheet or a body with a non-manifold internal face has every edge counted twice, the rule emits `Solid`. If a solid has a missing coedge, it emits `Sheet`. The same topological count can therefore select different native body meanings without reading a source discriminator.
+Specimens with all faces single-sided and one lump and shell include closed bodies with apex point loops and with a four-use edge where two pieces of material touch along a line. An exact two-use rule labels both as `Sheet`. If a closed sheet or a body with a non-manifold internal face has balanced edge uses, the rule emits `Solid`. If a solid has a missing coedge, it emits `Sheet`. Face sidedness does not enter the rule, and no specimen has a closed body with double-sided faces. The same topological count can therefore still select different native body meanings without reading a source discriminator.
 
 **Need.** A body-kind field, an authoritative topology invariant, or a specimen with a body whose stored metadata separates solid and sheet states must settle the rule. Until then the neutral body kind is an inference from the output graph.
 
-**Note.** QA sweep locations: `crates/cadmpeg-asm/src/brep/geometry.rs:1099-1168` and `crates/cadmpeg-asm/src/brep/mod.rs:673-681`. The edge-count rule is valid for ordinary two-manifold solids, but that does not establish it for all bodies.
+**Note.** QA sweep locations: `classify_body_kinds`, `faced_body_kind`, and `collapsed_edges` in `crates/cadmpeg-asm/src/brep/geometry.rs`, called from `decode_with_purpose` in `crates/cadmpeg-asm/src/brep/mod.rs`. The balance rule is valid for two-manifold solids, for touching-material edges, and for apex point loops, but that does not establish it for all bodies.
 
 ### TG-03. Normal sign of an analytic procedural carrier
 
@@ -319,3 +391,14 @@ projection.
 **Known.** `asm.md` §6.3 "**Law formulas**" names `SIGN` as a unary operator. Its serialized form has one recursively framed operand and no field that selects a zero convention. The format model does not give its value at zero.
 
 **Need.** A source rule or a law-driven construction with a defined value at an operand zero must settle whether `SIGN(0)` is zero, positive one, negative one, or has no value. This determines the section of a cacheless law-driven sweep at that parameter.
+
+## 6. Construction history
+
+### HS-01. Role of the first `history_stream` preamble field
+
+**Question.** What does the first preamble field, `stream_size`, identify?
+
+**Known.** `asm.md` §3.1 "The history-container record" gives the preamble. The linked `delta_state` chain runs from the current model toward the initial model, and its head is the current model. Usually `stream_size` equals the `state_id` of the head. A head can also have `state_id` `0` and be followed by the state whose `state_id` is `stream_size`. And `stream_size` can be a value that no `state_id` in the chain has.
+
+**Need.** A writer that adds a state must write a correct `stream_size`.
+

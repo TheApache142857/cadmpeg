@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-use cadmpeg_core::CodecError;
-
-use super::super::native_loop_ring;
+use super::super::{native_coedge_sense, native_loop_ring};
 
 fn native_loop() -> crate::topology::Loop {
     crate::test_support::closed_loop(
@@ -17,88 +14,72 @@ fn native_loop() -> crate::topology::Loop {
                 curve_id: 11,
                 side: crate::topology::Side::One,
             },
+            crate::topology::HalfEdgeId {
+                curve_id: 12,
+                side: crate::topology::Side::Zero,
+            },
         ],
     )
 }
 
-fn ring_result(
-    collection_limit: u64,
-    retained_limit: u64,
-) -> Result<cadmpeg_ir::topology::LoopRing, CodecError> {
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = collection_limit;
-    policy.limits.max_retained_bytes = retained_limit;
-    let (ctx, _) =
-        DecodeContext::from_root_bytes(&[], &arena, &policy).expect("empty root admitted");
-    native_loop_ring(&ctx, &native_loop(), 5)
-}
-
-fn assert_refusal(error: &CodecError, dimension: ResourceDimension, operation: &'static str) {
-    assert!(
-        matches!(error, CodecError::ResourceLimit(resource)
-        if resource.dimension == dimension && resource.operation == operation),
-        "{error:?}"
-    );
-}
-
 #[test]
-fn brep_ring_coedge_ids_refuse_collection_limit() {
-    assert_refusal(
-        &ring_result(0, u64::MAX).expect_err("ring Vec refused"),
-        ResourceDimension::CollectionItems,
-        "creo B-rep ring coedge IDs",
-    );
-}
-
-#[test]
-fn brep_ring_coedge_identities_refuse_retained_limit() {
-    assert_refusal(
-        &ring_result(
-            16,
-            crate::test_support::allocation_limit_at(
-                cadmpeg_core::decode::ResourceDimension::RetainedBytes,
-                Some("creo B-rep ring coedge identities"),
-                |cap| ring_result(16, cap),
-            ),
-        )
-        .expect_err("ring ID refused"),
-        ResourceDimension::RetainedBytes,
-        "creo B-rep ring coedge identities",
-    );
-}
-
-#[test]
-fn brep_ring_validation_nodes_refuse_collection_limit() {
-    assert_refusal(
-        &ring_result(2, u64::MAX).expect_err("validation node refused"),
-        ResourceDimension::CollectionItems,
-        "loop ring members",
-    );
-}
-
-#[test]
-fn brep_native_loop_ring_preserves_service_order() {
-    let ring = ring_result(16, u64::MAX).expect("service native ring admitted");
+fn brep_native_loop_ring_reverses_native_traversal() {
+    let ring = (native_loop_ring(&native_loop(), 5)).expect("build the native loop ring");
     assert_eq!(
         ring.coedges()
             .iter()
             .map(cadmpeg_ir::ids::CoedgeId::as_str)
             .collect::<Vec<_>>(),
-        ["creo:visibgeom:coedge#10:0", "creo:visibgeom:coedge#11:1"]
+        [
+            "creo:visibgeom:coedge#12:0",
+            "creo:visibgeom:coedge#11:1",
+            "creo:visibgeom:coedge#10:0"
+        ]
     );
 }
 
 #[test]
+fn clockwise_native_triangle_transfers_to_a_continuous_counterclockwise_ring() {
+    let native = native_loop();
+    let ring = native_loop_ring(&native, 5).expect("triangle ring");
+    let edges = [
+        [[0.0, 0.0], [0.0, 2.0]],
+        [[3.0, 0.0], [0.0, 2.0]],
+        [[3.0, 0.0], [0.0, 0.0]],
+    ];
+    let directed: Vec<_> = ring
+        .coedges()
+        .iter()
+        .map(|id| {
+            let half_edge = native
+                .half_edges()
+                .iter()
+                .find(|half_edge| {
+                    id.as_str()
+                        == format!(
+                            "creo:visibgeom:coedge#{}:{}",
+                            half_edge.curve_id,
+                            half_edge.side.index()
+                        )
+                })
+                .expect("native edge");
+            let mut endpoints =
+                edges[usize::try_from(half_edge.curve_id - 10).expect("edge index")];
+            if native_coedge_sense(half_edge.side) == cadmpeg_ir::topology::Sense::Reversed {
+                endpoints.reverse();
+            }
+            endpoints
+        })
+        .collect();
+    let mut twice_area = 0.0;
+    for (edge, next) in directed.iter().zip(directed.iter().cycle().skip(1)) {
+        assert_eq!(edge[1], next[0]);
+        twice_area += edge[0][0] * edge[1][1] - edge[1][0] * edge[0][1];
+    }
+    assert_eq!(twice_area, 6.0);
+}
+
+#[test]
 fn brep_loop_ring_error_refuses_empty_source_ring_before_projection() {
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_retained_bytes = 0;
-    let (ctx, _) =
-        DecodeContext::from_root_bytes(&[], &arena, &policy).expect("empty root admitted");
-    assert!(
-        crate::topology::Loop::new(&ctx, std::num::NonZeroU32::new(5), Vec::new(), &[])
-            .expect("no allocation for invalid ring")
-            .is_none()
-    );
+    assert!(crate::topology::Loop::new(std::num::NonZeroU32::new(5), Vec::new(), &[]).is_none());
 }

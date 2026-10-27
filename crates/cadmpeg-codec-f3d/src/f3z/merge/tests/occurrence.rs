@@ -16,8 +16,8 @@ use cadmpeg_ir::transform::Transform;
 use cadmpeg_ir::Native;
 
 use crate::f3z::merge::{
-    append_feature_history, compose_transforms, extend_native, occurrence_key,
-    reparent_component_roots, rescope_record, OccurrenceScope,
+    append_feature_history, extend_native, occurrence_key, reparent_component_roots,
+    OccurrenceScope,
 };
 use crate::records::xref::XrefReference;
 use cadmpeg_ir::features::FeatureOperation;
@@ -57,10 +57,7 @@ fn component_feature_history_follows_the_parent_without_losing_relative_order() 
         feature("f3d:test:feature#component-1", 12),
     ];
 
-    crate::test_support::with_decode_context(|ctx| {
-        append_feature_history(ctx, &parent, &mut component)
-    })
-    .unwrap();
+    append_feature_history(&parent, &mut component).unwrap();
 
     assert_eq!(
         component
@@ -79,10 +76,7 @@ fn component_feature_history_refuses_an_exhausted_ordinal_domain() {
     let mut component = Model::default();
     component.features = vec![feature("f3d:test:feature#component", 0)];
 
-    let error = crate::test_support::with_decode_context(|ctx| {
-        append_feature_history(ctx, &parent, &mut component)
-    })
-    .unwrap_err();
+    let error = append_feature_history(&parent, &mut component).unwrap_err();
 
     assert!(error
         .to_string()
@@ -90,7 +84,7 @@ fn component_feature_history_refuses_an_exhausted_ordinal_domain() {
 }
 
 #[test]
-fn occurrence_transform_composes_outside_existing_body_transform() {
+fn member_definition_preserves_the_body_transform_inside_each_placement() {
     let outer = Transform::affine([
         [0.0, -1.0, 0.0, 20.0],
         [1.0, 0.0, 0.0, 30.0],
@@ -104,8 +98,19 @@ fn occurrence_transform_composes_outside_existing_body_transform() {
     ])
     .expect("affine transform");
 
+    let ctx = cadmpeg_test_support::service_decode_context();
+    let mut model = cadmpeg_ir::examples::unit_cube().unwrap().model;
+    model.bodies[0].transform = Some(inner);
+    crate::f3z::merge::define_member(&ctx, &mut model, "member").unwrap();
     assert_eq!(
-        compose_transforms(outer, inner).unwrap().rows(),
+        model.product_definitions[0].bodies,
+        [model.bodies[0].id.clone()]
+    );
+    assert_eq!(
+        outer
+            .compose(model.bodies[0].transform.unwrap())
+            .unwrap()
+            .rows(),
         [
             [0.0, -1.0, 0.0, 20.0],
             [1.0, 0.0, 0.0, 35.0],
@@ -154,12 +159,7 @@ fn merged_component_root_occurrences_become_children_of_the_outer_instance() {
         },
     ];
 
-    reparent_component_roots(
-        &cadmpeg_test_support::service_decode_context(),
-        &mut occurrences,
-        &outer,
-    )
-    .unwrap();
+    reparent_component_roots(&mut occurrences, &outer).unwrap();
 
     assert!(matches!(
         occurrences[0].parent,
@@ -169,39 +169,6 @@ fn merged_component_root_occurrences_become_children_of_the_outer_instance() {
         occurrences[1].parent,
         OccurrenceParent::Occurrence { ref occurrence } if occurrence == &root_child
     ));
-}
-
-#[test]
-fn reparent_component_root_refuses_retained_identity_limit() {
-    use cadmpeg_ir::ids::OccurrenceId;
-    use cadmpeg_ir::products::{Occurrence, OccurrenceParent, PrototypeReference};
-
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    let parent = OccurrenceId::mint("f3d:model:occurrence#xref-0-0").unwrap();
-    policy.limits.max_retained_bytes = u64::try_from(parent.as_str().len() - 1).unwrap();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let mut occurrences = vec![Occurrence {
-        id: OccurrenceId::mint("f3d:model:occurrence#child").unwrap(),
-        prototype: PrototypeReference::Unresolved {},
-        parent: OccurrenceParent::Root {},
-        ordinal: 0,
-        transform: Transform::identity(),
-        linked_prototype: None,
-        scale: [cadmpeg_ir::scalar::FiniteReal::ONE; 3],
-        name: None,
-        visible: None,
-        link: None,
-        native_ref: None,
-    }];
-
-    let error = reparent_component_roots(&ctx, &mut occurrences, &parent).unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "copy F3Z parent occurrence identity")
-    );
-    assert!(matches!(occurrences[0].parent, OccurrenceParent::Root {}));
 }
 
 #[test]
@@ -230,12 +197,7 @@ fn repeated_occurrence_merge_remaps_typed_graphs_disjointly() {
             occurrence: &occurrence,
         };
         merged
-            .extend_rewritten(
-                &ctx,
-                component.clone(),
-                &mut scope,
-                "append F3Z model entities",
-            )
+            .extend_rewritten(component.clone(), &mut scope)
             .expect("merge component arenas");
     }
 
@@ -277,81 +239,6 @@ fn occurrence_merge_preserves_a_body_name_that_spells_its_identity() {
         "f3d:xref/component-0/model:region#source"
     );
     assert_eq!(scoped.name.as_deref(), Some(source_id));
-}
-
-#[test]
-fn occurrence_model_identity_rescope_refuses_retained_limit() {
-    use cadmpeg_ir::document::EntityRewrite;
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_retained_bytes = 0;
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let body = Body {
-        id: BodyId::mint("f3d:model:body#source").unwrap(),
-        kind: BodyKind::Solid,
-        regions: Vec::new(),
-        transform: None,
-        name: None,
-        color: None,
-        visible: None,
-    };
-    let error = OccurrenceScope {
-        ctx: &ctx,
-        occurrence: "component-0",
-    }
-    .rewrite(body)
-    .unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "rescope F3Z identity")
-    );
-}
-
-#[test]
-fn occurrence_native_identity_rescope_refuses_retained_limit() {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    let record = cadmpeg_ir::NativeRecord::new(
-        cadmpeg_ir::ids::Identity::new("f3d:model:native#source").expect("fixture identity"),
-        serde_json::Map::new(),
-    )
-    .unwrap();
-    policy.limits.max_retained_bytes =
-        u64::try_from(serde_json::to_vec(&record).unwrap().len()).unwrap();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let error = rescope_record(&ctx, &record, "unknowns", "component-0").unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "rescope F3Z identity")
-    );
-}
-
-#[test]
-fn occurrence_native_field_clone_refuses_collection_limit() {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let mut fields = serde_json::Map::new();
-    fields.insert("links".into(), serde_json::json!(["f3d:model:body#source"]));
-    let record = cadmpeg_ir::NativeRecord::new(
-        cadmpeg_ir::ids::Identity::new("f3d:model:native#source").expect("fixture identity"),
-        fields,
-    )
-    .unwrap();
-    let error = rescope_record(&ctx, &record, "unknowns", "component-0").unwrap_err();
-    assert!(
-        matches!(&error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "copy native field sequence")
-    );
-    let cadmpeg_core::CodecError::ResourceLimit(first) = error else {
-        unreachable!()
-    };
-    assert!(matches!(ctx.finish_session(),
-        Err(cadmpeg_core::CodecError::ResourceLimit(sticky)) if sticky == first));
 }
 
 #[test]
@@ -407,50 +294,14 @@ fn occurrence_merge_remaps_and_retains_native_records() {
 }
 
 #[test]
-fn occurrence_merge_refuses_native_record_collection_limit() {
-    let mut component = Native::default();
-    component
-        .namespace_mut("f3d")
-        .set_arena(
-            &cadmpeg_test_support::service_decode_context(),
-            "xref_designs",
-            &[crate::records::xref::XrefDesign {
-                id: "f3d:xref:design#0".into(),
-                ordinal: 0,
-                file_version: 1,
-                target_file_name: "part.f3d".to_owned().try_into().unwrap(),
-                display_name: "Part".into(),
-                lineage_urn: "lineage".into(),
-                version_urn: "version".into(),
-            }],
-        )
-        .unwrap();
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let mut root = Native::default();
-
-    let error = extend_native(&ctx, &mut root, component, "component-0").unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "append F3Z native records")
-    );
-}
-
-#[test]
 fn occurrence_configuration_survives_document_and_typed_native_admission() {
     use crate::records::configuration::{DesignConfiguration, DesignConfigurationKind};
-    let configuration = crate::test_support::with_decode_context(|ctx| {
-        DesignConfiguration::try_new_charged(
-            ctx,
-            "Design/table.dsgcfg".into(),
-            DesignConfigurationKind::Table,
-            Vec::new(),
-            serde_json::Map::new(),
-        )
-    })
+    let configuration = DesignConfiguration::try_new(
+        "Design/table.dsgcfg".into(),
+        DesignConfigurationKind::Table,
+        Vec::new(),
+        serde_json::Map::new(),
+    )
     .unwrap();
     let mut component = Native::default();
     component
@@ -502,15 +353,12 @@ fn occurrence_merge_scopes_admitted_native_references_and_preserves_configuratio
     .as_object()
     .expect("object configuration payload")
     .clone();
-    let configuration = crate::test_support::with_decode_context(|ctx| {
-        DesignConfiguration::try_new_charged(
-            ctx,
-            "Design/table.dsgcfg".into(),
-            DesignConfigurationKind::Table,
-            Vec::new(),
-            configuration_payload.clone(),
-        )
-    })
+    let configuration = DesignConfiguration::try_new(
+        "Design/table.dsgcfg".into(),
+        DesignConfigurationKind::Table,
+        Vec::new(),
+        configuration_payload.clone(),
+    )
     .expect("admitted configuration payload");
     let visibility = BodyVisibility::try_from(crate::records::bodies::BodyVisibilityWire {
         id: "f3d:Design/BulkStream.dat:body-visibility#3".into(),
@@ -584,14 +432,11 @@ fn occurrence_merge_scopes_admitted_native_references_and_preserves_configuratio
 #[test]
 fn occurrence_key_preserves_authored_roles() {
     assert!(crate::records::xref::RequiredXrefText::try_from(String::new()).is_err());
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::service();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
     let reference = |role: &str, ordinal: u32| XrefReference {
         id: "f3d:xref:reference#1".into(),
         ordinal,
         occurrence_ordinal: 0,
+        placement_source: None,
         from: "root.f3d".to_owned().try_into().unwrap(),
         relative_path: "part.f3d".to_owned().try_into().unwrap(),
         neutron_role: role.to_owned().try_into().unwrap(),
@@ -600,28 +445,25 @@ fn occurrence_key_preserves_authored_roles() {
     };
 
     assert_eq!(
-        occurrence_key(&ctx, &reference("ordinal-7", 7)).unwrap(),
+        occurrence_key(&reference("ordinal-7", 7)),
         "role-ordinal-7/reference-7/occurrence-0"
     );
     assert_eq!(
-        occurrence_key(&ctx, &reference("role /#: value", 7)).unwrap(),
+        occurrence_key(&reference("role /#: value", 7)),
         "role-role%20%2F%23%3A%20value/reference-7/occurrence-0"
     );
-    let key = occurrence_key(&ctx, &reference("role /#: value", 7)).unwrap();
+    let key = occurrence_key(&reference("role /#: value", 7));
     cadmpeg_ir::ids::Identity::new(format!("f3d:xref/{key}/native:record#1"))
         .expect("encoded occurrence key remains an admitted identity scope");
 }
 
 #[test]
 fn occurrence_key_separates_same_role_references_with_reset_ordinals() {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::service();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
     let reference = |ordinal| XrefReference {
         id: format!("f3d:xref:reference#{ordinal}"),
         ordinal,
         occurrence_ordinal: 0,
+        placement_source: None,
         from: "root.f3d".to_owned().try_into().unwrap(),
         relative_path: format!("part-{ordinal}.f3d").try_into().unwrap(),
         neutron_role: "same-role".to_owned().try_into().unwrap(),
@@ -630,120 +472,591 @@ fn occurrence_key_separates_same_role_references_with_reset_ordinals() {
     };
 
     assert_ne!(
-        occurrence_key(&ctx, &reference(0)).unwrap(),
-        occurrence_key(&ctx, &reference(1)).unwrap(),
+        occurrence_key(&reference(0)),
+        occurrence_key(&reference(1)),
         "reference ordinal is part of the occurrence owner when role ordinals reset"
     );
 }
 
 #[test]
-fn occurrence_key_refuses_retained_limit() {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
+fn merged_documents_keep_parameter_names_and_document_local_expression_dependencies() {
+    use crate::f3z::merge::scope_document_parameters;
+
+    let ctx = cadmpeg_test_support::service_decode_context();
+    let (mut parent, mut native) = parameter_document(&ctx, 1.0);
+    let (mut component, component_native) = parameter_document(&ctx, 2.0);
+    let mut owned = component.parameters[1].clone();
+    let construction = feature("f3d:model:feature#consumer", 0);
+    owned.id = cadmpeg_ir::features::ParameterId::mint("f3d:model:parameter#input").unwrap();
+    owned.owner = Some(construction.id.clone());
+    owned.ordinal = 0;
+    component.parameters.push(owned);
+    component.features.push(construction);
+
+    scope_document_parameters(&ctx, &mut component).unwrap();
+    append_feature_history(&parent, &mut component).unwrap();
+    parent
+        .extend_rewritten(
+            component,
+            &mut OccurrenceScope {
+                ctx: &ctx,
+                occurrence: "component-0",
+            },
+        )
+        .unwrap();
+    extend_native(&ctx, &mut native, component_native, "component-0").unwrap();
+
+    assert_eq!(parent.parameters.len(), 5);
+    assert_eq!(parent.parameters[0].name, parent.parameters[2].name);
+    assert_eq!(parent.parameters[1].name, parent.parameters[3].name);
+    assert_ne!(parent.parameters[0].value, parent.parameters[2].value);
+    assert_eq!(
+        parent
+            .parameters
+            .iter()
+            .map(|parameter| parameter.ordinal)
+            .collect::<Vec<_>>(),
+        [0, 1, 0, 1, 0]
+    );
+    assert_eq!(parent.parameters[1].expression, "Span / 2");
+    assert_eq!(parent.parameters[3].expression, "Span / 2");
+    assert_eq!(parent.parameters[0].owner, None);
+    let scope = parent.parameters[2].owner.as_ref().unwrap();
+    assert_eq!(parent.parameters[3].owner.as_ref(), Some(scope));
+    assert_ne!(parent.parameters[4].owner.as_ref(), Some(scope));
+    assert_eq!(
+        parent.parameters[1].dependencies.as_slice(),
+        std::slice::from_ref(&parent.parameters[0].id)
+    );
+    assert_eq!(
+        parent.parameters[3].dependencies.as_slice(),
+        std::slice::from_ref(&parent.parameters[2].id)
+    );
+    assert_eq!(
+        parent.parameters[4].dependencies.as_slice(),
+        std::slice::from_ref(&parent.parameters[2].id)
+    );
+    let container = parent
+        .features
+        .iter()
+        .find(|feature| &feature.id == scope)
+        .unwrap();
+    assert!(matches!(
+        container.evaluation.definition(),
+        FeatureDefinition::Operation(FeatureOperation::TreeNode {
+            role: cadmpeg_ir::features::FeatureTreeNodeRole::Equations,
+            ..
+        })
+    ));
+    assert!(parent
+        .features
+        .iter()
+        .filter(|feature| &feature.id != scope)
+        .all(|feature| container.ordinal < feature.ordinal));
+    let mut ir = cadmpeg_ir::CadIr::empty();
+    ir.model = parent;
+    ir.native = native;
+    ir.finalize();
+    let report = cadmpeg_ir::validate::validate_neutral(&ir, Vec::new()).unwrap();
+    assert!(report.is_ok(), "{:?}", report.findings);
+}
+
+#[test]
+fn document_parameter_scope_is_charged_against_the_entity_budget() {
+    use crate::f3z::merge::scope_document_parameters;
+
     let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_retained_bytes = 0;
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let reference = XrefReference {
-        id: "f3d:xref:reference#1".into(),
-        ordinal: 1,
-        occurrence_ordinal: 0,
-        from: "root.f3d".to_owned().try_into().unwrap(),
-        relative_path: "part.f3d".to_owned().try_into().unwrap(),
-        neutron_role: "role /#: value".to_owned().try_into().unwrap(),
-        neutron_data: String::new(),
-        transform: None,
-    };
-    let error = occurrence_key(&ctx, &reference).unwrap_err();
+    policy.limits.max_entities = 0;
+    let arena = cadmpeg_core::decode::DecodeArena::new();
+    let ctx = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
+        .unwrap()
+        .0;
+    let (mut model, _) = parameter_document(&cadmpeg_test_support::service_decode_context(), 1.0);
+    let features = model.features.len();
+
+    let error = scope_document_parameters(&ctx, &mut model).unwrap_err();
     assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "retain F3Z occurrence key")
+        matches!(error, cadmpeg_core::CodecError::ResourceLimit(_)),
+        "{error:?}"
+    );
+    assert_eq!(model.features.len(), features);
+    assert!(model
+        .parameters
+        .iter()
+        .all(|parameter| parameter.owner.is_none()));
+}
+
+fn parameter_document(
+    ctx: &cadmpeg_core::decode::DecodeContext<'_>,
+    scalar: f64,
+) -> (Model, Native) {
+    use crate::design::feature_project::{
+        project_parameter_design_with_edge_identities, ProjectInputs,
+    };
+    use crate::design::test_support::synthetic_feature_timelines;
+    use crate::records::parameters::{
+        DesignParameter, DesignParameterDraft, DesignParameterSource,
+    };
+
+    let native = [("Span", "10 mm"), ("HalfSpan", "Span / 2")]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, (name, expression))| {
+            DesignParameter::try_from(DesignParameterDraft {
+                id: format!("f3d:native:parameter#{ordinal}"),
+                byte_offset: 0,
+                class_tag: "305".to_owned().try_into().unwrap(),
+                record_index: u32::try_from(ordinal).unwrap(),
+                source_ordinal: u32::try_from(ordinal).unwrap(),
+                source: DesignParameterSource::User {
+                    family_discriminator: None,
+                },
+                expression: expression.into(),
+                expression_offset: 1,
+                source_kind_offset: 2,
+                unit: Some(crate::records::identity::RecordedValue {
+                    value: "mm".into(),
+                    offset: 3,
+                }),
+                name: name.into(),
+                name_offset: 4,
+                evaluated_value: scalar,
+                evaluated_value_offset: 5,
+            })
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let timelines = synthetic_feature_timelines(&[]);
+    let projected = project_parameter_design_with_edge_identities(
+        ctx,
+        &ProjectInputs {
+            native: &native,
+            timelines: &timelines,
+            ..ProjectInputs::default()
+        },
+    )
+    .unwrap();
+    let mut model = Model::default();
+    model.parameters = projected.parameters;
+    model.features = projected.features;
+    let mut records = Native::default();
+    records
+        .namespace_mut("f3d")
+        .set_arena(ctx, "design_parameters", &native)
+        .unwrap();
+    (model, records)
+}
+
+#[test]
+fn external_placement_source_keeps_its_local_owner_and_scopes_its_stream() {
+    let mut fields = serde_json::json!({
+        "placement_source": {
+            "stream": "f3d:Design/BulkStream.dat",
+            "carrier_record_index": 71,
+            "owner": { "target": 19, "type_guid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    crate::test_support::with_decode_context(|ctx| {
+        super::super::rescope_native_reference_fields(
+            ctx,
+            "xref_references",
+            &mut fields,
+            "part/occurrence-2",
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        fields["placement_source"]["stream"],
+        "f3d:xref/part/occurrence-2/Design/BulkStream.dat"
+    );
+    assert_eq!(fields["placement_source"]["carrier_record_index"], 71);
+    assert_eq!(fields["placement_source"]["owner"]["target"], 19);
+    assert_eq!(
+        fields["placement_source"]["owner"]["type_guid"],
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     );
 }
 
 #[test]
-fn occurrence_merge_refuses_destination_growth_before_rewriting() {
-    let mut component = Model::default();
-    component
-        .features
-        .push(feature("f3d:test:feature#child", 0));
-    let mut parent = Model::default();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    crate::test_support::with_decode_policy(&policy, |ctx| {
-        let mut scope = OccurrenceScope {
-            ctx,
-            occurrence: "child",
-        };
-        let error = parent
-            .extend_rewritten(ctx, component, &mut scope, "append F3Z model entities")
-            .unwrap_err();
-        let cadmpeg_core::CodecError::ResourceLimit(limit) = cadmpeg_core::CodecError::from(error)
-        else {
-            panic!("destination growth must refuse through the caller context");
-        };
-        assert_eq!(limit.operation, "append F3Z model entities");
-        assert_eq!(Some(limit), ctx.resource_refusal());
-        assert!(parent.features.is_empty());
-    });
-}
+fn repeated_local_owners_merge_each_external_child_tree_in_its_composed_frame() {
+    use crate::test_support::assembly_test::{
+        f3d_without_brep_with_xref_placement, f3z_archive, XREF_ROLE,
+    };
+    use crate::test_support::smbh_geometry_test::synthetic_geometry_smbh;
+    use crate::test_support::zip_test::f3d_with_smbh;
+    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
+    use cadmpeg_ir::ids::OccurrenceId;
+    use cadmpeg_ir::products::{
+        ExternalDocument, Occurrence, OccurrenceParent, PrototypeReference,
+    };
 
-#[test]
-fn feature_history_scans_preserve_work_refusals() {
-    let mut parent = Model::default();
-    parent.features = vec![
-        feature("f3d:test:feature#parent", 5),
-        feature("f3d:test:feature#other", 6),
-    ];
-    for (work, operation) in [
-        (0, "scan F3Z component feature ordinals"),
-        (1, "scan F3Z parent feature ordinals"),
-        (3, "rewrite F3Z feature ordinals"),
-    ] {
-        let mut component = Model::default();
-        component.features = vec![feature("f3d:test:feature#component", 10)];
-        let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-        policy.limits.max_work_units = work;
-        crate::test_support::with_decode_policy(&policy, |ctx| {
-            let error = append_feature_history(ctx, &parent, &mut component).unwrap_err();
-            let cadmpeg_core::CodecError::ResourceLimit(limit) = error else {
-                panic!("ordinal scan must refuse");
-            };
-            assert_eq!(limit.operation, operation);
-            assert_eq!(Some(limit), ctx.resource_refusal());
-            assert_eq!(component.features[0].ordinal, 10);
-        });
-    }
-}
-
-#[test]
-fn occurrence_body_composition_preserves_work_refusal() {
-    let mut model = Model::default();
-    model.bodies.push(Body {
-        id: BodyId::mint("f3d:brep:body#1").unwrap(),
-        name: None,
-        kind: BodyKind::Solid,
-        regions: Vec::new(),
+    let mut child_matrix = Transform::identity().rows();
+    child_matrix[1][3] = 0.5;
+    let member = f3d_without_brep_with_xref_placement(
+        "assembly-design",
+        "member.f3d",
+        "leaf.f3d",
+        XREF_ROLE,
+        child_matrix,
+    );
+    let leaf = f3d_with_smbh(&synthetic_geometry_smbh());
+    let archive = f3z_archive(
+        "member.f3d",
+        &[("member.f3d", &member), ("leaf.f3d", &leaf)],
+    );
+    let arena = DecodeArena::new();
+    let policy = DecodePolicy::default();
+    let (ctx, bytes) = DecodeContext::from_root_bytes(&archive, &arena, &policy).unwrap();
+    let scan = crate::container::scan(&ctx, bytes).unwrap();
+    let archive = crate::f3z::archive::classify_members(&ctx, &scan).unwrap();
+    let reference = XrefReference {
+        id: "f3d:xref:reference#0".to_owned(),
+        ordinal: 0,
+        occurrence_ordinal: 0,
+        placement_source: None,
+        from: "root.f3d".to_owned().try_into().unwrap(),
+        relative_path: "member.f3d".to_owned().try_into().unwrap(),
+        neutron_role: "outer-role".to_owned().try_into().unwrap(),
+        neutron_data: String::new(),
         transform: None,
-        visible: None,
-        color: None,
-    });
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_work_units = 0;
-    crate::test_support::with_decode_policy(&policy, |ctx| {
-        let transform = crate::records::xref::XrefPlacementTransform::try_from([
-            [1., 0., 0., 0.],
-            [0., 1., 0., 0.],
-            [0., 0., 1., 0.],
-            [0., 0., 0., 1.],
+    };
+    let table = crate::xref::XrefTable {
+        references: vec![reference],
+        ..Default::default()
+    };
+    let mut ir = cadmpeg_ir::examples::unit_cube().unwrap();
+    ir.model.bodies[0].transform = Some(
+        Transform::affine([
+            [1.0, 0.0, 0.0, 3.0],
+            [0.0, 1.0, 0.0, 7.0],
+            [0.0, 0.0, 1.0, 11.0],
+        ])
+        .unwrap(),
+    );
+    let root_body = ir.model.bodies[0].clone();
+    let mut children = Vec::new();
+    for index in 0..2 {
+        let parent = OccurrenceId::mint(format!("f3d:model:occurrence#group-{index}")).unwrap();
+        let transform = if index == 0 {
+            Transform::affine([
+                [0.0, -1.0, 0.0, 30.0],
+                [1.0, 0.0, 0.0, 40.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ])
+            .unwrap()
+        } else {
+            Transform::affine([
+                [1.0, 0.0, 0.0, 80.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ])
+            .unwrap()
+        };
+        let group = Occurrence {
+            id: parent.clone(),
+            prototype: PrototypeReference::Unresolved {},
+            parent: OccurrenceParent::Root {},
+            ordinal: index,
+            transform,
+            linked_prototype: None,
+            scale: [cadmpeg_ir::scalar::FiniteReal::ONE; 3],
+            name: None,
+            visible: None,
+            link: None,
+            native_ref: None,
+        };
+        let mut child = group.clone();
+        child.id = crate::ids::nested_xref_occurrence_id(&parent, 0, 0);
+        children.push(child.id.clone());
+        child.parent = OccurrenceParent::Occurrence { occurrence: parent };
+        child.prototype = PrototypeReference::External {
+            document: ExternalDocument::path("member.f3d"),
+            object: None,
+        };
+        child.transform = Transform::affine([
+            [1.0, 0.0, 0.0, 20.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
         ])
         .unwrap();
-        let error =
-            super::super::apply_occurrence_transform(ctx, &mut model, transform).unwrap_err();
-        let cadmpeg_core::CodecError::ResourceLimit(limit) = error else {
-            panic!("body composition must refuse");
+        child.native_ref = Some(table.references[0].id.clone());
+        ir.model.occurrences.extend([group, child]);
+    }
+    let mut report =
+        cadmpeg_ir::codec::DecodeBody::new(cadmpeg_ir::report::decode::DecodeTransfer::at(
+            cadmpeg_core::decode::DecodeDepth::Full,
+            false,
+        ));
+    let mut fidelity = cadmpeg_ir::SourceFidelity::default();
+    let merged = crate::f3z::merge::MergeSession {
+        ctx: &ctx,
+        scan: &scan,
+        archive: &archive,
+        stack: vec!["root.f3d".to_owned()],
+        members: std::collections::BTreeMap::new(),
+    }
+    .merge(&mut ir, &mut report, &mut fidelity, &table)
+    .unwrap();
+    assert_eq!(merged, 4);
+    assert_eq!(ir.model.bodies.len(), 2);
+    assert_eq!(ir.model.bodies[0], root_body);
+    assert!(ir.model.bodies[1].transform.is_none());
+    assert_eq!(ir.model.product_definitions.len(), 2);
+    let leaf_definition = ir
+        .model
+        .product_definitions
+        .iter()
+        .find(|definition| !definition.bodies.is_empty())
+        .unwrap();
+    assert_eq!(leaf_definition.bodies, [ir.model.bodies[1].id.clone()]);
+    let graph = cadmpeg_ir::products::AssemblyGraph::new(&ir.model.occurrences).unwrap();
+    let mut translations = Vec::new();
+    let mut member_definitions = Vec::new();
+    for child in children {
+        let imported = ir
+            .model
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence.parent
+                    == OccurrenceParent::Occurrence {
+                        occurrence: child.clone(),
+                    }
+            })
+            .unwrap();
+        let placing = ir
+            .model
+            .occurrences
+            .iter()
+            .find(|item| item.id == child)
+            .unwrap();
+        let PrototypeReference::Local { definition } = &placing.prototype else {
+            panic!("member placement must resolve locally");
         };
-        assert_eq!(limit.operation, "compose F3Z body transforms");
-        assert_eq!(Some(limit), ctx.resource_refusal());
-        assert!(model.bodies[0].transform.is_none());
-    });
+        member_definitions.push(definition.clone());
+        assert_eq!(
+            imported.prototype,
+            PrototypeReference::Local {
+                definition: leaf_definition.id.clone(),
+            }
+        );
+        let world =
+            cadmpeg_test_support::assembly::resolved_transform(&graph, &imported.id).unwrap();
+        let body_world = world
+            .compose(
+                ir.model.bodies[1]
+                    .transform
+                    .unwrap_or_else(Transform::identity),
+            )
+            .unwrap();
+        let rows = body_world.rows();
+        translations.push([rows[0][3], rows[1][3]]);
+        assert_eq!(imported.transform.rows()[1][3], 5.0);
+    }
+    let references: Vec<XrefReference> = ir
+        .native
+        .namespace("f3d")
+        .unwrap()
+        .arena_as_for_decode(&ctx, "xref_references")
+        .unwrap();
+    assert_eq!(references.len(), 1);
+    assert_eq!(references[0].relative_path.as_str(), "leaf.f3d");
+    assert_eq!(references[0].neutron_role.as_str(), XREF_ROLE);
+    assert_eq!(references[0].transform.unwrap().rows(), child_matrix);
+    assert_eq!(translations, [[25.0, 60.0], [100.0, 5.0]]);
+    assert_eq!(member_definitions[0], member_definitions[1]);
+    assert_eq!(ir.model.occurrences[1].transform.rows()[0][3], 20.0);
+    assert_eq!(ir.model.occurrences[3].transform.rows()[0][3], 20.0);
+}
+
+#[test]
+fn imported_definition_bodies_keep_their_definition_frame() {
+    let mut model = cadmpeg_ir::examples::unit_cube().unwrap().model;
+    let body = model.bodies[0].id.clone();
+    model
+        .product_definitions
+        .push(cadmpeg_ir::products::ProductDefinition {
+            id: cadmpeg_ir::ids::ProductDefinitionId::mint("f3d:model:component#owned").unwrap(),
+            kind: cadmpeg_ir::products::ProductDefinitionKind::Part,
+            bodies: vec![body],
+            source_name: None,
+            label: None,
+            description: None,
+            part_number: None,
+            bom_properties: std::collections::BTreeMap::new(),
+            sketches: Vec::new(),
+            native_ref: None,
+        });
+    let original = model.bodies[0].transform;
+    let mut free_body = model.bodies[0].clone();
+    free_body.id = BodyId::mint("f3d:model:body#free").unwrap();
+    free_body.regions.clear();
+    free_body.transform = Some(
+        Transform::affine([
+            [1.0, 0.0, 0.0, 20.0],
+            [0.0, 1.0, 0.0, 30.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ])
+        .unwrap(),
+    );
+    model.bodies.push(free_body.clone());
+    let ctx = cadmpeg_test_support::service_decode_context();
+    let definition = crate::f3z::merge::define_member(&ctx, &mut model, "member").unwrap();
+    assert_eq!(model.bodies[0].transform, original);
+    assert_eq!(model.bodies[1], free_body);
+    assert_eq!(model.product_definitions[1].id, definition);
+    assert_eq!(model.product_definitions[1].bodies, [free_body.id]);
+}
+
+#[test]
+fn shared_members_check_cycles_for_each_instance_path() {
+    use crate::test_support::assembly_test::{f3d_without_brep, f3z_archive};
+    use cadmpeg_ir::codec::{Codec, DecodeOptions};
+    use cadmpeg_ir::products::PrototypeReference;
+    use std::io::Cursor;
+
+    let root = f3d_without_brep(
+        "assembly-design",
+        "root.f3d",
+        &[("first.f3d", "first-role"), ("second.f3d", "second-role")],
+    );
+    let first = f3d_without_brep(
+        "assembly-design",
+        "first.f3d",
+        &[("second.f3d", "child-role")],
+    );
+    let second = f3d_without_brep(
+        "assembly-design",
+        "second.f3d",
+        &[("first.f3d", "child-role")],
+    );
+    let archive = f3z_archive(
+        "root.f3d",
+        &[
+            ("root.f3d", &root),
+            ("first.f3d", &first),
+            ("second.f3d", &second),
+        ],
+    );
+    let decoded = crate::F3dCodec
+        .decode(&mut Cursor::new(archive), &DecodeOptions::default())
+        .unwrap();
+    assert_eq!(decoded.ir().model.product_definitions.len(), 2);
+    assert_eq!(decoded.ir().model.occurrences.len(), 6);
+    assert_eq!(
+        decoded
+            .ir()
+            .model
+            .occurrences
+            .iter()
+            .filter(|item| matches!(item.prototype, PrototypeReference::Local { .. }))
+            .count(),
+        4
+    );
+    assert_eq!(
+        decoded
+            .report()
+            .losses
+            .iter()
+            .filter(|loss| loss.code == crate::F3dLossCode::XrefCycle.kind())
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn repeated_member_constraints_keep_shared_definitions_and_instance_local_operands() {
+    use cadmpeg_ir::ids::{OccurrenceId, ProductDefinitionId};
+    use cadmpeg_ir::products::JointId;
+    use cadmpeg_ir::products::{
+        AssemblyJoint, JointConnector, JointOperand, Occurrence, OccurrenceParent,
+        OperandContainer, PairedJointKind, PrototypeReference,
+    };
+    let definition = ProductDefinitionId::mint("f3d:model:product-definition#shared").unwrap();
+    let child = OccurrenceId::mint("f3d:xref/first/model:occurrence#child").unwrap();
+    let native_ref = "f3d:xref/first/Design/BulkStream.dat:design-parameter-scope#10";
+    let mut joint = AssemblyJoint::paired(
+        JointId::mint("f3d:xref/first/model:joint#group").unwrap(),
+        PairedJointKind::Fixed {
+            angle: None,
+            translation_offset: None,
+            angular_limits: None,
+            linear_limits: None,
+        },
+        [
+            JointConnector {
+                operand: JointOperand::root("root", Vec::new()),
+                frame: Transform::identity(),
+                detached: false,
+            },
+            JointConnector {
+                operand: JointOperand::occurrence(child.clone(), "child", Vec::new()),
+                frame: Transform::identity(),
+                detached: false,
+            },
+        ],
+        None,
+    );
+    joint.native_ref = Some(native_ref.to_owned());
+    let member = crate::f3z::merge::MemberDefinition {
+        definition: definition.clone(),
+        scope: "first".into(),
+        occurrences: vec![Occurrence {
+            id: child,
+            prototype: PrototypeReference::Local {
+                definition: definition.clone(),
+            },
+            parent: OccurrenceParent::Root {},
+            ordinal: 0,
+            transform: Transform::identity(),
+            linked_prototype: None,
+            scale: [cadmpeg_ir::scalar::FiniteReal::ONE; 3],
+            name: None,
+            visible: None,
+            link: None,
+            native_ref: None,
+        }],
+        joints: vec![joint],
+        table: crate::xref::XrefTable::default(),
+    };
+    let ctx = cadmpeg_test_support::service_decode_context();
+    let first_parent = OccurrenceId::mint("f3d:model:occurrence#first").unwrap();
+    let second_parent = OccurrenceId::mint("f3d:model:occurrence#second").unwrap();
+    let first = member.instantiate(&ctx, "first", &first_parent).unwrap();
+    let second = member.instantiate(&ctx, "second", &second_parent).unwrap();
+    assert_ne!(first.assembly_joints[0].id, second.assembly_joints[0].id);
+    for (instance, parent) in [(&first, first_parent), (&second, second_parent)] {
+        assert!(instance.product_definitions.is_empty());
+        assert_eq!(
+            instance.occurrences[0].prototype,
+            PrototypeReference::Local {
+                definition: definition.clone()
+            }
+        );
+        assert_eq!(
+            instance.assembly_joints[0].native_ref.as_deref(),
+            Some(native_ref)
+        );
+        let connectors = instance.assembly_joints[0].connectors().collect::<Vec<_>>();
+        assert_eq!(
+            connectors[0].operand.container,
+            OperandContainer::Occurrence {
+                occurrence: parent,
+                occurrence_path: Vec::new()
+            }
+        );
+        assert_eq!(
+            connectors[1].operand.container,
+            OperandContainer::Occurrence {
+                occurrence: instance.occurrences[0].id.clone(),
+                occurrence_path: Vec::new()
+            }
+        );
+        assert!(connectors
+            .iter()
+            .all(|connector| connector.frame == Transform::identity()));
+    }
 }

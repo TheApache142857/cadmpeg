@@ -32,6 +32,7 @@ mod dimension_userdata;
 mod fixtures;
 mod hatch_userdata;
 mod layer_userdata;
+mod measured_geometry;
 mod mesh_modifiers_userdata;
 mod mesh_userdata;
 mod object_attributes_userdata;
@@ -50,7 +51,7 @@ fn decode(bytes: Vec<u8>) -> EditableDecodeResult {
 }
 fn assert_valid(result: &EditableDecodeResult) {
     let validation = cadmpeg_ir::validate_neutral(result.ir(), result.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{validation:#?}");
     assert!(result.ir().native.namespace("rhino").is_some());
 }
@@ -78,7 +79,7 @@ fn archive_pipeline_aligns_versions_detection_inspection_units_and_container_onl
                 .decode(
                     &mut Cursor::new(bytes),
                     &DecodeOptions {
-                        container_only: true,
+                        depth: cadmpeg_core::decode::DecodeDepth::Container,
                         ..DecodeOptions::default()
                     },
                 )
@@ -1755,7 +1756,7 @@ fn decode_counts(path: &Path) -> Option<(u64, usize, usize)> {
         }
     }
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(
         validation.findings.iter().all(|finding| !matches!(
             finding.severity,

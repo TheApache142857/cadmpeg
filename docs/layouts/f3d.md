@@ -18,7 +18,7 @@ compact `Loft` prefix and nested profile-region frames, the class-418
 operation prologues and cross-document selector, the axial `Assemble` carrier
 and selector prefixes, the non-axial assembly-operation operand-path locator run,
 locator, and wrapper, and the sheet-metal `EdgeFlange` fixed operation section
-(§3.1), plus the `Canvas` geometry and scope records, the `Decal` scope, image-record prefixes, current sketch-container visibility member, the grouped identity `Component Insert` frames, and the class-`283` / class-`262` `Component Insert` scope frames with their class-`334` carrier prefix. ASM stream records are tabulated in `docs/layouts/asm.toml`. Protein page records are tabulated in `docs/layouts/protein.toml`.
+(§3.1), plus the `Canvas` geometry and scope records, the `Decal` scope, image-record prefixes, current sketch-container visibility member, the grouped identity `Component Insert` frames, the class-`283` / class-`262` `Component Insert` scope frames with their class-`334` carrier prefix, and the local component-occurrence frames and root-instance prefix. ASM stream records are tabulated in `docs/layouts/asm.toml`. Protein page records are tabulated in `docs/layouts/protein.toml`.
 Container and manifest layers are text grammars and are listed under "Not
 tabulated".
 
@@ -124,6 +124,27 @@ Parsed by:
 | 31 | 4 | `owner_record_index` | `u32` | little | spec | `u8 1 + u32 owner_record_index` at offsets 30 and 31 |
 | 35 | 6 | `zero_run_6` | `bytes[6]` | little | spec | six zero bytes at offsets 35 through 40 |
 | 41 | 4 | `expression_length` | `u32` | little | spec | the expression at offset 41 |
+
+## `design_parameter_typed_compact_owned_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 85 B
+
+Offsets are relative to the indexed header of an owned typed compact parameter through its expression length. The frame ends with the 52-byte typed parameter tail.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/parameters.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The indexed header is followed by fifteen zero bytes |
+| 11 | 15 | `zero_run_15` | `bytes[15]` | little | spec | The indexed header is followed by fifteen zero bytes |
+| 26 | 4 | `source_ordinal` | `u32` | little | spec | `u32 source_ordinal` at offset 26 |
+| 30 | 1 | `owner_marker` | `u8` | little | spec | The owner field at offset 30 is a reference · value `1` |
+| 31 | 8 | `owner_record_index` | `u64` | little | spec | the u64 owner record index at offset 31 |
+| 39 | 4 | `owner_type_guid_length` | `u32` | little | spec | its u32 length `36` at offset 39 · value `36` |
+| 43 | 36 | `owner_type_guid` | `bytes[36]` | little | spec | the LP-ASCII 36 target type GUID |
+| 79 | 2 | `owner_flags` | `bytes[2]` | little | spec | the two zero flag bytes at offsets 79 and 80 |
+| 81 | 4 | `expression_length` | `u32` | little | spec | Its LP-UTF16 expression begins at offset 81 |
 
 ## `design_parameter_legacy_287_tail`
 
@@ -718,6 +739,35 @@ Unstated regions:
 
 - `11..16` (5 B): The legacy fixed operation prefix retains five bytes before the zero run at offsets 16 through 20.
 - `16..21` (5 B): Primary-header offsets 16 through 20 are zero.
+
+## `scale_legacy_uniform_309`
+
+Spec §3.1 · layout: byte offsets · size: 309 B
+
+Offsets are relative to the primary indexed header. The paired same-index header is outside this frame.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/direct_face.rs`
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/parameter_scope.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 75 | `operation_prefix` | `bytes[75]` | little | spec | It uses the same 75-byte fixed operation prefix |
+| 75 | 4 | `null_guid_code_unit_count` | `u32` | little | spec | A 36-code-unit LP-UTF16 null GUID starts at offset 75 · value `36` |
+| 79 | 72 | `null_guid` | `bytes[72]` | little | derived | The GUID follows its four-byte count and occupies two bytes per code unit. |
+| 151 | 3 | `zero_before_reference_table` | `bytes[3]` | little | derived | The three zero bytes follow the GUID at offsets 79 through 150. · value `[0, 0, 0]` |
+| 154 | 4 | `reference_count` | `u32` | little | spec | The five-entry ordered reference table starts at offset 154 · value `5` |
+| 158 | 55 | `references` | `bytes[55]` | little | derived | Five eleven-byte references follow the four-byte count. |
+| 213 | 4 | `history_state_id` | `u32` | little | spec | The current history-state identity is at offset 213 |
+| 217 | 4 | `kind_code_unit_count` | `u32` | little | spec | the kind code-unit count is at offset 217 · value `5` |
+| 221 | 10 | `kind` | `bytes[10]` | little | spec | `Scale` starts at offset 221 |
+| 231 | 4 | `feature_ordinal` | `u32` | little | spec | The feature ordinal starts the 78-byte fixed tail at offset 231 |
+| 262 | 4 | `previous_history_state_id` | `u32` | little | spec | The preceding history-state identity is at offset 262 |
+
+Unstated regions:
+
+- `235..262` (27 B): Common fixed-tail fields between the ordinal and preceding history state.
+- `266..309` (43 B): Common fixed-tail fields up to the paired header at offset 309.
 
 ## `design_body_map_prefix_10`
 
@@ -1438,6 +1488,7 @@ Parsed by:
 | 21 | 11 | `first_reference` | `bytes[11]` | little | spec | Marked references occur at +21 and +33 |
 | 33 | 11 | `second_reference` | `bytes[11]` | little | spec | Marked references occur at +21 and +33 |
 | 44 | 76 | `identity_guid` | `bytes[76]` | little | spec | One 36-code-unit identity GUID starts at +44 |
+| 120 | 3 | `identity_separator` | `bytes[3]` | little | spec | A three-byte separator starts at +120 |
 | 123 | 4 | `reference_count` | `u32` | little | spec | A u32 reference count 12 at +123 · value `12` |
 | 127 | 132 | `reference_entries` | `bytes[132]` | little | spec | twelve marked references starting at +127 |
 | 259 | 4 | `reference_trailer` | `bytes[4]` | little | spec | Four FF bytes follow the reference table · value `[255, 255, 255, 255]` |
@@ -1449,7 +1500,6 @@ Unstated regions:
 
 - `11..21` (10 B): Fixed scope prefix.
 - `32..33` (1 B): Fixed separator.
-- `120..123` (3 B): Fixed separator before the reference table.
 - `293..366` (73 B): Fixed scope tail.
 
 ## `assembly_class_363_264_frame_363_carrier`
@@ -1493,6 +1543,7 @@ Parsed by:
 | Offset | Size | Field | Type | Endian | Src | Meaning |
 | -----: | ---: | ----- | ---- | ------ | --- | ------- |
 | 23 | 128 | `transform` | `f64[16]` | little | spec | Its rigid transform starts at offset 23 |
+| 151 | 1 | `zero_separator` | `u8` | little | spec | one zero separator is at offset 151 |
 | 152 | 11 | `scope_backlink` | `bytes[11]` | little | spec | its owning-scope backlink is at offset 152 |
 | 163 | 11 | `wrapper_reference` | `bytes[11]` | little | spec | its path-wrapper reference is at offset 163 |
 | 174 | 4 | `constant_two` | `u32` | little | spec | u32 value 2 is at offset 174 |
@@ -1501,7 +1552,6 @@ Parsed by:
 Unstated regions:
 
 - `0..23` (23 B): Indexed header and fixed zero prefix.
-- `151..152` (1 B): Fixed zero separator.
 
 ## `assembly_variable_reference_path_wrapper_continuation`
 
@@ -1520,7 +1570,7 @@ Parsed by:
 
 Spec §Assembly operands · layout: byte offsets · size: 26 B
 
-Offsets are relative to the count. The run starts at scope offset 47 in the 399-byte As-built form, offset 362 in the 627-, 637-, 692-, and 748-byte forms and the variable-span class-283/264 and class-347/260 forms, and offset 358 in the 633-, 732-, and 744-byte forms.
+Offsets are relative to the count. The run starts at scope offset 47 in the 378- and 399-byte As-built forms, offset 69 in the 422-byte As-built form, offset 80 in the 444-byte As-built form, offset 362 in the 627-, 637-, 692-, and 748-byte forms and the variable-span class-283/264 and class-347/260 forms, offset 358 in the 633-, 732-, and 744-byte forms, offset 537 in the 945-byte form, offset 530 in the 806- and 861-byte forms, and offset 552 in the 850-byte form.
 
 Parsed by:
 - `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
@@ -1541,6 +1591,9 @@ Cross-checked against code:
 - `crates/cadmpeg-codec-f3d/src/design/assembly.rs` — The 633-byte compact assembly form uses the two tabulated scope-relative locator-reference offsets.
 - `crates/cadmpeg-codec-f3d/src/design/assembly.rs` — The 732-byte compact assembly form uses the two tabulated scope-relative locator-reference offsets.
 - `crates/cadmpeg-codec-f3d/src/design/assembly.rs` — The class-430/262 744-byte Assemble form uses the compact locator-reference offsets.
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs` — The 945-byte wide Assemble form stores its locator references after the count at offset 537.
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs` — The 806- and 861-byte compact wide Assemble forms store their locator references after the count at offset 530.
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs` — The 850-byte compact wide Assemble form stores its locator references after the count at offset 552, behind its two limit-owner references.
 
 ## `assembly_as_built_421_scope`
 
@@ -1829,9 +1882,9 @@ Offsets are relative to the first byte after the cross-document reference. The s
 | -----: | ---: | ----- | ---- | ------ | --- | ------- |
 | 0 | 4 | `constant_nine` | `u32` | little | spec | The selector tail is u32 `9` |
 | 4 | 2 | `constant_two` | `u16` | little | spec | u16 `2` |
-| 6 | 8 | `tail_value_0` | `u64` | little | spec | a retained u64 value |
-| 14 | 4 | `constant_forty_eight` | `u32` | little | spec | u32 `48` |
-| 18 | 8 | `tail_value_1` | `u64` | little | spec | a second retained u64 value |
+| 6 | 8 | `selection_payload_stamp` | `u64` | little | spec | a u64 selection-payload stamp |
+| 14 | 4 | `evaluation_epoch` | `u32` | little | spec | a u32 evaluation epoch |
+| 18 | 8 | `evaluation_scalar` | `f64` | little | spec | a finite nonnegative f64 evaluation scalar |
 | 26 | 11 | `nested_two_reference` | `bytes[11]` | little | spec | a same-segment reference to `N+2` |
 | 37 | 2 | `zero_run_2` | `bytes[2]` | little | spec | two zero bytes |
 | 39 | 11 | `nested_one_reference` | `bytes[11]` | little | spec | a same-segment reference to `N+1` |
@@ -2006,36 +2059,33 @@ Offsets are relative to the primary indexed header. The class-specific owner tai
 
 ## `fixed_pipe_operation_prefix`
 
-Spec §3.1 · layout: byte offsets · size: 31 B
+Spec §3.1 · layout: byte offsets · size: 28 B
 
-Offsets are relative to the primary indexed header. The variable scope reference table and operand records follow this fixed prefix.
+Offsets are relative to the primary indexed header. The variable reference table follows the fixed prefix.
 
 | Offset | Size | Field | Type | Endian | Src | Meaning |
 | -----: | ---: | ----- | ---- | ------ | --- | ------- |
-| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | the primary indexed header |
-| 25 | 4 | `operation` | `u32` | little | spec | Primary-header offset 25 stores u32 `4`, which selects a new-body result |
-| 29 | 1 | `section_shape` | `u8` | little | spec | Offset 29 value `1` selects a circular section |
-| 30 | 1 | `filled` | `u8` | little | spec | Offset 30 value `1` selects a filled section |
-
-Unstated regions:
-
-- `11..25` (14 B): The fixed Pipe prefix carries no admitted fields between its indexed header and the operation at offset 25.
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | eleven-byte indexed header |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | ten zero bytes at offsets 11 through 20 |
+| 21 | 1 | `is_hollow` | `u8` | little | spec | the `isHollow` Boolean at offset 21 |
+| 22 | 4 | `operation` | `u32` | little | spec | the result-operation u32 at offset 22 |
+| 26 | 2 | `opaque_post_operation` | `bytes[2]` | little | spec | two opaque bytes at offsets 26 and 27 |
 
 ## `legacy_pipe_operation_prefix`
 
 Spec §3.1 · layout: byte offsets · size: 32 B
 
-Offsets are relative to the primary indexed header. The legacy scope reference table and variable operand records follow this prefix.
+Offsets are relative to the primary indexed header. The variable reference table follows the fixed prefix.
 
 | Offset | Size | Field | Type | Endian | Src | Meaning |
 | -----: | ---: | ----- | ---- | ------ | --- | ------- |
-| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | primary indexed header |
-| 11 | 9 | `zero_run_9` | `bytes[9]` | little | spec | offsets `11` through `19` are zero |
-| 20 | 1 | `prefix_marker` | `u8` | little | spec | offset `20` is u8 `1` · value `1` |
-| 21 | 5 | `zero_run_5` | `bytes[5]` | little | spec | offsets `21` through `25` are zero |
-| 26 | 4 | `operation` | `u32` | little | spec | offset `26` is the result-operation u32 |
-| 30 | 1 | `section_shape` | `u8` | little | spec | offset `30` is the section-shape u8 |
-| 31 | 1 | `filled` | `u8` | little | spec | offset `31` is the filled-section u8 |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | eleven-byte indexed header |
+| 11 | 9 | `zero_run_9` | `bytes[9]` | little | spec | nine zero bytes at offsets 11 through 19 |
+| 20 | 1 | `prefix_marker` | `u8` | little | spec | u8 `1` at offset 20 · value `1` |
+| 21 | 4 | `zero_run_4` | `bytes[4]` | little | spec | four zero bytes at offsets 21 through 24 |
+| 25 | 1 | `is_hollow` | `u8` | little | spec | the `isHollow` Boolean at offset 25 |
+| 26 | 4 | `operation` | `u32` | little | spec | the result-operation u32 at offset 26 |
+| 30 | 2 | `opaque_post_operation` | `bytes[2]` | little | spec | two opaque bytes at offsets 30 and 31 |
 
 ## `sketch_profile_region_selection_prefix`
 
@@ -2473,48 +2523,72 @@ Offsets are relative to the primary SplitFace indexed header. The first marked c
 | 27 | 2 | `marker_pair` | `bytes[2]` | little | spec | bytes `01 01` at offsets 27 and 28 |
 | 29 | 3 | `zero_run_3` | `bytes[3]` | little | spec | three zero bytes at offsets 29 through 31 |
 
-## `form_legacy_one_cage_owner`
+## `form_result_owner`
 
-Spec §1.1.1 · layout: byte offsets · size: 81 B
+Spec §3.1 · layout: byte offsets · size: 81 B
 
-Offsets are relative to the primary indexed header. The owner/paired/nested class triples are 335/262/328, 395/264/329, 448/258/276, and 295/258/274.
+Offsets are relative to the primary indexed header. Dynamic class tags come from the MetaStream type registry.
 
 | Offset | Size | Field | Type | Endian | Src | Meaning |
 | -----: | ---: | ----- | ---- | ------ | --- | ------- |
 | 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | indexed header |
 | 11 | 14 | `zero_run_14` | `bytes[14]` | little | spec | fourteen zero bytes |
-| 25 | 1 | `owner_marker` | `u8` | little | spec | `u8 1`, the owning Form scope's u64 record index |
-| 26 | 8 | `owner_scope_record_index` | `u64` | little | spec | owning Form scope's u64 record index |
+| 25 | 1 | `owner_marker` | `u8` | little | spec | a marked owning-scope reference |
+| 26 | 8 | `owner_scope_record_index` | `u64` | little | spec | a marked owning-scope reference |
 | 34 | 24 | `zero_run_24` | `bytes[24]` | little | spec | twenty-four zero bytes |
-| 58 | 1 | `nested_marker` | `u8` | little | spec | marked nested cage-object reference |
-| 59 | 8 | `nested_record_index` | `u64` | little | spec | nested cage-object reference |
-| 67 | 3 | `nested_zero_run` | `bytes[3]` | little | spec | three zero bytes |
+| 58 | 1 | `body_presentation_marker` | `u8` | little | spec | a marked BodyPresentation reference |
+| 59 | 8 | `body_presentation_record_index` | `u64` | little | spec | a marked BodyPresentation reference |
+| 67 | 3 | `body_presentation_zero_run` | `bytes[3]` | little | spec | three zero bytes |
 | 70 | 1 | `owner_repeat_marker` | `u8` | little | spec | repeated marked owning-scope reference |
 | 71 | 8 | `owner_repeat_scope` | `u64` | little | spec | repeated marked owning-scope reference |
 | 79 | 2 | `tail_zero_run` | `bytes[2]` | little | spec | two zero bytes |
 
-## `form_compact_one_cage_list`
+## `compact_selection_prefix`
 
-Spec §1.1.1 · layout: byte offsets · size: 100 B
+Spec §3.1 · layout: byte offsets · size: 36 B
 
-Offsets are relative to the primary indexed header. The class tags are dynamic; the frame length and fixed fields select the compact one-cage form.
+Offsets are relative to the primary indexed header. Ordered 11-byte member references follow this prefix.
 
 | Offset | Size | Field | Type | Endian | Src | Meaning |
 | -----: | ---: | ----- | ---- | ------ | --- | ------- |
-| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | indexed header |
-| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | Ten zero bytes follow the indexed header |
-| 21 | 1 | `owner_marker` | `u8` | little | spec | `u8 1`, the owning Form scope's u64 record index |
-| 22 | 8 | `owner_scope_record_index` | `u64` | little | spec | owning Form scope's u64 record index |
-| 30 | 2 | `zero_run_2` | `bytes[2]` | little | spec | two zero bytes |
-| 32 | 4 | `cage_count` | `u32` | little | spec | a u32 cage count of one |
-| 36 | 1 | `member_marker` | `u8` | little | spec | The sole member is `u8 1` |
-| 37 | 8 | `cage_object_record_index` | `u64` | little | spec | a u64 cage-object record index |
-| 45 | 2 | `member_zero` | `u16` | little | spec | `u16 0` |
-| 47 | 2 | `member_flags` | `u16` | little | spec | `u16 0x00fc` |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | starts with an indexed header |
+| 11 | 10 | `zero_run` | `bytes[10]` | little | spec | ten zero bytes |
+| 21 | 11 | `owner_reference` | `bytes[11]` | little | spec | a marked owning-scope reference |
+| 32 | 4 | `member_count` | `u32` | little | spec | `u32 member_count` |
 
-Unstated regions:
+## `compact_selection_tail_flags_2`
 
-- `49..100` (51 B): The compact-form tail is retained with the native record; no semantic field is assigned.
+Spec §3.1 · layout: byte offsets · size: 52 B
+
+Offsets are relative to T = 36 + 11 * member_count; the paired header follows this tail.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `ordinal` | `u32` | little | spec | `u32 ordinal` |
+| 4 | 8 | `scalar` | `f64` | little | spec | a finite nonnegative `f64 scalar` |
+| 12 | 4 | `ordinal_repeat` | `u32` | little | spec | the same `u32 ordinal` |
+| 16 | 11 | `first_reference` | `bytes[11]` | little | spec | a marked independent record reference |
+| 27 | 2 | `flags` | `bytes[2]` | little | spec | a two- or three-byte flag block |
+| 29 | 11 | `next_reference` | `bytes[11]` | little | spec | a marked reference to record `N+1` |
+| 40 | 1 | `zero` | `u8` | little | spec | a zero byte |
+| 41 | 11 | `owner_reference` | `bytes[11]` | little | spec | a repeated marked owning-scope reference |
+
+## `compact_selection_tail_flags_3`
+
+Spec §3.1 · layout: byte offsets · size: 53 B
+
+Offsets are relative to T = 36 + 11 * member_count; the paired header follows this tail.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `ordinal` | `u32` | little | spec | `u32 ordinal` |
+| 4 | 8 | `scalar` | `f64` | little | spec | a finite nonnegative `f64 scalar` |
+| 12 | 4 | `ordinal_repeat` | `u32` | little | spec | the same `u32 ordinal` |
+| 16 | 11 | `first_reference` | `bytes[11]` | little | spec | a marked independent record reference |
+| 27 | 3 | `flags` | `bytes[3]` | little | spec | a two- or three-byte flag block |
+| 30 | 11 | `next_reference` | `bytes[11]` | little | spec | a marked reference to record `N+1` |
+| 41 | 1 | `zero` | `u8` | little | spec | a zero byte |
+| 42 | 11 | `owner_reference` | `bytes[11]` | little | spec | a repeated marked owning-scope reference |
 
 ## `form_class_325_cage_table`
 
@@ -2691,7 +2765,8 @@ Offsets are relative to the primary indexed scope header. The ordered reference 
 | -----: | ---: | ----- | ---- | ------ | --- | ------- |
 | 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | An indexed Design record header is `u32 class_tag_length` |
 | 20 | 4 | `operation` | `u32` | little | spec | Offset 20 value `1` creates a new body |
-| 24 | 1 | `clockwise` | `u8` | little | spec | offset 24 is the clockwise Boolean |
+| 24 | 1 | `clockwise` | `u8` | little | spec | `SpirePrimitive` stores the clockwise Boolean at offset 24. |
+| 25 | 1 | `left_hand` | `u8` | little | spec | offset 25 is the left-hand Boolean |
 | 26 | 4 | `structural_constant` | `u32` | little | spec | offset 26 is u32 `4` |
 | 30 | 4 | `extent` | `u32` | little | spec | Offset 30 selects the driving dimensions |
 | 92 | 4 | `section_placement` | `u32` | little | spec | Offset 92 selects the section position |
@@ -2700,7 +2775,6 @@ Offsets are relative to the primary indexed scope header. The ordered reference 
 Unstated regions:
 
 - `11..20` (9 B): The scope framing precedes the fixed Coil discriminators.
-- `25..26` (1 B): The structural constant starts at offset 26.
 - `34..92` (58 B): The scope reference table and parameter-specific lanes follow the extent discriminator.
 - `96..107` (11 B): The fixed discriminator block retains the section-shape lane at offset 107.
 
@@ -4031,6 +4105,57 @@ Unstated regions:
 
 - `5..38` (33 B): The compact scalar lanes use the same offsets as the standard construction tail.
 
+## `sketch_txt_tag_post_reference_members`
+
+Spec §3.1 · layout: byte offsets · size: 15 B
+
+Offsets start after the counted post-string reference run.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 3 | `preweight` | `bytes[3]` | little | spec | Its text string is followed by a u32-counted reference run · value `[0, 1, 0]` |
+| 3 | 4 | `font_weight` | `i32` | little | spec | Its text string is followed by a u32-counted reference run |
+| 7 | 8 | `cached_natural_width_cm` | `f64` | little | spec | Its text string is followed by a u32-counted reference run |
+
+## `sketch_text_legacy_presentation_suffix`
+
+Spec §3.1 · layout: byte offsets · size: 30 B
+
+Offsets start at the thirty-byte inherited presentation suffix before the owning-sketch reference.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `prefix` | `u32` | little | spec | The legacy text presentation suffix is thirty bytes · value `0` |
+| 4 | 1 | `present` | `u8` | little | spec | The legacy text presentation suffix is thirty bytes · value `1` |
+| 5 | 20 | `default_components` | `f32[5]` | little | spec | The legacy text presentation suffix is thirty bytes |
+| 25 | 4 | `zero_word` | `u32` | little | spec | The legacy text presentation suffix is thirty bytes · value `0` |
+| 29 | 1 | `zero_byte` | `u8` | little | spec | The legacy text presentation suffix is thirty bytes · value `0` |
+
+## `sketch_tangency_class_flags`
+
+Spec §3.1 · layout: byte offsets · size: 3 B
+
+Offsets start after the tangency property block. Endpoint roles require a bounded endpoint contact in semantic return order.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `first_curve_start` | `bool8` | little | spec | The tangency subclass flags refer |
+| 1 | 1 | `second_curve_start` | `bool8` | little | spec | The tangency subclass flags refer |
+| 2 | 1 | `positive_tangent_dot` | `bool8` | little | spec | The tangency subclass flags refer |
+
+## `sketch_rectangular_pattern_class_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 7 B
+
+Offsets start after the rectangular-pattern property block, before the variable direction slots and pattern tables.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `uses_extent` | `bool8` | little | spec | The rectangular-pattern reference run |
+| 1 | 1 | `direction_one_symmetric` | `bool8` | little | spec | The rectangular-pattern reference run |
+| 2 | 1 | `unassigned_flag` | `bool8` | little | spec | The rectangular-pattern reference run |
+| 3 | 4 | `direction_slot_count` | `u32` | little | spec | The rectangular-pattern reference run |
+
 ## `edge_flange_fixed_operation_section`
 
 Spec §3.1 · layout: byte offsets · size: 79 B
@@ -4848,6 +4973,17 @@ Spec §3.1 · layout: byte offsets · size: 30 B
 | 20 | 5 | `null_reference` | `bytes[5]` | little | spec | The expanded prologue has nine zero bytes at scope offsets 11 through 19, a marked null u32 at offset 20, and a marked geometry-record reference at offset 25. |
 | 25 | 5 | `geometry_reference` | `bytes[5]` | little | spec | The expanded prologue has nine zero bytes at scope offsets 11 through 19, a marked null u32 at offset 20, and a marked geometry-record reference at offset 25. |
 
+## `placement_indexed_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 21 B
+
+Class members follow this 21-byte prefix. Version 4 admits marked and unmarked matrix forms.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | An indexed Design record header is |
+| 11 | 10 | `zero_prefix` | `bytes[10]` | little | spec | The bytes from indexed-header offset 11 through 20 are zero |
+
 ## `surface_patch_boundary_settings_prefix`
 
 Spec §3.1 · layout: byte offsets · size: 38 B
@@ -4873,7 +5009,7 @@ Only type version 7 assigns normal reversal to primary-scope offset 31.
 | -----: | ---: | ----- | ---- | ------ | --- | ------- |
 | 0 | 31 | `scope_prefix` | `bytes[31]` | little | spec | In a version-7 `SurfacePatch` type |
 | 31 | 1 | `normal_flip` | `u8` | little | spec | the byte at primary-scope offset `P + 31` reverses the whole created surface normal |
-| 32 | 4 | `following_word` | `u32` | little | spec | The following `u32le` at `P + 32` is `4` |
+| 32 | 4 | `following_word` | `u32` | little | spec | The following `u32le` at `P + 32` is `4` · value `4` |
 
 ## `hem_common_controls`
 
@@ -4906,6 +5042,1635 @@ Offsets are relative to the end of the variable-length primary indexed header. V
 Unstated regions:
 
 - `0..10` (10 B): Ten zero bytes precede the override mask.
+
+## `sheet_metal_bend_radius_override_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 21 B
+
+Offsets are relative to the end of the indexed header of the BendRadius override bundle.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 10 | 11 | `bend_radius_owner` | `bytes[11]` | little | spec | precede a reference to the parameter owner |
+
+Unstated regions:
+
+- `0..10` (10 B): Ten zero bytes follow the indexed header.
+
+## `sheet_metal_relief_override_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 47 B
+
+Offsets are relative to the end of the indexed header of the relief override bundle. The width owner follows the counted depth and remnant references.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 10 | 4 | `count` | `u32` | little | spec | precede u32 count `2` · value `2` |
+| 14 | 11 | `bend_depth_owner` | `bytes[11]` | little | spec | owner references for BendDepth and BendRemnant in that order |
+| 25 | 11 | `bend_remnant_owner` | `bytes[11]` | little | spec | owner references for BendDepth and BendRemnant in that order |
+| 36 | 11 | `bend_width_owner` | `bytes[11]` | little | spec | then an owner reference for BendWidth |
+
+Unstated regions:
+
+- `0..10` (10 B): Ten zero bytes follow the indexed header.
+
+## `local_component_occurrence_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 209 B
+
+Offsets are relative to the carrier's indexed header. The identity tail or the matrix tail follows at offset 209.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/components.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 8 | `empty_instance_name` | `bytes[8]` | little | spec | the frame stores u32 `0` and an empty LP-ASCII instance name |
+| 19 | 1 | `path_marker` | `u8` | little | spec | `u8 1` at offset 19 · value `1` |
+| 20 | 4 | `path_count` | `u32` | little | spec | u32 path count `1` at offset 20 · value `1` |
+| 24 | 9 | `component_reference` | `bytes[9]` | little | spec | Marked component-record references at offsets 24 and 197 |
+| 40 | 4 | `occurrence_ordinal` | `u32` | little | spec | the one-based occurrence ordinal at offset 40 |
+| 44 | 76 | `carrier_guid` | `bytes[76]` | little | spec | an LP-UTF16 carrier GUID at offset 44 |
+| 120 | 76 | `occurrence_guid` | `bytes[76]` | little | spec | an LP-UTF16 occurrence GUID at offset 120 |
+| 197 | 9 | `component_reference_repeat` | `bytes[9]` | little | spec | Marked component-record references at offsets 24 and 197 |
+| 208 | 1 | `identity_flag` | `u8` | little | spec | Offset 208 is the identity flag. |
+
+Unstated regions:
+
+- `0..11` (11 B): Indexed header.
+- `33..40` (7 B): Zero trailing field of the component-record reference.
+- `196..197` (1 B): Zero separator.
+- `206..208` (2 B): Zero trailing field of the repeated component-record reference.
+
+## `local_component_occurrence_identity_tail`
+
+Spec §3.1 · layout: byte offsets · size: 20 B
+
+Offsets are relative to the end of the 209-byte prefix; the identity frame is 229 bytes.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/components.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 9 | 1 | `owner_marker` | `u8` | little | spec | Nine zero bytes and the marker `u8 1` follow the flag or the matrix. · value `1` |
+| 10 | 8 | `owner_entity` | `u64` | little | spec | The u64 owner entity is at offset 219 of the identity frame |
+
+Unstated regions:
+
+- `0..9` (9 B): Nine zero bytes.
+- `18..20` (2 B): Two zero bytes close the frame.
+
+## `local_component_occurrence_matrix_tail`
+
+Spec §3.1 · layout: byte offsets · size: 148 B
+
+Offsets are relative to the end of the 209-byte prefix; the matrix frame is 357 bytes.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/components.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 128 | `transform` | `f64[16]` | little | spec | a row-major rigid local-to-container transform at offset 209 |
+| 137 | 1 | `owner_marker` | `u8` | little | spec | Nine zero bytes and the marker `u8 1` follow the flag or the matrix. · value `1` |
+| 138 | 8 | `owner_entity` | `u64` | little | spec | offset 347 of the matrix frame |
+
+Unstated regions:
+
+- `128..137` (9 B): Nine zero bytes.
+- `146..148` (2 B): Two zero bytes close the frame.
+
+## `root_instance_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 45 B
+
+Offsets are relative to the root-instance record's indexed header. The record continues after the component-definition reference.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/components.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 4 | `leading_zero` | `u32` | little | spec | After its indexed header that record stores u32 `0` · value `0` |
+| 15 | 4 | `instance_name_length` | `u32` | little | spec | LP-ASCII `rootInstance` · value `12` |
+| 19 | 12 | `instance_name` | `bytes[12]` | little | spec | LP-ASCII `rootInstance` |
+| 31 | 1 | `path_marker` | `u8` | little | spec | `u8 1`, u32 path count `1` · value `1` |
+| 32 | 4 | `path_count` | `u32` | little | spec | `u8 1`, u32 path count `1` · value `1` |
+| 36 | 1 | `component_marker` | `u8` | little | spec | a marked u64 component-definition reference · value `1` |
+| 37 | 8 | `component_reference` | `u64` | little | spec | a marked u64 component-definition reference |
+
+Unstated regions:
+
+- `0..11` (11 B): Indexed header.
+
+## `assembly_wide_operand_path_locator`
+
+Spec §Assembly operands · layout: byte offsets · size: not stated
+
+This size-less byte record describes the fixed prefix through the optional transform. The scope backlink, wrapper reference, constant 2 and zero tail follow one zero byte after the identity flag or the transform.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_operand_paths.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | Its eleven-byte header is followed by 28 zero bytes |
+| 11 | 28 | `zero_run_28` | `bytes[28]` | little | spec | header is followed by 28 zero bytes |
+| 39 | 4 | `constant_three` | `u32` | little | spec | u32 value 3 at offset 39 |
+| 43 | 13 | `zero_run_13` | `bytes[13]` | little | spec | 13 zero bytes |
+| 56 | 11 | `nonzero_record_reference` | `bytes[11]` | little | spec | a nonzero marked same-segment reference at offset 56 |
+| 67 | 1 | `identity_flag` | `u8` | little | spec | an identity flag byte at offset 67 |
+| 68 | 128 | `transform` | `f64[16]` | little | spec | a row-major rigid 4×4 transform at offset 68 |
+
+## `canvas_scope_tail_98`
+
+Spec §3.1 · layout: byte offsets · size: 98 B
+
+Offsets are relative to the end of the LP-UTF16 Canvas kind.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `feature_ordinal` | `u32` | little | spec | a positive feature ordinal |
+| 4 | 8 | `zero_prefix` | `bytes[8]` | little | spec | eight zero bytes |
+| 12 | 4 | `member_count` | `u32` | little | spec | member count `1` · value `1` |
+| 16 | 11 | `self_reference` | `bytes[11]` | little | spec | a marked self reference |
+| 27 | 3 | `zero_before_companion` | `bytes[3]` | little | spec | three zero bytes |
+| 30 | 11 | `first_companion` | `bytes[11]` | little | spec | a marked companion reference |
+| 41 | 1 | `zero_before_history` | `u8` | little | spec | a zero separator · value `0` |
+| 42 | 4 | `history_state` | `u32` | little | spec | null history-state identity `0xffffffff` · value `4294967295` |
+| 46 | 4 | `epoch` | `u32` | little | spec | evaluation epoch |
+| 50 | 8 | `duration` | `f64` | little | spec | finite nonnegative evaluation duration |
+| 58 | 4 | `repeated_epoch` | `u32` | little | spec | the repeated evaluation epoch |
+| 62 | 11 | `second_companion` | `bytes[11]` | little | spec | a second marked companion reference |
+| 73 | 2 | `zero_before_third` | `bytes[2]` | little | spec | two zero bytes |
+| 75 | 11 | `third_companion` | `bytes[11]` | little | spec | a third marked companion reference |
+| 86 | 11 | `closing_self_reference` | `bytes[11]` | little | spec | a closing marked self reference |
+| 97 | 1 | `zero_tail` | `u8` | little | spec | and a zero byte · value `0` |
+
+## `canvas_geometry_legacy_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 214 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 11 | 13 | `geometry_prologue` | `bytes[13]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 24 | 32 | `first_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 56 | 11 | `plane_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 67 | 77 | `geometry_payload` | `bytes[77]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 144 | 11 | `scope_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 155 | 11 | `component_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 166 | 11 | `asset_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 177 | 1 | `second_boundary_present` | `u8` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 178 | 32 | `second_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 210 | 4 | `label_code_unit_count` | `u32` | little | spec | Canvas geometry has six fixed prefix layouts. |
+
+## `canvas_geometry_transitional_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 216 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 11 | 14 | `geometry_prologue` | `bytes[14]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 25 | 32 | `first_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 57 | 11 | `plane_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 68 | 77 | `geometry_payload` | `bytes[77]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 145 | 11 | `scope_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 156 | 12 | `component_reference` | `bytes[12]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 168 | 11 | `asset_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 179 | 1 | `second_boundary_present` | `u8` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 180 | 32 | `second_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 212 | 4 | `label_code_unit_count` | `u32` | little | spec | Canvas geometry has six fixed prefix layouts. |
+
+## `canvas_geometry_extra12_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 229 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 11 | 15 | `geometry_prologue` | `bytes[15]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 26 | 32 | `first_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 58 | 11 | `plane_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 69 | 12 | `plane_extension` | `u32[3]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 81 | 77 | `geometry_payload` | `bytes[77]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 158 | 11 | `scope_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 169 | 12 | `component_reference` | `bytes[12]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 181 | 11 | `asset_reference` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 192 | 1 | `second_boundary_present` | `u8` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 193 | 32 | `second_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 225 | 4 | `label_code_unit_count` | `u32` | little | spec | Canvas geometry has six fixed prefix layouts. |
+
+## `canvas_geometry_typed_legacy_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 374 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 11 | 13 | `geometry_prologue` | `bytes[13]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 24 | 32 | `first_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 56 | 51 | `plane_reference` | `bytes[51]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 107 | 77 | `geometry_payload` | `bytes[77]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 184 | 51 | `scope_reference` | `bytes[51]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 235 | 51 | `component_reference` | `bytes[51]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 286 | 51 | `asset_reference` | `bytes[51]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 337 | 1 | `second_boundary_present` | `u8` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 338 | 32 | `second_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 370 | 4 | `label_code_unit_count` | `u32` | little | spec | Canvas geometry has six fixed prefix layouts. |
+
+## `canvas_geometry_typed_transitional_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 376 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 11 | 14 | `geometry_prologue` | `bytes[14]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 25 | 32 | `first_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 57 | 51 | `plane_reference` | `bytes[51]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 108 | 77 | `geometry_payload` | `bytes[77]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 185 | 51 | `scope_reference` | `bytes[51]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 236 | 52 | `component_reference` | `bytes[52]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 288 | 51 | `asset_reference` | `bytes[51]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 339 | 1 | `second_boundary_present` | `u8` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 340 | 32 | `second_boundary` | `f64[4]` | little | spec | Canvas geometry has six fixed prefix layouts. |
+| 372 | 4 | `label_code_unit_count` | `u32` | little | spec | Canvas geometry has six fixed prefix layouts. |
+
+## `canvas_scope_typed_tail`
+
+Spec §3.1 · layout: byte offsets · size: 196 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `feature_ordinal` | `u32` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 4 | 15 | `zero_prefix` | `bytes[15]` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 19 | 51 | `first_companion` | `bytes[51]` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 70 | 4 | `history_state` | `u32` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 74 | 4 | `epoch` | `u32` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 78 | 8 | `duration` | `f64` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 86 | 4 | `repeated_epoch` | `u32` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 90 | 51 | `second_companion` | `bytes[51]` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 141 | 2 | `zero_before_third` | `bytes[2]` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 143 | 51 | `third_companion` | `bytes[51]` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+| 194 | 2 | `zero_tail` | `bytes[2]` | little | spec | A typed Canvas scope has a 196-byte fixed tail. |
+
+## `thread_bound_hole_tail`
+
+Spec §3.1 · layout: byte offsets · size: 109 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `feature_ordinal` | `u32` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 4 | 8 | `zero_prefix` | `bytes[8]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 12 | 4 | `member_count` | `u32` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 16 | 11 | `self_reference` | `bytes[11]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 27 | 11 | `thread_reference` | `bytes[11]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 38 | 3 | `zero_before_companion` | `bytes[3]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 41 | 11 | `first_companion` | `bytes[11]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 52 | 1 | `zero_before_history` | `u8` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 53 | 4 | `previous_history_state` | `u32` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 57 | 4 | `epoch` | `u32` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 61 | 8 | `duration` | `f64` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 69 | 4 | `repeated_epoch` | `u32` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 73 | 11 | `second_companion` | `bytes[11]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 84 | 2 | `zero_before_third` | `bytes[2]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 86 | 11 | `third_companion` | `bytes[11]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 97 | 11 | `closing_self_reference` | `bytes[11]` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+| 108 | 1 | `zero_tail` | `u8` | little | spec | A Thread-bound Hole scope has a 109-byte reciprocal tail. |
+
+## `assembly_compact_wide_scope`
+
+Spec §Assembly operands · layout: byte offsets · size: not stated
+
+This size-less byte record describes the fixed operand prefix of the 806-, 850- and 861-byte scopes. Offsets are relative to the scope's primary indexed header; an LP-UTF16 GUID follows each transform.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_operand_frames.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The 806-, 850- and 861-byte `Assemble` scopes use the compact wide |
+| 11 | 10 | `zero_run_11` | `bytes[10]` | little | spec | Bytes 11 through 20 are zero |
+| 21 | 1 | `operand_flag` | `u8` | little | spec | byte 21 is the frame-sense byte |
+| 22 | 10 | `zero_run_22` | `bytes[10]` | little | spec | bytes 22 through 31 are zero |
+| 32 | 11 | `first_operand_reference` | `bytes[11]` | little | spec | the operand references are at offsets 32 and 254 |
+| 43 | 7 | `first_reference_zero_run` | `bytes[7]` | little | spec | seven zero bytes follow each reference |
+| 50 | 128 | `first_operand_transform` | `f64[16]` | little | spec | row-major transforms start at offsets 50 and 272 |
+| 178 | 76 | `first_operand_guid` | `bytes[76]` | little | spec | an LP-UTF16 GUID follows each transform |
+| 254 | 11 | `second_operand_reference` | `bytes[11]` | little | spec | the operand references are at offsets 32 and 254 |
+| 265 | 7 | `second_reference_zero_run` | `bytes[7]` | little | spec | seven zero bytes follow each reference |
+| 272 | 128 | `second_operand_transform` | `f64[16]` | little | spec | row-major transforms start at offsets 50 and 272 |
+
+## `body_reference_tail_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 25 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `header` | `bytes[11]` | little | spec | A class-365 whole-body member starts after its indexed header with ten zero bytes |
+| 11 | 10 | `zero_prefix` | `bytes[10]` | little | spec | A class-365 whole-body member starts after its indexed header with ten zero bytes |
+| 21 | 4 | `reference_count` | `u32` | little | spec | A class-365 whole-body member starts after its indexed header with ten zero bytes |
+
+## `body_reference_persistent_pair`
+
+Spec §3.1 · layout: byte offsets · size: 12 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 8 | `reference` | `u64` | little | spec | ordered `(u64 persistent Design reference, u32 form)` pairs |
+| 8 | 4 | `form` | `u32` | little | spec | ordered `(u64 persistent Design reference, u32 form)` pairs |
+
+## `base_feature_local_reference_field`
+
+Spec §3.1 · layout: byte offsets · size: 6 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `cross_document` | `u8` | little | spec | cross_document:u8 0 · value `0` |
+| 1 | 1 | `different_segment` | `u8` | little | spec | different_segment:u8 0 · value `0` |
+| 2 | 4 | `member` | `u32` | little | spec | member:u32 |
+
+## `construction_operand_affine_transform_frame`
+
+Spec §3.1 · layout: byte offsets · size: 152 B
+
+Offsets are relative to the transform's indexed header. The following active indexed record begins at offset 152 and retains an independent record index.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/operands.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | A construction-operand affine transform is a 152-byte indexed record |
+| 22 | 128 | `matrix` | `bytes[128]` | little | spec | sixteen row-major f64 values |
+| 150 | 2 | `trailer` | `bytes[2]` | little | spec | and bytes `01 00` |
+
+Unstated regions:
+
+- `11..22` (11 B): Eleven zero bytes follow the indexed header.
+
+## `construction_operand_compact_relative_placement`
+
+Spec §3.1 · layout: byte offsets · size: 24 B
+
+Offsets are relative to the indexed header. The boolean is retained independently of the fixed compact marker.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | A compact relative-placement carrier is a 24-byte indexed record |
+| 21 | 1 | `compact_marker` | `u8` | little | spec | byte `01`, one boolean, and byte `00` · value `1` |
+| 22 | 1 | `value` | `u8` | little | spec | byte `01`, one boolean, and byte `00` |
+| 23 | 1 | `trailer` | `u8` | little | spec | byte `01`, one boolean, and byte `00` · value `0` |
+
+Unstated regions:
+
+- `11..21` (10 B): Ten zero bytes follow the indexed header.
+
+## `legacy_occurrence_target_reference`
+
+Spec §1.4 · layout: byte offsets · size: 60 B
+
+Offsets are relative to the reference presence marker. The repeated references carry the same entity, source occurrence identity and type GUID.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `presence` | `u8` | little | spec | Each legacy target reference is · value `1` |
+| 1 | 8 | `target_entity` | `u64` | little | spec | Each legacy target reference is |
+| 9 | 1 | `identity_presence` | `u8` | little | spec | Each legacy target reference is · value `1` |
+| 10 | 8 | `source_occurrence_identity` | `u64` | little | spec | Each legacy target reference is |
+| 18 | 1 | `type_marker` | `u8` | little | spec | Each legacy target reference is · value `0` |
+| 19 | 4 | `type_guid_length` | `u32` | little | spec | Each legacy target reference is · value `36` |
+| 23 | 36 | `type_guid` | `bytes[36]` | little | spec | Each legacy target reference is |
+| 59 | 1 | `terminator` | `u8` | little | spec | Each legacy target reference is · value `0` |
+
+## `local_component_occurrence_attributed_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 44 B
+
+Offsets are relative to the indexed header. The typed attribute run begins immediately after this prefix. The path discriminator is independent of the later occurrence ordinal.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/components.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | An attributed local component occurrence carries |
+| 11 | 8 | `empty_instance_name` | `bytes[8]` | little | spec | An attributed local component occurrence carries |
+| 19 | 1 | `path_marker` | `u8` | little | spec | An attributed local component occurrence carries · value `1` |
+| 20 | 4 | `path_count` | `u32` | little | spec | An attributed local component occurrence carries · value `1` |
+| 24 | 9 | `component_reference` | `bytes[9]` | little | spec | An attributed local component occurrence carries |
+| 35 | 4 | `path_discriminator` | `u32` | little | spec | An attributed local component occurrence carries |
+| 39 | 1 | `attributes_marker` | `u8` | little | spec | An attributed local component occurrence carries · value `1` |
+| 40 | 4 | `attribute_count` | `u32` | little | spec | An attributed local component occurrence carries |
+
+Unstated regions:
+
+- `33..35` (2 B): Two zero trailing bytes of the local component reference.
+
+## `sketch_point_legacy_tail`
+
+Spec §3.1 · layout: byte offsets · size: 93 B
+
+Relative to the first flag byte; excludes the preceding property and first paired reference.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `flag` | `u8` | little | spec | The legacy tail contains the flag |
+| 1 | 16 | `coordinates` | `f64[2]` | little | spec | coordinates |
+| 17 | 20 | `coordinate_zero_lane` | `bytes[20]` | little | spec | zero lanes |
+| 37 | 4 | `unit_scalar` | `f32` | little | spec | f32 constants |
+| 41 | 12 | `zero_lane` | `bytes[12]` | little | spec | zero lane |
+| 53 | 8 | `unit_pair` | `f32[2]` | little | spec | f32 constants |
+| 61 | 10 | `marker` | `bytes[10]` | little | spec | marker |
+| 71 | 11 | `paired_reference` | `bytes[11]` | little | spec | repeated paired reference |
+| 82 | 11 | `owner_reference` | `bytes[11]` | little | spec | owner reference |
+
+## `sketch_point_v8_tail_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 61 B
+
+Relative to the first flag byte; excludes the preceding property and first paired reference.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 7 | `flags` | `bytes[7]` | little | spec | Each modern fixed prefix contains the flags |
+| 7 | 24 | `coordinates` | `f64[3]` | little | spec | coordinates |
+| 31 | 8 | `selector` | `u64` | little | spec | selector |
+| 39 | 1 | `state` | `u8` | little | spec | state |
+| 40 | 8 | `zero_lane` | `bytes[8]` | little | spec | zero lane |
+| 48 | 8 | `unit_pair` | `f32[2]` | little | spec | f32 constants |
+| 56 | 5 | `marker` | `bytes[5]` | little | spec | marker |
+
+## `sketch_point_v10_tail_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 65 B
+
+Relative to the first flag byte; excludes the preceding property and first paired reference.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 7 | `flags` | `bytes[7]` | little | spec | Each modern fixed prefix contains the flags |
+| 7 | 24 | `coordinates` | `f64[3]` | little | spec | coordinates |
+| 31 | 8 | `selector` | `u64` | little | spec | selector |
+| 39 | 1 | `state` | `u8` | little | spec | state |
+| 40 | 12 | `zero_lane` | `bytes[12]` | little | spec | zero lane |
+| 52 | 8 | `unit_pair` | `f32[2]` | little | spec | f32 constants |
+| 60 | 5 | `marker` | `bytes[5]` | little | spec | marker |
+
+## `sketch_point_v11_tail_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 66 B
+
+Relative to the first flag byte; excludes the preceding property and first paired reference.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 8 | `flags` | `bytes[8]` | little | spec | Each modern fixed prefix contains the flags |
+| 8 | 24 | `coordinates` | `f64[3]` | little | spec | coordinates |
+| 32 | 8 | `selector` | `u64` | little | spec | selector |
+| 40 | 1 | `state` | `u8` | little | spec | state |
+| 41 | 12 | `zero_lane` | `bytes[12]` | little | spec | zero lane |
+| 53 | 8 | `unit_pair` | `f32[2]` | little | spec | f32 constants |
+| 61 | 5 | `marker` | `bytes[5]` | little | spec | marker |
+
+## `sheet_metal_region_carrier_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 36 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | indexed header |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | ten zero bytes |
+| 21 | 1 | `owner_marker` | `u8` | little | spec | marked owning-scope reference |
+| 22 | 4 | `owner_record_index` | `u32` | little | spec | marked owning-scope reference |
+| 26 | 6 | `owner_zero_trailer` | `bytes[6]` | little | spec | six zero trailer bytes |
+| 32 | 4 | `identity_count` | `u32` | little | spec | nonzero u32 identity count |
+
+## `sheet_metal_region_identity_reference`
+
+Spec §3.1 · layout: byte offsets · size: 11 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `marker` | `u8` | little | spec | marker byte `1` |
+| 1 | 4 | `record_index` | `u32` | little | spec | u32 record index |
+| 5 | 6 | `zero_trailer` | `bytes[6]` | little | spec | six zero bytes |
+
+## `sheet_metal_region_carrier_scalar_lane`
+
+Spec §3.1 · layout: byte offsets · size: 16 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `discriminator` | `u32` | little | spec | A u32 discriminator |
+| 4 | 8 | `scalar` | `f64` | little | spec | a finite f64 scalar |
+| 12 | 4 | `repeated_discriminator` | `u32` | little | spec | an equal repeated u32 discriminator |
+
+## `compact_owner_body_wrapper`
+
+Spec §3.1 · layout: byte offsets · size: 33 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `header` | `bytes[11]` | little | spec | The compact owner-body wrapper has EntityTracking type GUID |
+| 11 | 10 | `zero_prefix` | `bytes[10]` | little | spec | The compact owner-body wrapper has EntityTracking type GUID |
+| 21 | 1 | `reference_marker` | `u8` | little | spec | The compact owner-body wrapper has EntityTracking type GUID |
+| 22 | 8 | `carrier_record_index` | `u64` | little | spec | The compact owner-body wrapper has EntityTracking type GUID |
+| 30 | 3 | `zero_suffix` | `bytes[3]` | little | spec | The compact owner-body wrapper has EntityTracking type GUID |
+
+## `compact_owner_body_carrier`
+
+Spec §3.1 · layout: byte offsets · size: 29 B
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `header` | `bytes[11]` | little | spec | The adjacent carrier has EntityTracking type GUID |
+| 11 | 10 | `zero_prefix` | `bytes[10]` | little | spec | The adjacent carrier has EntityTracking type GUID |
+| 21 | 8 | `body_suffix` | `u64` | little | spec | The adjacent carrier has EntityTracking type GUID |
+
+## `paramesh_flagged_mesh_collection_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 42 B
+
+Offsets are relative to the mesh-collection indexed header. The nested CommonData record starts at the end of this prefix.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | Its indexed header is followed by ten zero bytes |
+| 11 | 9 | `zero_run_9` | `bytes[9]` | little | spec | in place of the last of the ten zero bytes |
+| 20 | 1 | `flag` | `u8` | little | spec | store byte `01` at offset 20 · value `1` |
+| 21 | 4 | `body_count` | `u32` | little | spec | a u32 body count at offset 21 |
+| 25 | 4 | `flagged_word` | `u32` | little | spec | a u32 at offset 25 after its first body count |
+| 29 | 2 | `constant_01_01` | `bytes[2]` | little | spec | Its bytes `01 01`, texture-table reference, and nested record then start at offsets 29, 31, and 42 |
+| 31 | 11 | `texture_table_reference` | `bytes[11]` | little | spec | Its bytes `01 01`, texture-table reference, and nested record then start at offsets 29, 31, and 42 |
+
+## `referenced_angle_revolve_prologue`
+
+Spec §3.1 · layout: byte offsets · size: 50 B
+
+Offsets are relative to the Revolve primary indexed header. The marked angle-owner reference occupies offsets 39 through 49.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/path_feature.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 20 | 1 | `marker` | `u8` | little | spec | It uses the marker-one prologue through offset 33 |
+| 21 | 4 | `zero_value` | `u32` | little | spec | It uses the marker-one prologue through offset 33 |
+| 25 | 4 | `operation` | `u32` | little | spec | It uses the marker-one prologue through offset 33 |
+| 29 | 4 | `extent_kind` | `u32` | little | spec | It uses the marker-one prologue through offset 33 |
+| 33 | 1 | `direction_kind` | `u8` | little | spec | It uses the marker-one prologue through offset 33 |
+| 34 | 1 | `flag` | `u8` | little | spec | Offset 34 is marker `1` |
+| 35 | 4 | `structural_constant` | `u32` | little | spec | offset 35 stores u32 one |
+| 39 | 1 | `angle_reference_marker` | `u8` | little | spec | The marked angle-owner reference starts at offset 39 |
+
+Unstated regions:
+
+- `0..20` (20 B): The indexed header and the preceding Revolve envelope are outside this field run.
+- `40..50` (10 B): The marked reference stores the u32 angle-owner record index followed by six zero bytes.
+
+## `typed_reference_parameter_scope_tail`
+
+Spec §3.1 · layout: byte offsets · size: 196 B
+
+Offsets are relative to the u32 feature ordinal that begins the fixed scope tail after the LP-UTF16 kind.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/parameter_scope.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `ordinal` | `u32` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 4 | 15 | `zero_run_15` | `bytes[15]` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 19 | 51 | `first_reference` | `bytes[51]` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 70 | 4 | `previous_history_state_id` | `u32` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 74 | 4 | `lane` | `u32` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 78 | 8 | `scalar` | `f64` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 86 | 4 | `repeated_lane` | `u32` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 90 | 51 | `second_reference` | `bytes[51]` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 141 | 2 | `second_zero_run_2` | `bytes[2]` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 143 | 51 | `third_reference` | `bytes[51]` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+| 194 | 2 | `third_zero_run_2` | `bytes[2]` | little | spec | A typed-reference parameter scope, written by the container generation that writes typed references, has a 196-byte form |
+
+## `typed_reference_extrude_prologue`
+
+Spec §3.1 · layout: byte offsets · size: 26 B
+
+Offsets are relative to the Extrude primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/extrude.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 11 | `zero_run_11` | `bytes[11]` | little | spec | A typed-reference Extrude scope stores eleven zero bytes after its indexed header |
+| 22 | 4 | `operation` | `u32` | little | spec | A typed-reference Extrude scope stores eleven zero bytes after its indexed header |
+
+Unstated regions:
+
+- `0..11` (11 B): The indexed header precedes this field run.
+
+## `shifted_typed_reference_extrude_prologue`
+
+Spec §3.1 · layout: byte offsets · size: 30 B
+
+Offsets are relative to the Extrude primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/extrude.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 9 | `zero_run_9` | `bytes[9]` | little | spec | The shifted typed-reference form instead stores nine zero bytes, u32 `1` at offset 20 |
+| 20 | 4 | `marker` | `u32` | little | spec | The shifted typed-reference form instead stores nine zero bytes, u32 `1` at offset 20 |
+| 24 | 2 | `zero_run_2` | `bytes[2]` | little | spec | The shifted typed-reference form instead stores nine zero bytes, u32 `1` at offset 20 |
+| 26 | 4 | `operation` | `u32` | little | spec | The shifted typed-reference form instead stores nine zero bytes, u32 `1` at offset 20 |
+
+Unstated regions:
+
+- `0..11` (11 B): The indexed header precedes this field run.
+
+## `typed_reference_extrude_selection_group_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 76 B
+
+Offsets are relative to the selection-group primary indexed header; 51-byte typed member references follow the count.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/operands.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | A typed-reference Extrude selection group stores ten zero bytes after its indexed header |
+| 21 | 51 | `scope_reference` | `bytes[51]` | little | spec | A typed-reference Extrude selection group stores ten zero bytes after its indexed header |
+| 72 | 4 | `member_count` | `u32` | little | spec | A typed-reference Extrude selection group stores ten zero bytes after its indexed header |
+
+Unstated regions:
+
+- `0..11` (11 B): The indexed header precedes this field run.
+
+## `typed_reference_profile_selection_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 76 B
+
+Offsets are relative to the selection primary indexed header; the LP-UTF16 asset GUID and owner text follow.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/operands.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | A typed-reference profile selection is a construction-operand group member |
+| 21 | 51 | `identity_reference` | `bytes[51]` | little | spec | A typed-reference profile selection is a construction-operand group member |
+| 72 | 4 | `constant_one` | `u32` | little | spec | A typed-reference profile selection is a construction-operand group member |
+
+Unstated regions:
+
+- `0..11` (11 B): The indexed header precedes this field run.
+
+## `typed_reference_profile_chain_record`
+
+Spec §3.1 · layout: byte offsets · size: 82 B
+
+Offsets are relative to the chain record indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/operands.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 14 | `zero_run_14` | `bytes[14]` | little | spec | The chain record at the selection's record index plus one stores fourteen zero bytes |
+| 25 | 6 | `chain_marker` | `bytes[6]` | little | spec | The chain record at the selection's record index plus one stores fourteen zero bytes |
+| 31 | 51 | `sketch_scope_reference` | `bytes[51]` | little | spec | The chain record at the selection's record index plus one stores fourteen zero bytes |
+
+Unstated regions:
+
+- `0..11` (11 B): The indexed header precedes this field run.
+
+## `typed_reference_profile_identity_record`
+
+Spec §3.1 · layout: byte offsets · size: 76 B
+
+Offsets are relative to the identity record indexed header; the two counted loop lists begin at offset 72.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/operands.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | The identity record at the record index plus three stores ten zero bytes |
+| 21 | 51 | `selection_reference` | `bytes[51]` | little | spec | The identity record at the record index plus three stores ten zero bytes |
+| 72 | 4 | `first_loop_count` | `u32` | little | spec | The identity record at the record index plus three stores ten zero bytes |
+
+Unstated regions:
+
+- `0..11` (11 B): The indexed header precedes this field run.
+
+## `typed_reference_companion_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 98 B
+
+Offsets are relative to the companion indexed header; the companion-owned payload follows the prefix.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/parameters.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 20 | `zero_run_20` | `bytes[20]` | little | spec | A typed-reference companion prefix, written by the container generation |
+| 31 | 51 | `owner_reference` | `bytes[51]` | little | spec | A typed-reference companion prefix, written by the container generation |
+| 82 | 8 | `timestamp_micros` | `u64` | little | spec | A typed-reference companion prefix, written by the container generation |
+| 90 | 8 | `zero_run_8` | `bytes[8]` | little | spec | A typed-reference companion prefix, written by the container generation |
+
+Unstated regions:
+
+- `0..11` (11 B): The indexed header precedes this field run.
+
+## `base_feature_typed_reference_zero_body`
+
+Spec §3.1 · layout: byte offsets · size: 83 B
+
+Offsets are relative to the Base Feature primary indexed header; zero bytes follow the reference up to the null GUID length field.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/base_feature.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 11 | 9 | `zero_run_9` | `bytes[9]` | little | spec | The typed-reference zero-body form stores the same prefix with a 51-byte typed shared-metadata reference at offset 32 |
+| 20 | 1 | `zero_body_marker` | `u8` | little | spec | The typed-reference zero-body form stores the same prefix with a 51-byte typed shared-metadata reference at offset 32 |
+| 21 | 11 | `zero_run_11` | `bytes[11]` | little | spec | The typed-reference zero-body form stores the same prefix with a 51-byte typed shared-metadata reference at offset 32 |
+| 32 | 1 | `shared_metadata_marker` | `u8` | little | spec | The typed-reference zero-body form stores the same prefix with a 51-byte typed shared-metadata reference at offset 32 |
+| 33 | 8 | `shared_metadata_record` | `u64` | little | spec | The typed-reference zero-body form stores the same prefix with a 51-byte typed shared-metadata reference at offset 32 |
+| 41 | 42 | `shared_metadata_field` | `bytes[42]` | little | spec | The typed-reference zero-body form stores the same prefix with a 51-byte typed shared-metadata reference at offset 32 |
+
+Unstated regions:
+
+- `0..11` (11 B): The indexed header precedes this field run.
+
+## `sheet_metal_rule_prefix`
+
+Spec §3.1 · layout: byte offsets · size: not stated
+
+This size-less byte record describes a sheet-metal rule record whose first entry is `Thickness`. Offsets are relative to the rule record's primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/sheet_metal_settings.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | After its indexed header the rule record stores ten zero bytes |
+| 11 | 10 | `zero_run_11` | `bytes[10]` | little | spec | After its indexed header the rule record stores ten zero bytes |
+| 21 | 4 | `entry_word` | `u32` | little | spec | a u32 rule word |
+| 25 | 22 | `first_entry_name` | `bytes[22]` | little | spec | its 22-byte name starts at rule-record offset 25 |
+| 47 | 8 | `thickness` | `f64` | little | spec | its value at offset 47 |
+
+## `assembly_compact_wide_limit_owner_run`
+
+Spec §Assembly operands · layout: byte offsets · size: not stated
+
+This size-less byte record starts at scope offset 526 in the 806-, 850- and 861-byte compact wide Assemble scopes. Offsets are relative to the count. The count is 0 in the 806- and 861-byte scopes, which store no references; the 850-byte scope stores count 2 and both references.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_operand_frames.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `limit_owner_count` | `u32` | little | spec | A u32 limit-owner count at offset 526 |
+| 4 | 11 | `first_limit_owner_reference` | `bytes[11]` | little | spec | two limit owners, owner-local ordinals 4 and 5, at offsets 530 and 541 |
+| 15 | 11 | `second_limit_owner_reference` | `bytes[11]` | little | spec | two limit owners, owner-local ordinals 4 and 5, at offsets 530 and 541 |
+
+Cross-checked against code:
+
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_operand_frames.rs` — The run starts at scope offset 526.
+
+## `assembly_wide_scope`
+
+Spec §Assembly operands · layout: byte offsets · size: not stated
+
+This size-less byte record describes the frame-sense prefix of the 945-byte scope. Offsets are relative to the scope's primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_alignment.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The 945-byte `Assemble` scope uses the wide operand-frame form |
+| 20 | 1 | `wide_marker` | `u8` | little | spec | `u8 1` at offset 20 |
+| 21 | 4 | `zero_run_21` | `bytes[4]` | little | spec | four zero bytes, the frame-sense byte at offset 25 |
+| 25 | 1 | `frame_sense` | `u8` | little | spec | the frame-sense byte at offset 25 |
+| 26 | 11 | `zero_run_26` | `bytes[11]` | little | spec | zero bytes at offsets 26 through 36 |
+
+Unstated regions:
+
+- `11..20` (9 B): Bytes 11 through 19 precede the wide marker and are not read for the frame sense.
+
+## `assembly_rigid_as_built_scope`
+
+Spec §Assembly operands · layout: byte offsets · size: 257 B
+
+Offsets are relative to the primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The ordinary two-member rigid-group |
+| 11 | 11 | `zero_run_11` | `bytes[11]` | little | spec | The ordinary two-member rigid-group |
+| 22 | 11 | `pathless_locator_reference` | `bytes[11]` | little | spec | The ordinary two-member rigid-group |
+| 33 | 4 | `zero_run_33` | `bytes[4]` | little | spec | The ordinary two-member rigid-group |
+| 37 | 4 | `locator_count` | `u32` | little | spec | The ordinary two-member rigid-group |
+| 41 | 11 | `first_locator_reference` | `bytes[11]` | little | spec | The ordinary two-member rigid-group |
+| 52 | 11 | `second_locator_reference` | `bytes[11]` | little | spec | The ordinary two-member rigid-group |
+| 63 | 11 | `joint_reference` | `bytes[11]` | little | spec | The ordinary two-member rigid-group |
+| 74 | 76 | `guid` | `bytes[76]` | little | spec | The ordinary two-member rigid-group |
+| 150 | 3 | `zero_run_150` | `bytes[3]` | little | spec | The ordinary two-member rigid-group |
+| 153 | 4 | `reference_count` | `u32` | little | spec | The ordinary two-member rigid-group |
+| 157 | 4 | `history_state` | `u32` | little | spec | The ordinary two-member rigid-group |
+| 161 | 20 | `kind` | `bytes[20]` | little | spec | The ordinary two-member rigid-group |
+| 181 | 76 | `scope_tail` | `bytes[76]` | little | spec | The ordinary two-member rigid-group |
+
+## `assembly_typed_rigid_group_scope`
+
+Spec §Assembly operands · layout: byte offsets · size: 537 B
+
+Offsets are relative to the primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 11 | 11 | `zero_run_11` | `bytes[11]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 22 | 51 | `pathless_locator_reference` | `bytes[51]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 73 | 4 | `zero_run_73` | `bytes[4]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 77 | 4 | `locator_count` | `u32` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 81 | 51 | `first_locator_reference` | `bytes[51]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 132 | 51 | `second_locator_reference` | `bytes[51]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 183 | 51 | `joint_reference` | `bytes[51]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 234 | 76 | `guid` | `bytes[76]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 310 | 3 | `zero_run_310` | `bytes[3]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 313 | 4 | `reference_count` | `u32` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 317 | 4 | `history_state` | `u32` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 321 | 20 | `kind` | `bytes[20]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+| 341 | 196 | `scope_tail` | `bytes[196]` | little | spec | The typed two-member rigid-group scope is 537 bytes. |
+
+## `assembly_compact_rigid_group_locator`
+
+Spec §Assembly operands · layout: byte offsets · size: 180 B
+
+Offsets are relative to the primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_operand_paths.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | A version-3 compact rigid-group locator is 180 bytes in the admitted |
+| 11 | 12 | `zero_run_12` | `bytes[12]` | little | spec | A version-3 compact rigid-group locator is 180 bytes in the admitted |
+| 23 | 128 | `transform` | `f64[16]` | little | spec | A version-3 compact rigid-group locator is 180 bytes in the admitted |
+| 151 | 1 | `zero_151` | `u8` | little | spec | A version-3 compact rigid-group locator is 180 bytes in the admitted |
+| 152 | 11 | `scope_backlink` | `bytes[11]` | little | spec | A version-3 compact rigid-group locator is 180 bytes in the admitted |
+| 163 | 11 | `wrapper_reference` | `bytes[11]` | little | spec | A version-3 compact rigid-group locator is 180 bytes in the admitted |
+| 174 | 4 | `discriminator` | `u32` | little | spec | A version-3 compact rigid-group locator is 180 bytes in the admitted |
+| 178 | 2 | `zero_tail` | `bytes[2]` | little | spec | A version-3 compact rigid-group locator is 180 bytes in the admitted |
+
+## `assembly_typed_rigid_group_identity_locator`
+
+Spec §Assembly operands · layout: byte offsets · size: 181 B
+
+Offsets are relative to the primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_operand_paths.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The identity form is 181 bytes |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | The identity form is 181 bytes |
+| 21 | 51 | `construction_reference` | `bytes[51]` | little | spec | The identity form is 181 bytes |
+| 72 | 1 | `identity_flag` | `u8` | little | spec | The identity form is 181 bytes |
+| 73 | 51 | `scope_backlink` | `bytes[51]` | little | spec | The identity form is 181 bytes |
+| 124 | 51 | `wrapper_reference` | `bytes[51]` | little | spec | The identity form is 181 bytes |
+| 175 | 4 | `discriminator` | `u32` | little | spec | The identity form is 181 bytes |
+| 179 | 2 | `zero_tail` | `bytes[2]` | little | spec | The identity form is 181 bytes |
+
+## `assembly_typed_rigid_group_matrix_locator`
+
+Spec §Assembly operands · layout: byte offsets · size: 309 B
+
+Offsets are relative to the primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_operand_paths.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The matrix form is 309 bytes |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | The matrix form is 309 bytes |
+| 21 | 51 | `construction_reference` | `bytes[51]` | little | spec | The matrix form is 309 bytes |
+| 72 | 1 | `identity_flag` | `u8` | little | spec | The matrix form is 309 bytes |
+| 73 | 128 | `transform` | `f64[16]` | little | spec | The matrix form is 309 bytes |
+| 201 | 51 | `scope_backlink` | `bytes[51]` | little | spec | The matrix form is 309 bytes |
+| 252 | 51 | `wrapper_reference` | `bytes[51]` | little | spec | The matrix form is 309 bytes |
+| 303 | 4 | `discriminator` | `u32` | little | spec | The matrix form is 309 bytes |
+| 307 | 2 | `zero_tail` | `bytes[2]` | little | spec | The matrix form is 309 bytes |
+
+## `rectangular_pattern_direction_record`
+
+Spec §Assembly operands · layout: byte offsets · size: 220 B
+
+Offsets are relative to the direction record's primary indexed header. The paired header starts at offset 220.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/pattern.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | After the indexed header and ten zero bytes |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | After the indexed header and ten zero bytes |
+| 21 | 4 | `selection_kind` | `u32` | little | spec | a u32 selection kind `8` or `16` at offset 21 |
+| 25 | 24 | `origin` | `f64[3]` | little | spec | a three-component origin in centimetres at offset 25 |
+| 49 | 24 | `displacement` | `f64[3]` | little | spec | a three-component displacement in centimetres at offset 49 |
+| 73 | 16 | `zero_run_16` | `bytes[16]` | little | spec | Sixteen zero bytes follow the displacement. |
+| 89 | 4 | `fixed_eight` | `u32` | little | spec | Offset 89 stores u32 `8` |
+| 93 | 24 | `negative_ones` | `f64[3]` | little | spec | offsets 93, 101, and 109 store f64 `-1.0` |
+| 117 | 4 | `selection_count` | `u32` | little | spec | Offset 117 stores u32 `1` |
+| 121 | 11 | `selection_reference` | `bytes[11]` | little | spec | the marked selection-operand reference starts at offset 121, followed by two zero bytes |
+| 132 | 2 | `zero_run_2` | `bytes[2]` | little | spec | the marked selection-operand reference starts at offset 121, followed by two zero bytes |
+| 134 | 4 | `auxiliary_count` | `u32` | little | spec | Offset 134 stores u32 `1` |
+| 138 | 11 | `auxiliary_reference` | `bytes[11]` | little | spec | a marked reference starts at offset 138 |
+| 149 | 8 | `role` | `u64` | little | spec | Offset 149 stores u64 `0x0000000400000000`, followed by ten zero bytes. |
+| 157 | 10 | `zero_run_after_role` | `bytes[10]` | little | spec | Offset 149 stores u64 `0x0000000400000000`, followed by ten zero bytes. |
+| 167 | 4 | `opaque_index` | `u32` | little | spec | Offset 167 stores a nonzero u32 |
+| 171 | 8 | `opaque_scalar` | `f64` | little | spec | offset 171 a finite f64 |
+| 179 | 4 | `opaque_index_repeat` | `u32` | little | spec | offset 179 the same u32 |
+| 183 | 11 | `index_plus_two_reference` | `bytes[11]` | little | spec | Marked references to the direction record's index plus two and plus one start at offsets 183 and 197 |
+| 194 | 1 | `separator_flag` | `u8` | little | spec | `u8 1` and two zero bytes separate them |
+| 195 | 2 | `separator_zero_run` | `bytes[2]` | little | spec | `u8 1` and two zero bytes separate them |
+| 197 | 11 | `index_plus_one_reference` | `bytes[11]` | little | spec | Marked references to the direction record's index plus two and plus one start at offsets 183 and 197 |
+| 208 | 1 | `scope_separator` | `u8` | little | spec | One zero byte and the marked scope reference at offset 209 close the frame. |
+| 209 | 11 | `scope_reference` | `bytes[11]` | little | spec | One zero byte and the marked scope reference at offset 209 close the frame. |
+
+## `extrude_selection_member_long_tail`
+
+Spec §3.1 · layout: byte offsets · size: 14 B
+
+Offsets are relative to the end of the 190-byte selection-member frame.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `leading_zero` | `u8` | little | spec | byte `00`, u32 `2`, u64 `1`, and byte `00` · value `0` |
+| 1 | 4 | `kind` | `u32` | little | spec | byte `00`, u32 `2`, u64 `1`, and byte `00` · value `2` |
+| 5 | 8 | `value` | `u64` | little | spec | byte `00`, u32 `2`, u64 `1`, and byte `00` · value `1` |
+| 13 | 1 | `trailing_zero` | `u8` | little | spec | byte `00`, u32 `2`, u64 `1`, and byte `00` · value `0` |
+
+## `cut_paste_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 72 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/occurrence_transfer.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The compact CutPaste prefix |
+| 11 | 10 | `zero_run` | `bytes[10]` | little | spec | The compact CutPaste prefix |
+| 21 | 11 | `removal_reference` | `bytes[11]` | little | spec | The compact CutPaste prefix |
+| 32 | 11 | `companion_reference` | `bytes[11]` | little | spec | The compact CutPaste prefix |
+| 43 | 1 | `companion_flag` | `u8` | little | spec | The compact CutPaste prefix |
+| 44 | 11 | `second_companion_reference` | `bytes[11]` | little | spec | The compact CutPaste prefix |
+| 55 | 4 | `zero_run_4` | `bytes[4]` | little | spec | The compact CutPaste prefix |
+| 59 | 11 | `relation_reference` | `bytes[11]` | little | spec | The compact CutPaste prefix |
+| 70 | 1 | `placement_flag` | `u8` | little | spec | The compact CutPaste prefix |
+| 71 | 1 | `identity_flag` | `u8` | little | spec | The compact CutPaste prefix |
+
+## `copy_paste_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 190 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/occurrence_transfer.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The compact CopyPaste prefix |
+| 11 | 11 | `zero_run` | `bytes[11]` | little | spec | The compact CopyPaste prefix |
+| 22 | 11 | `companion_reference` | `bytes[11]` | little | spec | The compact CopyPaste prefix |
+| 33 | 1 | `zero_separator` | `u8` | little | spec | The compact CopyPaste prefix |
+| 34 | 128 | `source_transform` | `f64[16]` | little | spec | The compact CopyPaste prefix |
+| 162 | 11 | `second_companion_reference` | `bytes[11]` | little | spec | The compact CopyPaste prefix |
+| 173 | 4 | `zero_run_4` | `bytes[4]` | little | spec | The compact CopyPaste prefix |
+| 177 | 11 | `relation_reference` | `bytes[11]` | little | spec | The compact CopyPaste prefix |
+| 188 | 1 | `placement_flag` | `u8` | little | spec | The compact CopyPaste prefix |
+| 189 | 1 | `identity_flag` | `u8` | little | spec | The compact CopyPaste prefix |
+
+## `paste_occurrence_relation`
+
+Spec §3.1 · layout: byte offsets · size: 87 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/occurrence_transfer.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The relation has a 57-byte primary record |
+| 11 | 10 | `zero_run` | `bytes[10]` | little | spec | The relation has a 57-byte primary record |
+| 21 | 11 | `occurrence_reference` | `bytes[11]` | little | spec | The relation has a 57-byte primary record |
+| 32 | 2 | `zero_run_2` | `bytes[2]` | little | spec | The relation has a 57-byte primary record |
+| 34 | 11 | `companion_reference` | `bytes[11]` | little | spec | The relation has a 57-byte primary record |
+| 45 | 1 | `zero_separator` | `u8` | little | spec | The relation has a 57-byte primary record |
+| 46 | 11 | `scope_reference` | `bytes[11]` | little | spec | The relation has a 57-byte primary record |
+| 57 | 11 | `paired_header` | `bytes[11]` | little | spec | The relation has a 57-byte primary record |
+| 68 | 8 | `zero_run_8` | `bytes[8]` | little | spec | The relation has a 57-byte primary record |
+| 76 | 1 | `owner_marker` | `u8` | little | spec | The relation has a 57-byte primary record |
+| 77 | 8 | `owner_collection` | `u64` | little | spec | The relation has a 57-byte primary record |
+| 85 | 2 | `owner_zero_run` | `bytes[2]` | little | spec | The relation has a 57-byte primary record |
+
+## `remove_instance_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 135 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/occurrence_transfer.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The RemoveInstance prefix |
+| 11 | 22 | `zero_run` | `bytes[22]` | little | spec | The RemoveInstance prefix |
+| 33 | 11 | `source_relation_reference` | `bytes[11]` | little | spec | The RemoveInstance prefix |
+| 44 | 76 | `occurrence_key` | `bytes[76]` | little | spec | The RemoveInstance prefix |
+| 120 | 7 | `zero_run_7` | `bytes[7]` | little | spec | The RemoveInstance prefix |
+| 127 | 4 | `history_state` | `u32` | little | spec | The RemoveInstance prefix |
+| 131 | 4 | `kind_length` | `u32` | little | spec | The RemoveInstance prefix |
+
+## `paste_context_owner_tail`
+
+Spec §3.1 · layout: byte offsets · size: 52 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/occurrence_transfer.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `collection_reference` | `bytes[11]` | little | spec | The context owner tail is 52 bytes |
+| 11 | 11 | `companion_reference` | `bytes[11]` | little | spec | The context owner tail is 52 bytes |
+| 22 | 11 | `paired_header` | `bytes[11]` | little | spec | The context owner tail is 52 bytes |
+| 33 | 8 | `zero_run_8` | `bytes[8]` | little | spec | The context owner tail is 52 bytes |
+| 41 | 11 | `component_reference` | `bytes[11]` | little | spec | The context owner tail is 52 bytes |
+
+## `component_insert_identity_scope_272_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 126 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/component_constructions.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | fourteen zero bytes at offsets 11 through 24 |
+| 11 | 14 | `zero_prefix` | `bytes[14]` | little | spec | fourteen zero bytes at offsets 11 through 24 |
+| 25 | 8 | `occurrence_identity` | `u64` | little | spec | its occurrence identity u64 at offset 25 |
+| 33 | 4 | `zero_after_identity` | `bytes[4]` | little | spec | four zero bytes at offset 33 |
+| 37 | 5 | `relation_reference` | `bytes[5]` | little | spec | its marked relation reference at offset 37 |
+| 42 | 6 | `zero_after_relation` | `bytes[6]` | little | spec | six zero bytes at offset 42 |
+| 48 | 2 | `identity_markers` | `bytes[2]` | little | spec | identity bytes `01 01` at offset 48 |
+| 50 | 76 | `null_guid` | `bytes[76]` | little | spec | The LP-UTF16 null GUID starts at offset 50 |
+
+## `component_insert_identity_scope_276_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 130 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/component_constructions.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | All subsequent fields move four bytes later |
+| 11 | 18 | `prologue` | `bytes[18]` | little | spec | All subsequent fields move four bytes later |
+| 29 | 8 | `occurrence_identity` | `u64` | little | spec | All subsequent fields move four bytes later |
+| 37 | 4 | `zero_after_identity` | `bytes[4]` | little | spec | All subsequent fields move four bytes later |
+| 41 | 5 | `relation_reference` | `bytes[5]` | little | spec | All subsequent fields move four bytes later |
+| 46 | 6 | `zero_after_relation` | `bytes[6]` | little | spec | All subsequent fields move four bytes later |
+| 52 | 2 | `identity_markers` | `bytes[2]` | little | spec | All subsequent fields move four bytes later |
+| 54 | 76 | `null_guid` | `bytes[76]` | little | spec | All subsequent fields move four bytes later |
+
+## `component_insert_identity_carrier`
+
+Spec §3.1 · layout: byte offsets · size: 420 B
+
+The sequential legacy target-reference grammar and the fixed identity insertion members determine these offsets.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/xref.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 19 | `indexed_entity_and_empty_name` | `bytes[19]` | little | spec | The 420-byte identity insertion carrier |
+| 19 | 1 | `path_marker` | `u8` | little | spec | The 420-byte identity insertion carrier |
+| 20 | 4 | `path_count` | `u32` | little | spec | The 420-byte identity insertion carrier |
+| 24 | 60 | `target_reference` | `bytes[60]` | little | spec | The 420-byte identity insertion carrier |
+| 84 | 4 | `instance_discriminator` | `u32` | little | spec | The 420-byte identity insertion carrier |
+| 88 | 4 | `member_count` | `u32` | little | spec | The 420-byte identity insertion carrier |
+| 92 | 1 | `zero_after_count` | `u8` | little | spec | The 420-byte identity insertion carrier |
+| 93 | 1 | `metadata_boolean` | `u8` | little | spec | The 420-byte identity insertion carrier |
+| 94 | 1 | `zero_after_boolean` | `u8` | little | spec | The 420-byte identity insertion carrier |
+| 95 | 4 | `metadata_count` | `u32` | little | spec | The 420-byte identity insertion carrier |
+| 99 | 76 | `placement_metadata_guid` | `bytes[76]` | little | spec | The 420-byte identity insertion carrier |
+| 175 | 76 | `tracking_link_guid` | `bytes[76]` | little | spec | The 420-byte identity insertion carrier |
+| 251 | 1 | `metadata_marker` | `u8` | little | spec | The 420-byte identity insertion carrier |
+| 252 | 8 | `opaque_metadata_token` | `u64` | little | spec | The 420-byte identity insertion carrier |
+| 260 | 7 | `metadata_tail` | `bytes[7]` | little | spec | The 420-byte identity insertion carrier |
+| 267 | 60 | `repeated_target_reference` | `bytes[60]` | little | spec | The 420-byte identity insertion carrier |
+| 327 | 1 | `identity_flag` | `u8` | little | spec | The 420-byte identity insertion carrier |
+| 328 | 4 | `zero_after_identity` | `u32` | little | spec | The 420-byte identity insertion carrier |
+| 332 | 76 | `occurrence_role` | `bytes[76]` | little | spec | The 420-byte identity insertion carrier |
+| 408 | 12 | `closure` | `bytes[12]` | little | spec | The 420-byte identity insertion carrier |
+
+## `emboss_scope_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 156 B
+
+Offsets are relative to the primary indexed header. The null GUID and common reference table follow this prefix.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/emboss.rs`
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 11 | 9 | `zero_run` | `bytes[9]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. · value `[0, 0, 0, 0, 0, 0, 0, 0, 0]` |
+| 20 | 8 | `control_words` | `u32[2]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 28 | 11 | `depth_owner_reference` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 39 | 11 | `auxiliary_group_reference` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 50 | 11 | `horizontal_owner_reference` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 61 | 4 | `native_pair_count` | `u32` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. · value `1` |
+| 65 | 16 | `native_pair` | `u64[2]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 81 | 11 | `rotation_owner_reference` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 92 | 11 | `face_group_reference` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 103 | 11 | `vertical_owner_reference` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 114 | 4 | `profile_group_count` | `u32` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. · value `1` |
+| 118 | 11 | `profile_group_reference` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+| 129 | 12 | `zero_tail` | `bytes[12]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. · value `[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]` |
+| 141 | 4 | `face_group_count` | `u32` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. · value `1` |
+| 145 | 11 | `repeated_face_group_reference` | `bytes[11]` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. |
+
+Cross-checked against code:
+
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs` — The value offset is one byte after the reference marker; the middle value is its ordered-table ordinal.
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs` — The value offset is one byte after the reference marker; the middle value is its ordered-table ordinal.
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs` — The value offset is one byte after the reference marker; the middle value is its ordered-table ordinal.
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs` — The value offset is one byte after the reference marker; the middle value is its ordered-table ordinal.
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs` — The value offset is one byte after the reference marker; the middle value is its ordered-table ordinal.
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs` — The value offset is one byte after the reference marker; the middle value is its ordered-table ordinal.
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs` — The value offset is one byte after the reference marker; the middle value is its ordered-table ordinal.
+
+## `emboss_scope_reference_table_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 239 B
+
+The operation prefix, null GUID, and separator precede the common reference count.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/emboss.rs`
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 156 | `operation_prefix` | `bytes[156]` | little | spec | Its operation prefix is the `emboss_scope_prefix` record |
+| 156 | 4 | `null_guid_count` | `u32` | little | spec | A 36-code-unit LP-UTF16 null GUID and three zero bytes separate the prefix · value `36` |
+| 160 | 72 | `null_guid` | `u16[36]` | little | spec | A 36-code-unit LP-UTF16 null GUID and three zero bytes separate the prefix |
+| 232 | 3 | `zero_separator` | `bytes[3]` | little | spec | A 36-code-unit LP-UTF16 null GUID and three zero bytes separate the prefix · value `[0, 0, 0]` |
+| 235 | 4 | `reference_count` | `u32` | little | spec | The `Emboss` fixed-prefix form has nine ordered references. · value `9` |
+
+Cross-checked against code:
+
+- `crates/cadmpeg-codec-f3d/src/records/feature/emboss.rs` — The common reference count follows the complete null-GUID separator.
+
+## `rectangular_pattern_spacing_direction_record`
+
+Spec §Assembly operands · layout: byte offsets · size: 221 B
+
+Offsets are relative to the direction record's primary indexed header. The paired header starts at offset 221.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/pattern.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The 221-byte spacing direction form |
+| 11 | 10 | `zero_run_10` | `bytes[10]` | little | spec | The 221-byte spacing direction form |
+| 21 | 4 | `selection_kind` | `u32` | little | spec | The 221-byte spacing direction form |
+| 25 | 24 | `origin` | `f64[3]` | little | spec | The 221-byte spacing direction form |
+| 49 | 24 | `displacement` | `f64[3]` | little | spec | The 221-byte spacing direction form |
+| 73 | 16 | `zero_run_16` | `bytes[16]` | little | spec | The 221-byte spacing direction form |
+| 89 | 4 | `distance_type` | `u32` | little | spec | The 221-byte spacing direction form · value `7` |
+| 93 | 1 | `spacing_flag` | `u8` | little | spec | The 221-byte spacing direction form · value `0` |
+| 94 | 24 | `negative_ones` | `f64[3]` | little | spec | The 221-byte spacing direction form |
+| 118 | 4 | `selection_count` | `u32` | little | spec | The 221-byte spacing direction form |
+| 122 | 11 | `selection_reference` | `bytes[11]` | little | spec | The 221-byte spacing direction form |
+| 133 | 2 | `zero_run_2` | `bytes[2]` | little | spec | The 221-byte spacing direction form |
+| 135 | 4 | `auxiliary_count` | `u32` | little | spec | The 221-byte spacing direction form |
+| 139 | 11 | `auxiliary_reference` | `bytes[11]` | little | spec | The 221-byte spacing direction form |
+| 150 | 8 | `role` | `u64` | little | spec | The 221-byte spacing direction form |
+| 158 | 10 | `zero_run_after_role` | `bytes[10]` | little | spec | The 221-byte spacing direction form |
+| 168 | 4 | `opaque_index` | `u32` | little | spec | The 221-byte spacing direction form |
+| 172 | 8 | `opaque_scalar` | `f64` | little | spec | The 221-byte spacing direction form |
+| 180 | 4 | `opaque_index_repeat` | `u32` | little | spec | The 221-byte spacing direction form |
+| 184 | 11 | `index_plus_two_reference` | `bytes[11]` | little | spec | The 221-byte spacing direction form |
+| 195 | 1 | `separator_flag` | `u8` | little | spec | The 221-byte spacing direction form |
+| 196 | 2 | `separator_zero_run` | `bytes[2]` | little | spec | The 221-byte spacing direction form |
+| 198 | 11 | `index_plus_one_reference` | `bytes[11]` | little | spec | The 221-byte spacing direction form |
+| 209 | 1 | `scope_separator` | `u8` | little | spec | The 221-byte spacing direction form |
+| 210 | 11 | `scope_reference` | `bytes[11]` | little | spec | The 221-byte spacing direction form |
+
+## `rectangular_pattern_payload_prefix`
+
+Spec §Assembly operands · layout: byte offsets · size: 133 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/pattern.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 11 | 8 | `zero_head` | `bytes[8]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 19 | 1 | `flag` | `u8` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 20 | 4 | `count` | `u32` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 24 | 11 | `u_count` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 35 | 4 | `zero_middle` | `bytes[4]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 39 | 11 | `v_count` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 50 | 9 | `zero_tail` | `bytes[9]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 59 | 4 | `sentinel` | `u32` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 63 | 24 | `v_direction` | `f64[3]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 87 | 11 | `u_distance` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 98 | 11 | `v_distance` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 109 | 2 | `zero_distance` | `bytes[2]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 111 | 11 | `v_count_repeat` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 122 | 11 | `u_direction` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+
+## `rectangular_pattern_payload_suffix`
+
+Spec §Assembly operands · layout: byte offsets · size: 37 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/pattern.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `u_count` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 11 | 11 | `scope` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 22 | 11 | `seed_group` | `bytes[11]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+| 33 | 4 | `zero_tail` | `bytes[4]` | little | spec | The payload has a 133-byte prefix and a 37-byte suffix. |
+
+## `sketch_geometry_ordinal_collection_reference`
+
+Spec §3.1 · layout: byte offsets · size: 11 B
+
+The reference starts at offset 36 relative to the Geometry-member indexed header.
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `marker` | `u8` | little | spec | byte 36 is `01` · value `1` |
+| 1 | 8 | `target` | `u64` | little | spec | its u64 target at member offset 37 names the ordinal collection |
+| 9 | 2 | `flags` | `bytes[2]` | little | spec | Byte 36 opens a same-segment marked reference; its u64 target at member offset 37 names the ordinal collection. |
+
+## `sketch_ordinal_collection_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 20 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/sketch.rs`
+- `crates/cadmpeg-codec-f3d/src/design/decode/sketch_owners.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | Its indexed header is followed by nine zero bytes, a property block carrying `crv_tag_id_idx` |
+| 11 | 9 | `zero_run` | `bytes[9]` | little | spec | Its indexed header is followed by nine zero bytes, a property block carrying `crv_tag_id_idx` |
+
+## `assembly_as_built_scope_378`
+
+Spec §Assembly operands · layout: byte offsets · size: 378 B
+
+Offsets are relative to the primary indexed header. K = 0.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_alignment.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 43 | 4 | `additional_owner_count` | `u32` | little | spec | offset 43 · value `0` |
+| 47 | 4 | `locator_count` | `u32` | little | spec | stores a u32 count of two |
+| 51 | 11 | `first_locator_reference` | `bytes[11]` | little | spec | two marked same-segment operand-path-locator references |
+| 62 | 11 | `second_locator_reference` | `bytes[11]` | little | spec | two marked same-segment operand-path-locator references |
+| 163 | 4 | `reference_count` | `u32` | little | spec | The reference-table counts are at offsets 163, 185, and 196 · value `9` |
+| 167 | 99 | `reference_members` | `bytes[99]` | little | derived | Each marked reference has eleven bytes; K = 0. |
+
+Unstated regions:
+
+- `0..43` (43 B): Prefix before the owner count.
+- `73..163` (90 B): Scope fields before the reference table.
+- `266..378` (112 B): Scope suffix after the reference table.
+
+## `assembly_as_built_scope_422`
+
+Spec §Assembly operands · layout: byte offsets · size: 422 B
+
+Offsets are relative to the primary indexed header. K = 2.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_alignment.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 43 | 4 | `additional_owner_count` | `u32` | little | spec | offset 43 · value `2` |
+| 47 | 22 | `additional_owner_references` | `bytes[22]` | little | spec | `47 + 11k` |
+| 69 | 4 | `locator_count` | `u32` | little | spec | stores a u32 count of two |
+| 73 | 11 | `first_locator_reference` | `bytes[11]` | little | spec | two marked same-segment operand-path-locator references |
+| 84 | 11 | `second_locator_reference` | `bytes[11]` | little | spec | two marked same-segment operand-path-locator references |
+| 185 | 4 | `reference_count` | `u32` | little | spec | The reference-table counts are at offsets 163, 185, and 196 · value `11` |
+| 189 | 121 | `reference_members` | `bytes[121]` | little | derived | Each marked reference has eleven bytes; K = 2. |
+
+Unstated regions:
+
+- `0..43` (43 B): Prefix before the owner count.
+- `95..185` (90 B): Scope fields before the reference table.
+- `310..422` (112 B): Scope suffix after the reference table.
+
+## `assembly_as_built_scope_444`
+
+Spec §Assembly operands · layout: byte offsets · size: 444 B
+
+Offsets are relative to the primary indexed header. K = 3.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_alignment.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 43 | 4 | `additional_owner_count` | `u32` | little | spec | offset 43 · value `3` |
+| 47 | 33 | `additional_owner_references` | `bytes[33]` | little | spec | `47 + 11k` |
+| 80 | 4 | `locator_count` | `u32` | little | spec | stores a u32 count of two |
+| 84 | 11 | `first_locator_reference` | `bytes[11]` | little | spec | two marked same-segment operand-path-locator references |
+| 95 | 11 | `second_locator_reference` | `bytes[11]` | little | spec | two marked same-segment operand-path-locator references |
+| 196 | 4 | `reference_count` | `u32` | little | spec | The reference-table counts are at offsets 163, 185, and 196 · value `12` |
+| 200 | 132 | `reference_members` | `bytes[132]` | little | derived | Each marked reference has eleven bytes; K = 3. |
+
+Unstated regions:
+
+- `0..43` (43 B): Prefix before the owner count.
+- `106..196` (90 B): Scope fields before the reference table.
+- `332..444` (112 B): Scope suffix after the reference table.
+
+## `assembly_as_built_scope_owner_run`
+
+Spec §Assembly operands · layout: byte offsets · size: not stated
+
+This size-less byte record gives the common count and owner-run start in the 378-, 422-, and 444-byte As-built scopes. Offsets are relative to the primary indexed header. The count K controls the number of eleven-byte marked references; K = 0 stores no owner reference.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_alignment.rs`
+- `crates/cadmpeg-codec-f3d/src/validate.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 43 | 4 | `additional_owner_count` | `u32` | little | spec | offset 43 |
+| 47 | 11 | `additional_owner_references` | `bytes[11]` | little | spec | `47 + 11k` |
+
+Unstated regions:
+
+- `0..43` (43 B): Prefix before the common owner count.
+
+## `sketch_owner_collection_legacy_list_prefix`
+
+Spec §3.1 · layout: byte offsets · size: 6 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/sketch.rs`
+- `crates/cadmpeg-codec-f3d/src/design/decode/sketch_owners.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 6 | `prefix` | `bytes[6]` | little | spec | Version `3` has six bytes after this property block and before the member list. |
+
+## `sketch_owner_reference`
+
+Spec §3.1 · layout: byte offsets · size: 11 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/sketch_owners.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `marker` | `u8` | little | spec | a one-byte marker |
+| 1 | 8 | `target` | `u64` | little | spec | a u64 target |
+| 9 | 2 | `flags` | `bytes[2]` | little | spec | two zero flag bytes |
+
+## `sketch_owner_typed_reference`
+
+Spec §3.1 · layout: byte offsets · size: 51 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/sketch_owners.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 1 | `marker` | `u8` | little | spec | a one-byte marker |
+| 1 | 8 | `target` | `u64` | little | spec | a u64 target |
+| 9 | 4 | `type_guid_length` | `u32` | little | spec | an additional u32 length `36` |
+| 13 | 36 | `type_guid` | `bytes[36]` | little | spec | 36 ASCII type-GUID bytes between the target and the flags |
+| 49 | 2 | `flags` | `bytes[2]` | little | spec | two zero flag bytes |
+
+## `assembly_root_operand_path`
+
+Spec §Assembly operands · layout: byte offsets · size: 277 B
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/assembly_operand_paths.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 15 | `indexed_header` | `bytes[15]` | little | spec | A typed root operand path is a 277-byte frame. |
+| 15 | 6 | `zero_prefix` | `bytes[6]` | little | spec | A typed root operand path is a 277-byte frame. |
+| 21 | 4 | `count` | `u32` | little | spec | A typed root operand path is a 277-byte frame. |
+| 25 | 76 | `root_key` | `bytes[76]` | little | spec | A typed root operand path is a 277-byte frame. |
+| 101 | 4 | `empty_reference` | `u32` | little | spec | A typed root operand path is a 277-byte frame. |
+| 105 | 8 | `constant_one` | `u64` | little | spec | A typed root operand path is a 277-byte frame. |
+| 113 | 76 | `first_identity` | `bytes[76]` | little | spec | A typed root operand path is a 277-byte frame. |
+| 189 | 76 | `second_identity` | `bytes[76]` | little | spec | A typed root operand path is a 277-byte frame. |
+| 265 | 4 | `constant_two` | `u32` | little | spec | A typed root operand path is a 277-byte frame. |
+| 269 | 8 | `zero_tail` | `bytes[8]` | little | spec | A typed root operand path is a 277-byte frame. |
+
+## `assembly_wide_operand_path_identity_locator`
+
+Spec §Assembly operands · layout: byte offsets · size: 97 B
+
+Offsets are relative to the locator indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 68 | 1 | `zero_separator` | `u8` | little | spec | The wide locator identity frame is 97 bytes. |
+| 69 | 11 | `scope_backlink` | `bytes[11]` | little | spec | The wide locator identity frame is 97 bytes. |
+| 80 | 11 | `wrapper_reference` | `bytes[11]` | little | spec | The wide locator identity frame is 97 bytes. |
+| 91 | 4 | `discriminator` | `u32` | little | spec | The wide locator identity frame is 97 bytes. |
+| 95 | 2 | `zero_tail` | `bytes[2]` | little | spec | The wide locator identity frame is 97 bytes. |
+
+Unstated regions:
+
+- `0..68` (68 B): The wide locator prefix precedes the optional matrix.
+
+## `assembly_wide_operand_path_matrix_locator`
+
+Spec §Assembly operands · layout: byte offsets · size: 225 B
+
+Offsets are relative to the locator indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 68 | 128 | `transform` | `f64[16]` | little | spec | The wide locator matrix frame is 225 bytes. |
+| 196 | 1 | `zero_separator` | `u8` | little | spec | The wide locator matrix frame is 225 bytes. |
+| 197 | 11 | `scope_backlink` | `bytes[11]` | little | spec | The wide locator matrix frame is 225 bytes. |
+| 208 | 11 | `wrapper_reference` | `bytes[11]` | little | spec | The wide locator matrix frame is 225 bytes. |
+| 219 | 4 | `discriminator` | `u32` | little | spec | The wide locator matrix frame is 225 bytes. |
+| 223 | 2 | `zero_tail` | `bytes[2]` | little | spec | The wide locator matrix frame is 225 bytes. |
+
+Unstated regions:
+
+- `0..68` (68 B): The wide locator prefix precedes the optional matrix.
+
+## `ordinary_rigid_group_tail_76`
+
+Spec §Assembly operands · layout: byte offsets · size: 76 B
+
+Offsets are relative to the end of the LP-UTF16 kind.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `ordinal` | `u32` | little | spec | The 76-byte tail |
+| 4 | 15 | `zero_run` | `bytes[15]` | little | spec | The 76-byte tail |
+| 19 | 11 | `first_reference` | `bytes[11]` | little | spec | The 76-byte tail |
+| 30 | 4 | `previous_history_state_id` | `u32` | little | spec | The 76-byte tail |
+| 34 | 4 | `first_lane` | `u32` | little | spec | The 76-byte tail |
+| 38 | 8 | `scalar` | `f64` | little | spec | The 76-byte tail |
+| 46 | 4 | `second_lane` | `u32` | little | spec | The 76-byte tail |
+| 50 | 11 | `second_reference` | `bytes[11]` | little | spec | The 76-byte tail |
+| 61 | 1 | `reference_prefix` | `u8` | little | spec | The 76-byte tail · value `0` |
+| 62 | 1 | `reference_prefix_payload` | `bytes[1]` | little | spec | The 76-byte tail |
+| 63 | 11 | `third_reference` | `bytes[11]` | little | spec | The 76-byte tail |
+| 74 | 2 | `zero_tail` | `bytes[2]` | little | spec | The 76-byte tail |
+
+## `ordinary_rigid_group_tail_88`
+
+Spec §Assembly operands · layout: byte offsets · size: 88 B
+
+Offsets are relative to the end of the LP-UTF16 kind.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `ordinal` | `u32` | little | spec | The 88-byte tail |
+| 4 | 15 | `zero_run` | `bytes[15]` | little | spec | The 88-byte tail |
+| 19 | 11 | `first_reference` | `bytes[11]` | little | spec | The 88-byte tail |
+| 30 | 11 | `additional_reference` | `bytes[11]` | little | spec | The 88-byte tail |
+| 41 | 4 | `previous_history_state_id` | `u32` | little | spec | The 88-byte tail |
+| 45 | 4 | `first_lane` | `u32` | little | spec | The 88-byte tail |
+| 49 | 8 | `scalar` | `f64` | little | spec | The 88-byte tail |
+| 57 | 4 | `second_lane` | `u32` | little | spec | The 88-byte tail |
+| 61 | 11 | `second_reference` | `bytes[11]` | little | spec | The 88-byte tail |
+| 72 | 1 | `reference_prefix` | `u8` | little | spec | The 88-byte tail · value `1` |
+| 73 | 2 | `reference_prefix_payload` | `bytes[2]` | little | spec | The 88-byte tail |
+| 75 | 11 | `third_reference` | `bytes[11]` | little | spec | The 88-byte tail |
+| 86 | 2 | `zero_tail` | `bytes[2]` | little | spec | The 88-byte tail |
+
+## `ordinary_rigid_group_tail_77`
+
+Spec §Assembly operands · layout: byte offsets · size: 77 B
+
+Offsets are relative to the kind end; the optional reference and field tag select the 77-byte closure independently.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `ordinal` | `u32` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 4 | 15 | `zero_run` | `bytes[15]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 19 | 11 | `first_reference` | `bytes[11]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 30 | 4 | `previous_history_state_id` | `u32` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 34 | 4 | `first_lane` | `u32` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 38 | 8 | `scalar` | `f64` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 46 | 4 | `second_lane` | `u32` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 50 | 11 | `second_reference` | `bytes[11]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 61 | 1 | `reference_prefix` | `u8` | little | derived | Apply the independent reference and field-width choices to the tail grammar. · value `1` |
+| 62 | 2 | `reference_prefix_payload` | `bytes[2]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 64 | 11 | `third_reference` | `bytes[11]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 75 | 2 | `zero_tail` | `bytes[2]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+
+## `ordinary_rigid_group_tail_87`
+
+Spec §Assembly operands · layout: byte offsets · size: 87 B
+
+Offsets are relative to the kind end; the optional reference and field tag select the 87-byte closure independently.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/assembly.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 4 | `ordinal` | `u32` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 4 | 15 | `zero_run` | `bytes[15]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 19 | 11 | `first_reference` | `bytes[11]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 30 | 11 | `additional_reference` | `bytes[11]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 41 | 4 | `previous_history_state_id` | `u32` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 45 | 4 | `first_lane` | `u32` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 49 | 8 | `scalar` | `f64` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 57 | 4 | `second_lane` | `u32` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 61 | 11 | `second_reference` | `bytes[11]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 72 | 1 | `reference_prefix` | `u8` | little | derived | Apply the independent reference and field-width choices to the tail grammar. · value `0` |
+| 73 | 1 | `reference_prefix_payload` | `bytes[1]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 74 | 11 | `third_reference` | `bytes[11]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+| 85 | 2 | `zero_tail` | `bytes[2]` | little | derived | Apply the independent reference and field-width choices to the tail grammar. |
+
+## `assembly_alternate_rigid_group_prefix`
+
+Spec §Assembly operands · layout: byte offsets · size: 67 B
+
+The alternate ordinary prologue through its first two member references. Offsets are relative to the primary indexed header.
+
+Parsed by:
+- `crates/cadmpeg-codec-f3d/src/design/decode/scopes/parameter_scope.rs`
+
+| Offset | Size | Field | Type | Endian | Src | Meaning |
+| -----: | ---: | ----- | ---- | ------ | --- | ------- |
+| 0 | 11 | `indexed_header` | `bytes[11]` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed |
+| 11 | 9 | `zero_run_9` | `bytes[9]` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed |
+| 20 | 1 | `constant_one` | `u8` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed · value `1` |
+| 21 | 5 | `zero_run_5` | `bytes[5]` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed |
+| 26 | 11 | `pathless_locator_reference` | `bytes[11]` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed |
+| 37 | 4 | `zero_run_4` | `bytes[4]` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed |
+| 41 | 4 | `locator_count` | `u32` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed |
+| 45 | 11 | `first_locator_reference` | `bytes[11]` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed |
+| 56 | 11 | `second_locator_reference` | `bytes[11]` | little | spec | An alternate ordinary prologue stores nine zero bytes after its indexed |
 
 ## Not tabulated
 

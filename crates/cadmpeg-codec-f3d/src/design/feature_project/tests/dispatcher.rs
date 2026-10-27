@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+
 use cadmpeg_core::decode::u64_from_index;
 
 use crate::design::feature_project::project_parameter_design_with_edge_identities;
@@ -67,19 +68,20 @@ fn dispatcher_projects_datum_feature_scopes() {
     }
 
     let scopes = vec![joint_origin, work_plane, work_point];
-    let (features, _) = crate::test_support::with_decode_context(|ctx| {
-        let scopes = &scopes;
-        let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
-        crate::design::feature_project::project_parameter_design_with_edge_identities(
-            ctx,
-            &crate::design::feature_project::ProjectInputs {
-                scopes,
-                timelines: &timelines,
-                ..Default::default()
-            },
-        )
-        .expect("test projection has a synthetic exact timeline")
-    });
+    let crate::design::feature_project::ProjectedParameterDesign { features, .. } =
+        crate::test_support::with_decode_context(|ctx| {
+            let scopes = &scopes;
+            let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
+            crate::design::feature_project::project_parameter_design_with_edge_identities(
+                ctx,
+                &crate::design::feature_project::ProjectInputs {
+                    scopes,
+                    timelines: &timelines,
+                    ..Default::default()
+                },
+            )
+            .expect("test projection has a synthetic exact timeline")
+        });
 
     assert!(matches!(
         features[0].evaluation.definition(),
@@ -122,19 +124,20 @@ fn dispatcher_projects_scale_point_center_in_neutral_units() {
         });
     }
 
-    let (features, _) = crate::test_support::with_decode_context(|ctx| {
-        let scopes = &[scale];
-        let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
-        crate::design::feature_project::project_parameter_design_with_edge_identities(
-            ctx,
-            &crate::design::feature_project::ProjectInputs {
-                scopes,
-                timelines: &timelines,
-                ..Default::default()
-            },
-        )
-        .expect("test projection has a synthetic exact timeline")
-    });
+    let crate::design::feature_project::ProjectedParameterDesign { features, .. } =
+        crate::test_support::with_decode_context(|ctx| {
+            let scopes = &[scale];
+            let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
+            crate::design::feature_project::project_parameter_design_with_edge_identities(
+                ctx,
+                &crate::design::feature_project::ProjectInputs {
+                    scopes,
+                    timelines: &timelines,
+                    ..Default::default()
+                },
+            )
+            .expect("test projection has a synthetic exact timeline")
+        });
     let FeatureDefinition::Operation(FeatureOperation::Scale {
         bodies,
         center: Some(cadmpeg_ir::features::ScaleCenter::Point(center)),
@@ -172,64 +175,26 @@ fn dispatcher_projects_referenced_work_plane_frame() {
     );
     referenced.with_work_plane_reference(11);
 
-    let (features, _) = crate::test_support::with_decode_context(|ctx| {
-        let scopes = &[referenced];
-        let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
-        crate::design::feature_project::project_parameter_design_with_edge_identities(
-            ctx,
-            &crate::design::feature_project::ProjectInputs {
-                scopes,
-                timelines: &timelines,
-                ..Default::default()
-            },
-        )
-        .expect("test projection has a synthetic exact timeline")
-    });
+    let crate::design::feature_project::ProjectedParameterDesign { features, .. } =
+        crate::test_support::with_decode_context(|ctx| {
+            let scopes = &[referenced];
+            let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
+            crate::design::feature_project::project_parameter_design_with_edge_identities(
+                ctx,
+                &crate::design::feature_project::ProjectInputs {
+                    scopes,
+                    timelines: &timelines,
+                    ..Default::default()
+                },
+            )
+            .expect("test projection has a synthetic exact timeline")
+        });
     assert!(matches!(
         features[0].evaluation.definition(),
         FeatureDefinition::Operation(FeatureOperation::DatumPlane { frame }) if frame.origin() == Point3::new(0.0, 0.0, 0.0)
             && frame.normal() == Vector3::new(0.0, 0.0, 1.0)
             && frame.u_axis() == Vector3::new(1.0, 0.0, 0.0)
     ));
-}
-
-#[test]
-fn scale_center_id_refuses_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let mut scope = DesignParameterScope::empty(
-        "f3d:native/BulkStream.dat:parameter-scope#scale",
-        crate::records::feature::scope::DesignFeatureKind::Scale,
-        1,
-    );
-    if let crate::records::feature::scope::DesignScopePayloadMut::Scale(slot) = scope.payload_mut()
-    {
-        *slot = Some(DesignScaleOperation {
-            body_group_record_index: 5,
-            center_record_index: 6,
-            center_position: None,
-            uniform_factor: cadmpeg_ir::scalar::PositiveReal::new(2.5).unwrap(),
-            uniform_factor_offset: 20,
-        });
-    }
-    let mut found = false;
-    for limit in 0..2048 {
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::default();
-        policy.limits.max_retained_bytes = limit;
-
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        if matches!(super::project_single_scope_with_context(&ctx, &scope),
-            Err(CodecError::ResourceLimit(failure))
-                if failure.operation == "f3d Scale center id"
-                    && failure.dimension == ResourceDimension::RetainedBytes)
-        {
-            found = true;
-            break;
-        }
-    }
-    assert!(found, "Scale center charge was not reached");
 }
 
 #[test]
@@ -285,19 +250,20 @@ fn dispatcher_projects_three_point_work_plane_vertices() {
         );
     }
 
-    let (features, _) = crate::test_support::with_decode_context(|ctx| {
-        let scopes = &[plane];
-        let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
-        crate::design::feature_project::project_parameter_design_with_edge_identities(
-            ctx,
-            &crate::design::feature_project::ProjectInputs {
-                scopes,
-                timelines: &timelines,
-                ..Default::default()
-            },
-        )
-        .expect("test projection has a synthetic exact timeline")
-    });
+    let crate::design::feature_project::ProjectedParameterDesign { features, .. } =
+        crate::test_support::with_decode_context(|ctx| {
+            let scopes = &[plane];
+            let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
+            crate::design::feature_project::project_parameter_design_with_edge_identities(
+                ctx,
+                &crate::design::feature_project::ProjectInputs {
+                    scopes,
+                    timelines: &timelines,
+                    ..Default::default()
+                },
+            )
+            .expect("test projection has a synthetic exact timeline")
+        });
     let FeatureDefinition::Operation(FeatureOperation::DatumThreePointPlane { points, .. }) =
         features[0].evaluation.definition()
     else {
@@ -394,19 +360,20 @@ fn dispatcher_projects_work_point_plane_construction_and_dependencies() {
     let mut scopes = planes.to_vec();
     scopes.push(point);
 
-    let (features, _) = crate::test_support::with_decode_context(|ctx| {
-        let scopes = &scopes;
-        let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
-        crate::design::feature_project::project_parameter_design_with_edge_identities(
-            ctx,
-            &crate::design::feature_project::ProjectInputs {
-                scopes,
-                timelines: &timelines,
-                ..Default::default()
-            },
-        )
-        .expect("test projection has a synthetic exact timeline")
-    });
+    let crate::design::feature_project::ProjectedParameterDesign { features, .. } =
+        crate::test_support::with_decode_context(|ctx| {
+            let scopes = &scopes;
+            let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
+            crate::design::feature_project::project_parameter_design_with_edge_identities(
+                ctx,
+                &crate::design::feature_project::ProjectInputs {
+                    scopes,
+                    timelines: &timelines,
+                    ..Default::default()
+                },
+            )
+            .expect("test projection has a synthetic exact timeline")
+        });
     let point = features
         .iter()
         .find(|feature| {
@@ -533,17 +500,18 @@ fn dispatcher_projects_work_point_historical_vertex_and_dependency() {
     )
     .unwrap();
     let scopes = vec![predecessor, point];
-    let (features, _) = crate::test_support::with_decode_context(|decode_ctx| {
-        project_parameter_design_with_edge_identities(
-            decode_ctx,
-            &crate::design::feature_project::ProjectInputs {
-                scopes: &scopes,
-                timelines: std::slice::from_ref(&timeline),
-                ..Default::default()
-            },
-        )
-    })
-    .expect("authored WorkPoint timeline");
+    let crate::design::feature_project::ProjectedParameterDesign { features, .. } =
+        crate::test_support::with_decode_context(|decode_ctx| {
+            project_parameter_design_with_edge_identities(
+                decode_ctx,
+                &crate::design::feature_project::ProjectInputs {
+                    scopes: &scopes,
+                    timelines: std::slice::from_ref(&timeline),
+                    ..Default::default()
+                },
+            )
+        })
+        .expect("authored WorkPoint timeline");
     let predecessor = features
         .iter()
         .find(|feature| feature.native_ref.as_deref() == Some(&scopes[0].id))
@@ -782,41 +750,38 @@ fn dispatcher_projects_remaining_operand_feature_scopes() {
         copy_paste_bodies.payload_mut()
     {
         *slot = Some(
-            crate::test_support::with_decode_context(|ctx| {
-                DesignCopyPasteBodiesOperation::try_new_charged(
-                    ctx,
-                    vec![crate::records::feature::body_ops::DesignCopiedBody {
-                        operand: crate::records::identity::Located {
-                            value: 502,
-                            offset: 26,
-                        },
-                        source: crate::records::identity::Located {
-                            value: 11,
-                            offset: 25,
-                        },
-                        copied: crate::records::identity::Located {
-                            value: 12,
-                            offset: 40,
-                        },
-                    }],
-                    crate::records::feature::body_ops::CopyPasteRecordLocation {
-                        record_index: 501,
-                        class_tag: crate::records::references::DesignClassTag::try_from(
-                            "264".to_owned(),
-                        )
-                        .unwrap(),
-                        byte_offset: 0,
+            DesignCopyPasteBodiesOperation::try_new(
+                vec![crate::records::feature::body_ops::DesignCopiedBody {
+                    operand: crate::records::identity::Located {
+                        value: 502,
+                        offset: 26,
                     },
-                    crate::records::feature::body_ops::CopyPasteRecordLocation {
-                        record_index: 503,
-                        class_tag: crate::records::references::DesignClassTag::try_from(
-                            "264".to_owned(),
-                        )
-                        .unwrap(),
-                        byte_offset: 0,
+                    source: crate::records::identity::Located {
+                        value: 11,
+                        offset: 25,
                     },
-                )
-            })
+                    copied: crate::records::identity::Located {
+                        value: 12,
+                        offset: 40,
+                    },
+                }],
+                crate::records::feature::body_ops::CopyPasteRecordLocation {
+                    record_index: 501,
+                    class_tag: crate::records::references::DesignClassTag::try_from(
+                        "264".to_owned(),
+                    )
+                    .unwrap(),
+                    byte_offset: 0,
+                },
+                crate::records::feature::body_ops::CopyPasteRecordLocation {
+                    record_index: 503,
+                    class_tag: crate::records::references::DesignClassTag::try_from(
+                        "264".to_owned(),
+                    )
+                    .unwrap(),
+                    byte_offset: 0,
+                },
+            )
             .unwrap(),
         );
     }
@@ -925,21 +890,54 @@ fn dispatcher_projects_remaining_operand_feature_scopes() {
         paired_class_tag: crate::records::references::DesignClassTag::try_from("264".to_owned())
             .unwrap(),
     };
-    let (features, _) = crate::test_support::with_decode_context(|ctx| {
-        let scopes = &scopes;
-        let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
-        crate::design::feature_project::project_parameter_design_with_edge_identities(
-            ctx,
-            &crate::design::feature_project::ProjectInputs {
-                scopes,
-                construction_groups: &groups,
-                placements: std::slice::from_ref(&placement),
-                timelines: &timelines,
-                ..Default::default()
-            },
-        )
-        .expect("test projection has a synthetic exact timeline")
-    });
+    let project =
+        |settings: &[crate::records::sheet_metal_settings::DesignSheetMetalSettings]| {
+            crate::test_support::with_decode_context(|ctx| {
+                let scopes = &scopes;
+                let timelines = crate::design::test_support::synthetic_feature_timelines(scopes);
+                crate::design::feature_project::project_parameter_design_with_edge_identities(
+                    ctx,
+                    &crate::design::feature_project::ProjectInputs {
+                        scopes,
+                        construction_groups: &groups,
+                        placements: std::slice::from_ref(&placement),
+                        timelines: &timelines,
+                        sheet_metal_settings: settings,
+                        ..Default::default()
+                    },
+                )
+                .expect("test projection has a synthetic exact timeline")
+            })
+        };
+    let unruled = project(&[]);
+    // Without its settings' rule the flange uses its stored copy, and says so.
+    assert_eq!(unruled.unruled_flange_thicknesses, 1);
+    assert_eq!(
+        unruled
+            .unruled_flange_thickness_loss()
+            .map(|loss| loss.code),
+        Some(crate::loss::F3dLossCode::SheetThicknessUnruled.kind())
+    );
+    let features = unruled.features;
+    // The rule's thickness governs over the stored copy.
+    let ruled: crate::records::sheet_metal_settings::DesignSheetMetalSettings =
+        serde_json::from_value(serde_json::json!({
+            "id": format!("{stream}:design-sheet-metal-settings#20"),
+            "record_index": 103, "byte_offset": 20, "paired_byte_offset": 100,
+            "mask": 240, "inputs": {"version": "v2", "slots": vec![None::<u64>; 7]},
+            "rule_record_index": 51, "presentation_record_index": 52,
+            "owner_record_index": 53, "context_record_index": 54,
+            "rule_thickness": 0.25, "rule_thickness_offset": 900,
+        }))
+        .unwrap();
+    let ruled_projection = project(std::slice::from_ref(&ruled));
+    assert_eq!(ruled_projection.unruled_flange_thicknesses, 0);
+    assert!(ruled_projection.unruled_flange_thickness_loss().is_none());
+    assert!(ruled_projection.features.iter().any(|feature| matches!(
+        feature.evaluation.definition(),
+        FeatureDefinition::Operation(FeatureOperation::SheetMetalBaseFlange { thickness, .. })
+            if thickness.get() == 2.5
+    )));
     let definition = |kind: &str| {
         features
             .iter()
@@ -978,10 +976,10 @@ fn dispatcher_projects_remaining_operand_feature_scopes() {
         definition("CopyPaste"),
         FeatureDefinition::Operation(FeatureOperation::InsertComponent {
             occurrence: crate::ids::neutral_component_occurrence_id(
-                &"33333333-3333-4333-8333-333333333333"
-                    .to_owned()
-                    .try_into()
-                    .unwrap()
+                &crate::records::mesh::DesignOccurrenceKey::try_from(
+                    "33333333-3333-4333-8333-333333333333".to_owned()
+                )
+                .unwrap()
             ),
         })
     );
@@ -1017,115 +1015,45 @@ fn loft_path_preserves_complete_historical_edge_selection() {
     let edge =
         HistoricalEdgeId::mint("f3d:history-input:edge#7:feature:41:17").expect("identity grammar");
     assert_eq!(
-        crate::test_support::with_decode_context(|decode_ctx| {
-            crate::design::feature_project::loft_path_from_edge_selection(
-                decode_ctx,
-                "group",
-                EdgeSelection::historical(
-                    state.clone(),
-                    vec![edge.clone()],
-                    "selection".into(),
-                    &cadmpeg_test_support::service_decode_context(),
-                )
-                .expect("selection storage is admitted")
+        crate::design::feature_project::loft_path_from_edge_selection(
+            "group",
+            EdgeSelection::historical(state.clone(), vec![edge.clone()], "selection".into(),)
                 .unwrap(),
-            )
-        })
-        .unwrap(),
-        PathRef::historical_edges(
-            state.clone(),
-            vec![edge.clone()],
-            "selection".into(),
-            &cadmpeg_test_support::service_decode_context()
-        )
-        .expect("selection storage is admitted")
-        .unwrap()
+        ),
+        PathRef::historical_edges(state.clone(), vec![edge.clone()], "selection".into(),).unwrap()
     );
     assert_eq!(
-        crate::test_support::with_decode_context(|decode_ctx| {
-            crate::design::feature_project::loft_path_from_edge_selection(
-                decode_ctx,
-                "group",
-                EdgeSelection::historical_partial(
-                    state,
-                    vec![edge],
-                    vec!["operand".into()],
-                    "selection".into(),
-                    &cadmpeg_test_support::service_decode_context(),
-                )
-                .expect("selection storage is admitted")
-                .unwrap(),
+        crate::design::feature_project::loft_path_from_edge_selection(
+            "group",
+            EdgeSelection::historical_partial(
+                state,
+                vec![edge],
+                vec!["operand".into()],
+                "selection".into(),
             )
-        })
-        .unwrap(),
+            .unwrap(),
+        ),
         PathRef::Native("group".into())
     );
 }
 
 #[test]
-fn loft_native_path_refuses_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use cadmpeg_ir::features::EdgeSelection;
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_retained_bytes = 4;
-
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    assert!(matches!(
-        crate::design::feature_project::loft_path_from_edge_selection(
-            &ctx, "group", EdgeSelection::Unresolved,
-        ),
-        Err(CodecError::ResourceLimit(failure))
-            if failure.operation == "f3d loft native path"
-                && failure.dimension == ResourceDimension::RetainedBytes
-    ));
-}
-
-#[test]
-fn empty_surface_patch_path_refuses_native_copy_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let scope = DesignParameterScope::empty(
-        "f3d:test:scope#100",
-        crate::records::feature::scope::DesignFeatureKind::Thread,
-        100,
-    );
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_retained_bytes = 0;
-
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    assert!(matches!(
-        crate::design::feature_project::resolved_surface_patch_path(
-            &[], &[], &[], &[], &scope,
-            crate::design::feature_project::SurfacePatchRecipe::Direct, &ctx,
-        ),
-        Err(CodecError::ResourceLimit(failure))
-            if failure.operation == "f3d surface patch native path"
-                && failure.dimension == ResourceDimension::RetainedBytes
-    ));
-}
-
-#[test]
-fn form_dispatcher_binds_the_legacy_single_cage_gate() {
+fn form_dispatcher_retains_a_result_owner_without_a_cage_identity_join() {
     use std::io::{Cursor, Write};
     use zip::CompressionMethod;
 
     let stream = "FusionAssetName[Active]/FusionDesignSegmentType1/BulkStream.dat";
     let mut bulk = Vec::new();
-    let mut cage_list = vec![0; 100];
+    let mut cage_list = vec![0; 81];
     cage_list[..4].copy_from_slice(&3u32.to_le_bytes());
-    cage_list[4..7].copy_from_slice(b"355");
+    cage_list[4..7].copy_from_slice(b"335");
     cage_list[7..11].copy_from_slice(&205u32.to_le_bytes());
-    cage_list[21] = 1;
-    cage_list[22..30].copy_from_slice(&201u64.to_le_bytes());
-    cage_list[32..36].copy_from_slice(&1u32.to_le_bytes());
-    cage_list[36] = 1;
-    cage_list[37..45].copy_from_slice(&971u64.to_le_bytes());
-    cage_list[47..49].copy_from_slice(&[0xfc, 0]);
+    cage_list[25] = 1;
+    cage_list[26..34].copy_from_slice(&201u64.to_le_bytes());
+    cage_list[58] = 1;
+    cage_list[59..67].copy_from_slice(&971u64.to_le_bytes());
+    cage_list[70] = 1;
+    cage_list[71..79].copy_from_slice(&201u64.to_le_bytes());
     bulk.extend_from_slice(&cage_list);
 
     let mut paired = vec![0; 15];
@@ -1136,7 +1064,7 @@ fn form_dispatcher_binds_the_legacy_single_cage_gate() {
 
     let mut object = vec![0; 15];
     object[..4].copy_from_slice(&3u32.to_le_bytes());
-    object[4..7].copy_from_slice(b"325");
+    object[4..7].copy_from_slice(b"328");
     object[7..11].copy_from_slice(&971u32.to_le_bytes());
     bulk.extend_from_slice(&object);
 
@@ -1201,278 +1129,16 @@ fn form_dispatcher_binds_the_legacy_single_cage_gate() {
             )
         })
     })
-    .expect("legacy Form cage binding");
+    .expect("retained Form result owner");
     assert_eq!(
         *features[0].evaluation.definition(),
         cadmpeg_ir::features::FeatureDefinition::Operation(
-            cadmpeg_ir::features::FeatureOperation::Form {
-                cages: vec![cages[0].id.clone()],
+            cadmpeg_ir::features::FeatureOperation::Native {
+                kind: "Form".into(),
+                parameters: Default::default(),
             }
         )
     );
-}
-
-fn thread_face_group_fixture() -> (DesignParameterScope, DesignConstructionOperandGroup) {
-    let scope = DesignParameterScope::empty(
-        "f3d:test:scope#100",
-        crate::records::feature::scope::DesignFeatureKind::Thread,
-        100,
-    );
-    let group = serde_json::from_value(serde_json::json!({
-        "id": "f3d:test:construction-group#150",
-        "scope_record_index": 100,
-        "scope_reference_ordinal": 0,
-        "record_index": 150,
-        "byte_offset": 0,
-        "class_tag": "346",
-        "role": 0x0000_0010_0000_0000_u64,
-        "members": [200],
-        "member_offsets": [0],
-        "frame": {
-            "member_count_offset": 0,
-            "opaque_index": 1,
-            "opaque_index_offset": 18,
-            "opaque_scalar": 0.0,
-            "opaque_scalar_offset": 22,
-            "variant": false
-        },
-        "role_offset": 0,
-        "paired_class_tag": "262",
-        "paired_byte_offset": 325,
-        "next_record_index": 151,
-        "next_byte_offset": 0
-    }))
-    .expect("Thread face group");
-    (scope, group)
-}
-
-#[test]
-fn thread_face_group_refuses_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let (scope, group) = thread_face_group_fixture();
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_collection_items = 0;
-
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    assert!(matches!(
-        crate::design::feature_project::project_thread_face_selection(&ctx, &scope, &[150], &[group], &[]),
-        Err(CodecError::ResourceLimit(failure))
-            if failure.operation == "f3d Thread face group"
-                && failure.dimension == ResourceDimension::CollectionItems
-    ));
-}
-
-#[test]
-fn thread_face_native_id_refuses_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-
-    let (scope, group) = thread_face_group_fixture();
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_retained_bytes = 0;
-    let refusal_cap = match cadmpeg_test_support::refusal::resource_limit_at(
-        ResourceDimension::RetainedBytes,
-        "f3d Thread face native id",
-        |cap| {
-            let group = group.clone();
-            let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-            match ResourceDimension::RetainedBytes {
-                cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                    policy.limits.max_retained_bytes = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-                    policy.limits.max_collection_items = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-                    policy.limits.max_materialized_bytes = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-                    policy.limits.max_work_units = cap;
-                }
-                dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-            }
-            let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            (crate::design::feature_project::project_thread_face_selection(
-                &ctx,
-                &scope,
-                &[150],
-                &[group],
-                &[],
-            ))
-            .map(|_| ())
-        },
-    ) {
-        cadmpeg_core::CodecError::ResourceLimit(limit) => limit.limit,
-        error => panic!("unexpected refusal: {error:?}"),
-    };
-    policy.limits = cadmpeg_core::decode::DecodePolicy::service().limits;
-    match ResourceDimension::RetainedBytes {
-        cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-            policy.limits.max_retained_bytes = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-            policy.limits.max_collection_items = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-            policy.limits.max_materialized_bytes = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-            policy.limits.max_work_units = refusal_cap;
-        }
-        dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-    }
-    let refusal_cap = match cadmpeg_test_support::refusal::resource_limit_at(
-        ResourceDimension::RetainedBytes,
-        "f3d Thread face native id",
-        |cap| {
-            let group = group.clone();
-            let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-            match ResourceDimension::RetainedBytes {
-                cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                    policy.limits.max_retained_bytes = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-                    policy.limits.max_collection_items = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-                    policy.limits.max_materialized_bytes = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-                    policy.limits.max_work_units = cap;
-                }
-                dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-            }
-            let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            (crate::design::feature_project::project_thread_face_selection(
-                &ctx,
-                &scope,
-                &[150],
-                &[group],
-                &[],
-            ))
-            .map(|_| ())
-        },
-    ) {
-        cadmpeg_core::CodecError::ResourceLimit(limit) => limit.limit,
-        error => panic!("unexpected refusal: {error:?}"),
-    };
-    policy.limits = cadmpeg_core::decode::DecodePolicy::service().limits;
-    match ResourceDimension::RetainedBytes {
-        cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-            policy.limits.max_retained_bytes = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-            policy.limits.max_collection_items = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-            policy.limits.max_materialized_bytes = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-            policy.limits.max_work_units = refusal_cap;
-        }
-        dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-    }
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    assert!(matches!(
-        crate::design::feature_project::project_thread_face_selection(&ctx, &scope, &[150], &[group], &[]),
-        Err(CodecError::ResourceLimit(failure))
-            if failure.operation == "f3d Thread face native id"
-                && failure.dimension == ResourceDimension::RetainedBytes
-    ));
-}
-
-#[test]
-fn merged_direct_edge_refuses_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use cadmpeg_ir::features::EdgeSelection;
-    use cadmpeg_ir::ids::EdgeId;
-
-    let scope = DesignParameterScope::empty(
-        "f3d:test:scope#100",
-        crate::records::feature::scope::DesignFeatureKind::Thread,
-        100,
-    );
-    let edge = EdgeId::mint("f3d:brep:entity#1").expect("identity grammar");
-    let selections = [EdgeSelection::Edges(vec![edge])];
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_collection_items = 0;
-
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    assert!(matches!(
-        crate::design::feature_project::merge_edge_selections(&ctx, &scope, &selections),
-        Err(CodecError::ResourceLimit(failure))
-            if failure.operation == "f3d merged direct edge"
-                && failure.dimension == ResourceDimension::CollectionItems
-    ));
-}
-
-#[test]
-fn merged_direct_edge_id_refuses_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use cadmpeg_ir::features::EdgeSelection;
-    use cadmpeg_ir::ids::EdgeId;
-
-    let scope = DesignParameterScope::empty(
-        "f3d:test:scope#100",
-        crate::records::feature::scope::DesignFeatureKind::Thread,
-        100,
-    );
-    let edge = EdgeId::mint("f3d:brep:entity#1").expect("identity grammar");
-    let selections = [EdgeSelection::Edges(vec![edge])];
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_retained_bytes = 0;
-
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    assert!(matches!(
-        crate::design::feature_project::merge_edge_selections(&ctx, &scope, &selections),
-        Err(CodecError::ResourceLimit(failure))
-            if failure.operation == "f3d merged direct edge id"
-                && failure.dimension == ResourceDimension::RetainedBytes
-    ));
-}
-
-#[test]
-fn merged_historical_edge_refuses_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    use cadmpeg_ir::features::EdgeSelection;
-    use cadmpeg_ir::ids::{FeatureInputTopologyId, HistoricalEdgeId};
-
-    let scope = DesignParameterScope::empty(
-        "f3d:test:scope#100",
-        crate::records::feature::scope::DesignFeatureKind::Thread,
-        100,
-    );
-    let state =
-        FeatureInputTopologyId::mint("f3d:history-input:state#100").expect("identity grammar");
-    let edge = HistoricalEdgeId::mint("f3d:history-input:edge#100:1").expect("identity grammar");
-    let selection = EdgeSelection::historical(
-        state,
-        vec![edge],
-        scope.id.clone(),
-        &cadmpeg_test_support::service_decode_context(),
-    )
-    .expect("selection storage is admitted")
-    .expect("historical edge selection");
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_collection_items = 0;
-
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    assert!(matches!(
-        crate::design::feature_project::merge_edge_selections(&ctx, &scope, &[selection]),
-        Err(CodecError::ResourceLimit(failure))
-            if failure.operation == "f3d merged historical edge"
-                && failure.dimension == ResourceDimension::CollectionItems
-    ));
 }
 
 #[test]
@@ -1492,10 +1158,7 @@ fn merged_direct_edges_keep_source_order_and_native_fallback() {
         EdgeSelection::Edges(vec![second.clone()]),
     ];
     assert_eq!(
-        crate::test_support::with_decode_context(|decode_ctx| {
-            crate::design::feature_project::merge_edge_selections(decode_ctx, &scope, &selections)
-        })
-        .expect("unlimited merge"),
+        crate::design::feature_project::merge_edge_selections(&scope, &selections),
         EdgeSelection::Resolved {
             edges: vec![first.clone(), second],
             native: scope.id.clone(),
@@ -1506,104 +1169,117 @@ fn merged_direct_edges_keep_source_order_and_native_fallback() {
         EdgeSelection::Edges(vec![first]),
     ];
     assert_eq!(
-        crate::test_support::with_decode_context(|decode_ctx| {
-            crate::design::feature_project::merge_edge_selections(decode_ctx, &scope, &duplicate)
-        })
-        .expect("unlimited duplicate scan"),
+        crate::design::feature_project::merge_edge_selections(&scope, &duplicate),
         EdgeSelection::Native(scope.id)
     );
 }
 
 #[test]
-fn form_dispatcher_binds_a_unique_long_cage_list() {
+fn form_dispatcher_retains_a_group_without_a_cage_identity_join() {
     use std::io::{Cursor, Write};
     use zip::CompressionMethod;
 
-    let stream = "FusionAssetName[Active]/FusionDesignSegmentType1/BulkStream.dat";
-    let mut cage_list = vec![0; 99];
-    cage_list[..4].copy_from_slice(&3u32.to_le_bytes());
-    cage_list[4..7].copy_from_slice(b"415");
-    cage_list[7..11].copy_from_slice(&205u32.to_le_bytes());
-    cage_list[21] = 1;
-    cage_list[22..30].copy_from_slice(&201u64.to_le_bytes());
-    cage_list[32..36].copy_from_slice(&1u32.to_le_bytes());
-    cage_list[36] = 1;
-    cage_list[37..45].copy_from_slice(&971u64.to_le_bytes());
-    let mut paired = vec![0; 15];
-    paired[..4].copy_from_slice(&3u32.to_le_bytes());
-    paired[4..7].copy_from_slice(b"258");
-    paired[7..11].copy_from_slice(&205u32.to_le_bytes());
-    let mut bulk = cage_list;
-    bulk.extend_from_slice(&paired);
+    for flag_width in [2, 3] {
+        let stream = "FusionAssetName[Active]/FusionDesignSegmentType1/BulkStream.dat";
+        let mut cage_list = vec![0; 97 + flag_width];
+        cage_list[..4].copy_from_slice(&3u32.to_le_bytes());
+        cage_list[4..7].copy_from_slice(b"415");
+        cage_list[7..11].copy_from_slice(&205u32.to_le_bytes());
+        cage_list[21] = 1;
+        cage_list[22..30].copy_from_slice(&201u64.to_le_bytes());
+        cage_list[32..36].copy_from_slice(&1u32.to_le_bytes());
+        cage_list[36] = 1;
+        cage_list[37..45].copy_from_slice(&971u64.to_le_bytes());
+        cage_list[47..51].copy_from_slice(&252u32.to_le_bytes());
+        cage_list[51..59].copy_from_slice(&0.25f64.to_le_bytes());
+        cage_list[59..63].copy_from_slice(&252u32.to_le_bytes());
+        cage_list[63] = 1;
+        cage_list[64..72].copy_from_slice(&909u64.to_le_bytes());
+        if flag_width == 3 {
+            cage_list[74] = 1;
+        }
+        cage_list[74 + flag_width] = 1;
+        cage_list[75 + flag_width..83 + flag_width].copy_from_slice(&206u64.to_le_bytes());
+        cage_list[86 + flag_width] = 1;
+        cage_list[87 + flag_width..95 + flag_width].copy_from_slice(&201u64.to_le_bytes());
+        let mut paired = vec![0; 15];
+        paired[..4].copy_from_slice(&3u32.to_le_bytes());
+        paired[4..7].copy_from_slice(b"258");
+        paired[7..11].copy_from_slice(&205u32.to_le_bytes());
+        let mut bulk = cage_list;
+        bulk.extend_from_slice(&paired);
 
-    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let stored = crate::zip_write::file_options(CompressionMethod::Stored);
-    crate::test_support::manifest_test::write_synthetic_manifests(&mut archive, stored);
-    archive.start_file(stream, stored).unwrap();
-    archive.write_all(&bulk).unwrap();
-    let archive = archive.finish().unwrap().into_inner();
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = crate::zip_write::file_options(CompressionMethod::Stored);
+        crate::test_support::manifest_test::write_synthetic_manifests(&mut archive, stored);
+        archive.start_file(stream, stored).unwrap();
+        archive.write_all(&bulk).unwrap();
+        let archive = archive.finish().unwrap().into_inner();
 
-    let mut scope = crate::records::feature::scope::DesignParameterScope::empty(
-        &format!("f3d:{stream}:scope#201"),
-        crate::records::feature::scope::DesignFeatureKind::Form,
-        201,
-    );
-    scope
-        .try_edit(|draft| {
-            draft.reference_members = crate::records::identity::ReferenceRun::unlocated(vec![205]);
-            draft.layout_fixture_references();
-            draft.paired_byte_offset = draft.paired_byte_offset.max(draft.kind_offset + 96);
-            draft.frame_length = draft.paired_byte_offset - draft.byte_offset;
-            draft.layout_fixture_tail();
+        let mut scope = crate::records::feature::scope::DesignParameterScope::empty(
+            &format!("f3d:{stream}:scope#201"),
+            crate::records::feature::scope::DesignFeatureKind::Form,
+            201,
+        );
+        scope
+            .try_edit(|draft| {
+                draft.reference_members =
+                    crate::records::identity::ReferenceRun::unlocated(vec![205]);
+                draft.layout_fixture_references();
+                draft.paired_byte_offset = draft.paired_byte_offset.max(draft.kind_offset + 96);
+                draft.frame_length = draft.paired_byte_offset - draft.byte_offset;
+                draft.layout_fixture_tail();
+            })
+            .unwrap();
+        let feature_id = crate::ids::neutral_feature_id(&scope);
+        let mut features = vec![cadmpeg_ir::features::Feature {
+            id: feature_id,
+            ordinal: 0,
+            name: None,
+            suppressed: None,
+            dependencies: Default::default(),
+            source_properties: Default::default(),
+            source_tag: Some("Form".into()),
+            source_text: None,
+            source_content: Default::default(),
+
+            evaluation: cadmpeg_ir::features::FeatureEvaluation::from_definition(
+                cadmpeg_ir::features::FeatureDefinition::Operation(
+                    cadmpeg_ir::features::FeatureOperation::Native {
+                        kind: "Form".into(),
+                        parameters: Default::default(),
+                    },
+                ),
+            ),
+            native_ref: Some(scope.id.clone()),
+        }];
+        let cages = [cadmpeg_ir::SubdSurface {
+            id: cadmpeg_ir::ids::SubdId::mint("f3d:model:subd#1").expect("identity grammar"),
+            scheme: cadmpeg_ir::subd::SubdScheme::CatmullClark,
+            source_object: None,
+            cage: cadmpeg_ir::subd::SubdCage::default(),
+        }];
+
+        crate::test_support::zip_test::with_scan(&archive, |scan| {
+            crate::design::test_support::with_test_decode_context(|ctx| {
+                crate::design::feature_project::form_cages::bind_form_cages(
+                    ctx,
+                    scan,
+                    std::slice::from_ref(&scope),
+                    &mut features,
+                    &cages,
+                )
+            })
         })
-        .unwrap();
-    let feature_id = crate::ids::neutral_feature_id(&scope);
-    let mut features = vec![cadmpeg_ir::features::Feature {
-        id: feature_id,
-        ordinal: 0,
-        name: None,
-        suppressed: None,
-        dependencies: Default::default(),
-        source_properties: Default::default(),
-        source_tag: Some("Form".into()),
-        source_text: None,
-        source_content: Default::default(),
-
-        evaluation: cadmpeg_ir::features::FeatureEvaluation::from_definition(
+        .expect("long Form cage binding");
+        assert_eq!(
+            *features[0].evaluation.definition(),
             cadmpeg_ir::features::FeatureDefinition::Operation(
                 cadmpeg_ir::features::FeatureOperation::Native {
                     kind: "Form".into(),
                     parameters: Default::default(),
-                },
-            ),
-        ),
-        native_ref: Some(scope.id.clone()),
-    }];
-    let cages = [cadmpeg_ir::SubdSurface {
-        id: cadmpeg_ir::ids::SubdId::mint("f3d:model:subd#1").expect("identity grammar"),
-        scheme: cadmpeg_ir::subd::SubdScheme::CatmullClark,
-        source_object: None,
-        cage: cadmpeg_ir::subd::SubdCage::default(),
-    }];
-
-    crate::test_support::zip_test::with_scan(&archive, |scan| {
-        crate::design::test_support::with_test_decode_context(|ctx| {
-            crate::design::feature_project::form_cages::bind_form_cages(
-                ctx,
-                scan,
-                std::slice::from_ref(&scope),
-                &mut features,
-                &cages,
+                }
             )
-        })
-    })
-    .expect("long Form cage binding");
-    assert_eq!(
-        *features[0].evaluation.definition(),
-        cadmpeg_ir::features::FeatureDefinition::Operation(
-            cadmpeg_ir::features::FeatureOperation::Form {
-                cages: vec![cages[0].id.clone()],
-            }
-        )
-    );
+        );
+    }
 }

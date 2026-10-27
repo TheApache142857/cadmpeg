@@ -95,6 +95,23 @@ pub enum Check {
     /// or result topology state, a sketch constraint states the wrong number of
     /// members, or a native record census disagrees with the source container.
     Counts,
+    /// A face's edge loop does not list its coedges in traversal order: its
+    /// coedges form one closed traversal by vertex identity in another order,
+    /// several closed traversals, or none.
+    RingOrder,
+    /// A coedge does not list its pcurve uses in traversal order: they form
+    /// one chain from the coedge's end to its start.
+    PcurveOrder,
+    /// A face's sense disagrees with the winding of its loops, or the faces
+    /// of a body whose shells are closed disagree on its volume: a face's
+    /// readings or a shell's volume sign contradict the body's orientation,
+    /// or the flux of the unit field through the shells exceeds its
+    /// tolerance.
+    Orientation,
+    /// The measurement findings pass ran out of its allowance before it
+    /// checked every face, edge and closed body for [`Self::RingOrder`],
+    /// [`Self::PcurveOrder`] and [`Self::Orientation`].
+    MeasurementIncomplete,
 }
 
 impl fmt::Display for Check {
@@ -117,6 +134,10 @@ impl fmt::Display for Check {
             Self::Tessellation => "tessellation",
             Self::GeometricConsistency => "geometric_consistency",
             Self::Counts => "counts",
+            Self::RingOrder => "ring_order",
+            Self::PcurveOrder => "pcurve_order",
+            Self::Orientation => "orientation",
+            Self::MeasurementIncomplete => "measurement_incomplete",
         })
     }
 }
@@ -139,6 +160,10 @@ pub struct Finding {
         deserialize_with = "deserialize_entity"
     )]
     pub entity: Option<String>,
+    /// Other document entities a finding about `entity` involves, in message
+    /// order. Empty when `entity` is absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<String>,
 }
 
 /// Entity counts, findings, and propagated decode losses for one document.
@@ -181,3 +206,56 @@ impl ValidationReport {
 
 // Each optional key below names itself in whatever it refuses.
 cadmpeg_core::named_optional_field!(deserialize_entity, String, "entity");
+
+#[cfg(test)]
+mod tests {
+    use super::{Check, Finding};
+    use crate::report::Severity;
+
+    #[test]
+    fn finding_without_related_omits_the_key() -> Result<(), serde_json::Error> {
+        let wire = serde_json::json!({
+            "check": "referential_integrity",
+            "severity": "error",
+            "message": "invalid reference",
+            "entity": "test:model:feature#consumer"
+        });
+        let finding: Finding = serde_json::from_value(wire.clone())?;
+        assert!(finding.related.is_empty());
+        assert_eq!(serde_json::to_value(finding)?, wire);
+        Ok(())
+    }
+
+    #[test]
+    fn measurement_checks_are_pinned() -> Result<(), serde_json::Error> {
+        for (check, name) in [
+            (Check::RingOrder, "ring_order"),
+            (Check::PcurveOrder, "pcurve_order"),
+            (Check::Orientation, "orientation"),
+            (Check::MeasurementIncomplete, "measurement_incomplete"),
+        ] {
+            assert_eq!(serde_json::to_value(check)?, name);
+            assert_eq!(check.to_string(), name);
+            assert_eq!(serde_json::from_value::<Check>(name.into())?, check);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn finding_round_trips_related_ids_in_order() -> Result<(), serde_json::Error> {
+        let finding = Finding {
+            check: Check::ReferentialIntegrity,
+            severity: Severity::Error,
+            message: "invalid dependencies".into(),
+            entity: Some("test:model:feature#consumer".into()),
+            related: vec![
+                "test:model:feature#second".into(),
+                "test:model:feature#first".into(),
+            ],
+        };
+        let wire = serde_json::to_value(&finding)?;
+        assert_eq!(wire["related"], serde_json::json!(finding.related));
+        assert_eq!(serde_json::from_value::<Finding>(wire)?, finding);
+        Ok(())
+    }
+}

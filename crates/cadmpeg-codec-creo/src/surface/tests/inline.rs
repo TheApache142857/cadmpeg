@@ -118,7 +118,7 @@ fn referenced_inline_compact_x_cylinder_accepts_oblique_trim_containment() {
     }
     body.extend_from_slice(&[0xe4, 0xe3]);
 
-    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_test_decode_ctx(|ctx| {
+    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_service_context(|ctx| {
         inline_surface_body(
             ctx,
             SurfaceKind::Cylinder,
@@ -126,7 +126,7 @@ fn referenced_inline_compact_x_cylinder_accepts_oblique_trim_containment() {
             &scalar::ScalarCache::default(),
         )
     })
-    .expect("service scalar admission")
+    .expect("decode the inline surface body")
     .and_then(|body| body.carrier)
     .expect("compact X frame resolves from contained oblique-trim evidence") else {
         panic!("referenced inline body resolves a cylinder");
@@ -356,7 +356,7 @@ fn selector_envelope_places_a_compact_y_cylinder() {
         body
     };
     let decode = |body: &[u8]| {
-        crate::decode::with_test_decode_ctx(|ctx| {
+        crate::decode::with_service_context(|ctx| {
             inline_surface_body(
                 ctx,
                 SurfaceKind::Cylinder,
@@ -364,7 +364,7 @@ fn selector_envelope_places_a_compact_y_cylinder() {
                 &scalar::ScalarCache::default(),
             )
         })
-        .expect("service scalar admission")
+        .expect("decode the inline surface body")
         .and_then(|body| body.carrier)
         .and_then(|carrier| match carrier {
             InlineSurfaceCarrier::Cylinder { frame, .. } => Some(frame),
@@ -406,7 +406,7 @@ fn selector_envelope_decodes_bare_zero_and_oblique_outline() {
     }
     body.extend_from_slice(&[0x2f, 0x00, 0x00, 0xe3]);
 
-    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_test_decode_ctx(|ctx| {
+    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_service_context(|ctx| {
         inline_surface_body(
             ctx,
             SurfaceKind::Cylinder,
@@ -414,7 +414,7 @@ fn selector_envelope_decodes_bare_zero_and_oblique_outline() {
             &scalar::ScalarCache::default(),
         )
     })
-    .expect("service scalar admission")
+    .expect("decode the inline surface body")
     .and_then(|body| body.carrier)
     .expect("bare-zero selector envelope") else {
         panic!("selector envelope resolves a cylinder");
@@ -443,7 +443,7 @@ fn selector_placeholder_resolves_from_one_radial_extreme() {
     }
     body.extend_from_slice(&[0x2f, 0x00, 0x00, 0xe3]);
 
-    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_test_decode_ctx(|ctx| {
+    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_service_context(|ctx| {
         inline_surface_body(
             ctx,
             SurfaceKind::Cylinder,
@@ -451,7 +451,7 @@ fn selector_placeholder_resolves_from_one_radial_extreme() {
             &scalar::ScalarCache::default(),
         )
     })
-    .expect("service scalar admission")
+    .expect("decode the inline surface body")
     .and_then(|body| body.carrier)
     .expect("radius-witnessed selector placeholder") else {
         panic!("selector placeholder resolves a cylinder");
@@ -504,7 +504,7 @@ fn four_bound_inline_envelope_accepts_oblique_axial_containment() {
     payload.extend_from_slice(&[0x0f, 0xe3]);
 
     let body = &payload[6..];
-    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_test_decode_ctx(|ctx| {
+    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_service_context(|ctx| {
         inline_surface_body(
             ctx,
             SurfaceKind::Cylinder,
@@ -512,7 +512,7 @@ fn four_bound_inline_envelope_accepts_oblique_axial_containment() {
             &scalar::ScalarCache::default(),
         )
     })
-    .expect("service scalar admission")
+    .expect("decode the inline surface body")
     .and_then(|body| body.carrier)
     .expect("contained four-bound envelope resolves one carrier") else {
         panic!("cylinder grammar resolves a cylinder carrier");
@@ -544,7 +544,7 @@ fn four_bound_inline_envelope_accepts_an_endpoint_anchored_oblique_trim() {
     payload.extend_from_slice(&[0x0f, 0xe3]);
 
     let body = &payload[6..];
-    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_test_decode_ctx(|ctx| {
+    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_service_context(|ctx| {
         inline_surface_body(
             ctx,
             SurfaceKind::Cylinder,
@@ -552,7 +552,7 @@ fn four_bound_inline_envelope_accepts_an_endpoint_anchored_oblique_trim() {
             &scalar::ScalarCache::default(),
         )
     })
-    .expect("service scalar admission")
+    .expect("decode the inline surface body")
     .and_then(|body| body.carrier)
     .expect("four-bound envelope and compact frame resolve one carrier") else {
         panic!("cylinder grammar resolves a cylinder carrier");
@@ -595,7 +595,7 @@ fn four_bound_inline_envelope_decodes_directrix_dict_outline() {
     }
     body.extend_from_slice(&[0x0f, 0xe3]);
 
-    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_test_decode_ctx(|ctx| {
+    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_service_context(|ctx| {
         inline_surface_body(
             ctx,
             SurfaceKind::Cylinder,
@@ -603,7 +603,7 @@ fn four_bound_inline_envelope_decodes_directrix_dict_outline() {
             &scalar::ScalarCache::default(),
         )
     })
-    .expect("service scalar admission")
+    .expect("decode the inline surface body")
     .and_then(|body| body.carrier)
     .expect("directrix-DICT outline and compact frame resolve one carrier") else {
         panic!("inline body resolves a cylinder carrier");
@@ -633,7 +633,7 @@ fn inline_envelope_rejects_lane_aliases_by_geometry() {
     payload.extend_from_slice(&[0xe4, 0xe3]);
 
     let body = &payload[6..];
-    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_test_decode_ctx(|ctx| {
+    let InlineSurfaceCarrier::Cylinder { frame, .. } = crate::decode::with_service_context(|ctx| {
         inline_surface_body(
             ctx,
             SurfaceKind::Cylinder,
@@ -641,7 +641,7 @@ fn inline_envelope_rejects_lane_aliases_by_geometry() {
             &scalar::ScalarCache::default(),
         )
     })
-    .expect("service scalar admission")
+    .expect("decode the inline surface body")
     .and_then(|body| body.carrier)
     .expect("outline containment rejects the alternate scalar lane") else {
         panic!("inline body resolves a cylinder carrier");
@@ -679,10 +679,10 @@ fn decodes_local_system_suffix_frames_without_an_axial_envelope() {
     assert_eq!(torus_frame.frame().ref_direction(), [0.8, 0.6, 0.0]);
     assert_eq!(torus_frame.major_radius.get(), 3.0);
     assert_eq!(torus_frame.minor_radius.get(), 1.0);
-    assert!(crate::decode::with_test_decode_ctx(
+    assert!(crate::decode::with_service_context(
         |ctx| torus.has_inline_non_plane_local_system_suffix(ctx)
     )
-    .expect("service scalar admission"));
+    .expect("check that the surface has an inline non-plane local system suffix"));
     assert_eq!(torus.boundary, SurfaceBodyBoundary::CompoundClose);
 
     let compact = [
@@ -698,10 +698,10 @@ fn decodes_local_system_suffix_frames_without_an_axial_envelope() {
     assert_eq!(cylinder_frame.frame().ref_direction(), [0.0, 0.0, 1.0]);
     assert_eq!(cylinder_frame.radius.get(), 1.0);
     assert_eq!(cylinder_frame.length, None);
-    assert!(crate::decode::with_test_decode_ctx(
+    assert!(crate::decode::with_service_context(
         |ctx| cylinder.has_inline_non_plane_local_system_suffix(ctx)
     )
-    .expect("service scalar admission"));
+    .expect("check that the surface has an inline non-plane local system suffix"));
 }
 
 #[test]
@@ -822,6 +822,222 @@ fn inline_cone_accepts_a_complete_support_apex_operand_after_its_envelope() {
     assert!(decode_positional_cone_frame(&ambiguous, &scalar::ScalarCache::default()).is_none());
 }
 
+fn complete_support_apex_cone_operand(
+    apex: f64,
+    reference_payload: [u8; 7],
+    angle: f64,
+) -> Vec<u8> {
+    let mut body = vec![0x18, 0xe4, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0xe4];
+    push_inline_test_negative_coordinate(&mut body, apex);
+    body.push(0x19);
+    body.extend_from_slice(&reference_payload);
+    body.extend_from_slice(&[0x20, 0, 0]);
+    let raw = angle.to_be_bytes();
+    let prefix = match raw[..2] {
+        [0x3f, 0xe9] => 0x74,
+        [0x3f, 0xf0] => 0x7b,
+        _ => panic!("unsupported test cone angle"),
+    };
+    body.push(prefix);
+    body.extend_from_slice(&raw[2..]);
+    body
+}
+
+fn support_apex_cone_record(body: &[u8]) -> SurfaceParameterRecord {
+    let mut payload = vec![7, 0x25, 4, 0x01, 0, 0];
+    payload.extend_from_slice(body);
+    payload.extend_from_slice(&[0xe3, 0x98]);
+    let records = parameter_records(&payload);
+    assert_eq!(records.len(), 1);
+    records.into_iter().next().unwrap()
+}
+
+#[test]
+fn complete_cone_operand_bounds_model_reference_payload_closes() {
+    let references = [
+        [0; 7],
+        [0, 0, 0, 0, 0, 0xe3, 0],
+        [0xe0, 0, b'a', 0, 0, 0xe3, 0],
+    ];
+    for reference in references {
+        let mut body = vec![0x7b, 0, 0, 0, 0, 0, 0, 0xe3];
+        body.extend_from_slice(&complete_support_apex_cone_operand(
+            -4.0,
+            reference,
+            std::f64::consts::FRAC_PI_4,
+        ));
+        let record = support_apex_cone_record(&body);
+        assert_eq!(record.body, body);
+        assert_eq!(record.boundary, SurfaceBodyBoundary::CompoundClose);
+        let frame = record.positional_cone_frame().unwrap();
+        assert_eq!(frame.frame().origin(), [-4.0, 0.0, 0.0]);
+        assert_eq!(frame.frame().axis(), [1.0, 0.0, 0.0]);
+        assert_eq!(frame.frame().ref_direction(), [0.0, 0.0, -1.0]);
+        assert_eq!(frame.half_angle().get().get(), std::f64::consts::FRAC_PI_4);
+        assert_eq!(
+            decode_positional_cone_frame(&body, &scalar::ScalarCache::default()),
+            Some(frame)
+        );
+    }
+}
+
+#[test]
+fn complete_cone_operand_framing_stops_before_an_adjacent_positional_row() {
+    let first = complete_support_apex_cone_operand(-4.0, [0; 7], 1.0);
+    let second = complete_support_apex_cone_operand(-5.0, [0; 7], 1.0);
+    let mut payload = vec![7, 0x25, 4, 0x01, 0, 0];
+    payload.extend_from_slice(&first);
+    payload.extend_from_slice(&[0xe3, 8, 0x25, 4, 0x01, 0, 0]);
+    payload.extend_from_slice(&second);
+    payload.push(0xe3);
+    let records = parameter_records(&payload);
+    assert_eq!(records.len(), 2);
+    for ((record, expected_body), expected_apex) in
+        records.iter().zip([&first, &second]).zip([-4.0, -5.0])
+    {
+        assert_eq!(&record.body, expected_body);
+        assert_eq!(
+            record.positional_cone_frame().unwrap().frame().origin(),
+            [expected_apex, 0.0, 0.0]
+        );
+    }
+}
+
+#[test]
+fn complete_cone_operand_framing_cannot_claim_a_later_named_production() {
+    let owned = complete_support_apex_cone_operand(-4.0, [0; 7], 1.0);
+    let foreign = complete_support_apex_cone_operand(-5.0, [0; 7], 1.0);
+    for prefix in [&owned[..], &[0x99][..]] {
+        let mut body = prefix.to_vec();
+        body.extend_from_slice(b"\xe3\xe0\0srf_prim_ptr(cone)\0\xe3");
+        body.extend_from_slice(&foreign);
+        let record = support_apex_cone_record(&body);
+        if prefix == &owned[..] {
+            assert_eq!(record.body, owned);
+            assert_eq!(
+                record.positional_cone_frame().unwrap().frame().origin(),
+                [-4.0, 0.0, 0.0]
+            );
+        } else {
+            assert!(record.positional_cone_frame().is_none());
+        }
+        assert!(!record
+            .body
+            .windows(foreign.len())
+            .any(|bytes| bytes == foreign.as_slice()));
+    }
+}
+
+#[test]
+fn complete_cone_operand_framing_leaves_the_terminal_contour_to_its_owner() {
+    let owned = complete_support_apex_cone_operand(-4.0, [0; 7], 1.0);
+    let foreign = complete_support_apex_cone_operand(-5.0, [0; 7], 1.0);
+    let contour = [0x80, 0x80, 1, 0x0f, 0x0f, 0x0f, 0x0f, 0xe1];
+    let mut body = owned.clone();
+    body.push(0xe3);
+    body.extend_from_slice(&contour);
+    body.push(0xe3);
+    body.extend_from_slice(&foreign);
+    let record = support_apex_cone_record(&body);
+    assert_eq!(record.body, owned);
+    assert!(record.positional_cone_frame().is_none());
+    assert!(decode_positional_cone_frame(&body, &scalar::ScalarCache::default()).is_none());
+    let mut payload = vec![7, 0x25, 4, 0x01, 0, 0];
+    payload.extend_from_slice(&body);
+    payload.push(0xe3);
+    let contours = super::contour_records(&payload);
+    assert_eq!(contours.len(), 1);
+    assert_eq!(contours[0].surface_id, 7);
+    assert_eq!(contours[0].curve_header_id, 128);
+    assert_eq!(contours[0].body, contour);
+}
+
+#[test]
+fn complete_cone_operand_bounds_apex_and_angle_payload_closes() {
+    let apex = f64::from_bits(0xc010_0000_00e3_0000);
+    let angle = f64::from_bits(0x3ff0_0000_00e3_0000);
+    let body = complete_support_apex_cone_operand(apex, [0; 7], angle);
+    let record = support_apex_cone_record(&body);
+    assert_eq!(record.body, body);
+    let frame = record.positional_cone_frame().unwrap();
+    assert_eq!(frame.frame().origin(), [apex, 0.0, 0.0]);
+    assert_eq!(frame.half_angle().get().get(), angle);
+}
+
+#[test]
+fn complete_cone_operands_reconcile_compound_and_terminal_carriers() {
+    let first = complete_support_apex_cone_operand(-4.0, [0; 7], 1.0);
+    for second_apex in [-4.0, -5.0] {
+        let second = complete_support_apex_cone_operand(second_apex, [0, 0, 0, 0, 0, 0xe3, 0], 1.0);
+        for operands in [[&first, &second], [&second, &first]] {
+            let mut body = operands[0].clone();
+            body.push(0xe3);
+            body.extend_from_slice(operands[1]);
+            let direct = decode_positional_cone_frame(&body, &scalar::ScalarCache::default());
+            let record = support_apex_cone_record(&body);
+            assert_eq!(record.body, body);
+            assert_eq!(record.positional_cone_frame(), direct);
+            assert_eq!(direct.is_some(), second_apex == -4.0);
+            if let Some(frame) = direct {
+                assert_eq!(frame.frame().origin(), [-4.0, 0.0, 0.0]);
+                assert_eq!(frame.half_angle().get().get(), 1.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn cone_operand_agreement_requires_one_order_independent_component_range() {
+    let operands = [-4.0, -4.0 - 0.75e-12, -4.0 - 1.5e-12]
+        .map(|apex| complete_support_apex_cone_operand(apex, [0; 7], 1.0));
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let mut body = Vec::new();
+        for (index, operand) in order.into_iter().enumerate() {
+            if index != 0 {
+                body.push(0xe3);
+            }
+            body.extend_from_slice(&operands[operand]);
+        }
+        assert!(decode_positional_cone_frame(&body, &scalar::ScalarCache::default()).is_none());
+        assert!(support_apex_cone_record(&body)
+            .positional_cone_frame()
+            .is_none());
+    }
+}
+
+#[test]
+fn planar_and_support_apex_cone_operands_require_agreement() {
+    let prefix = legacy_planar_cone_suffix_row(&[], &[]);
+    let prefix = &prefix[6..prefix.len() - 1];
+    for angle in [
+        std::f64::consts::FRAC_PI_4,
+        f64::from_bits(std::f64::consts::FRAC_PI_4.to_bits() + 1),
+        1.0,
+    ] {
+        let mut operand = complete_support_apex_cone_operand(-2.0, [0; 7], angle);
+        operand[..9].copy_from_slice(&[0x10, 0x10, 0x0d, 0x10, 0x10, 0x10, 0x0d, 0x10, 0x10]);
+        let mut body = prefix.to_vec();
+        body.extend_from_slice(&operand);
+        let direct = decode_positional_cone_frame(&body, &scalar::ScalarCache::default());
+        let record = support_apex_cone_record(&body);
+        assert_eq!(record.positional_cone_frame(), direct);
+        assert_eq!(direct.is_some(), angle != 1.0);
+        if let Some(frame) = direct {
+            assert_eq!(frame.frame().origin(), [0.0, -2.0, 0.0]);
+            assert_eq!(frame.frame().axis(), [0.0, 1.0, 0.0]);
+            assert_eq!(frame.frame().ref_direction(), [1.0, 0.0, 0.0]);
+            assert_eq!(frame.half_angle().get().get(), std::f64::consts::FRAC_PI_4);
+        }
+    }
+}
+
 #[test]
 fn legacy_planar_cone_envelope_witness_resolves_inline_suffix_origin() {
     let local_system = [
@@ -840,6 +1056,32 @@ fn legacy_planar_cone_envelope_witness_resolves_inline_suffix_origin() {
     assert_eq!(frame.frame().axis(), [0.0, 1.0, 0.0]);
     assert_eq!(frame.frame().ref_direction(), [1.0, 0.0, 0.0]);
     assert_eq!(frame.half_angle.get().get(), std::f64::consts::FRAC_PI_4);
+}
+
+#[test]
+fn complete_planar_cone_witness_blocks_conflicting_suffix_angle() {
+    let local_system = [
+        0x10, 0x18, 0xe6, 0x10, 0x18, 0x10, 0x18, 0x2f, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x18,
+    ];
+    let conflicting_angle = 1.0_f64;
+    let angle_bits = conflicting_angle.to_be_bytes();
+    assert_eq!(&angle_bits[..2], &[0x3f, 0xf0]);
+    let mut suffix = vec![0x7b];
+    suffix.extend_from_slice(&angle_bits[2..]);
+    let record =
+        parameter_records(&legacy_planar_cone_suffix_row(&local_system, &suffix)).remove(0);
+
+    assert_eq!(record.kind(), SurfaceKind::Cone);
+    assert_eq!(
+        record
+            .cone_half_angle_override()
+            .unwrap()
+            .radians
+            .get()
+            .get(),
+        conflicting_angle
+    );
+    assert!(record.positional_cone_frame().is_none());
 }
 
 #[test]

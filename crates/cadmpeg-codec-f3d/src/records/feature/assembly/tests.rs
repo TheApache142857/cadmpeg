@@ -130,7 +130,8 @@ fn component_placement_preserves_wire_and_rejects_partial_location() {
     let base = serde_json::json!({
         "id": "occurrence", "class_tag": "327", "record_index": 7, "byte_offset": 0,
         "component_record_index": 8, "component_guid": "00000001-1111-4111-8111-111111111111", "component_guid_offset": 48,
-        "occurrence_guid": "00000002-1111-4111-8111-111111111111", "occurrence_guid_offset": 124, "occurrence_ordinal": 1
+        "occurrence_guid": "00000002-1111-4111-8111-111111111111", "occurrence_guid_offset": 124, "occurrence_ordinal": 1,
+        "owner_entity": 9, "owner_entity_offset": 219
     });
     assert_relaxed_guid_fields::<
         crate::records::feature::assembly_features::DesignComponentOccurrence,
@@ -146,6 +147,7 @@ fn component_placement_preserves_wire_and_rejects_partial_location() {
         if placed {
             wire["transform"] = transform.clone();
             wire["transform_offset"] = serde_json::json!(209);
+            wire["owner_entity_offset"] = serde_json::json!(347);
         }
         let record: crate::records::feature::assembly_features::DesignComponentOccurrence =
             serde_json::from_value(wire.clone()).unwrap();
@@ -655,9 +657,15 @@ fn component_insert_pairs_explicit_matrix_with_scope_and_carrier_locations() {
 fn component_occurrence_derives_base_ordinal_and_requires_nonzero_placed_ordinal() {
     let prefix = r#"{"id":"occurrence","class_tag":"327","record_index":7,"byte_offset":0,"component_record_index":8,"component_guid":"00000001-1111-4111-8111-111111111111","component_guid_offset":48,"occurrence_guid":"00000002-1111-4111-8111-111111111111","occurrence_guid_offset":124,"occurrence_ordinal":"#;
     let matrix = r#","transform":[[1.0,0.0,0.0,2.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]],"transform_offset":209"#;
+    let owner = |placed| {
+        format!(
+            r#","owner_entity":5,"owner_entity_offset":{}"#,
+            if placed { 347 } else { 219 }
+        )
+    };
     for (ordinal, placed) in [(1, false), (1, true), (2, true), (u32::MAX, true)] {
         let suffix = if placed { matrix } else { "" };
-        let wire = format!("{prefix}{ordinal}{suffix}}}");
+        let wire = format!("{prefix}{ordinal}{suffix}{}}}", owner(placed));
         let occurrence: crate::records::feature::assembly_features::DesignComponentOccurrence =
             serde_json::from_str(&wire).expect("component occurrence");
         assert_eq!(
@@ -668,7 +676,7 @@ fn component_occurrence_derives_base_ordinal_and_requires_nonzero_placed_ordinal
     }
     for (ordinal, placed) in [(0, false), (0, true), (2, false), (u32::MAX, false)] {
         let suffix = if placed { matrix } else { "" };
-        let wire = format!("{prefix}{ordinal}{suffix}}}");
+        let wire = format!("{prefix}{ordinal}{suffix}{}}}", owner(placed));
         let error = serde_json::from_str::<
             crate::records::feature::assembly_features::DesignComponentOccurrence,
         >(&wire)
@@ -798,18 +806,6 @@ fn assembly_path_admission_checks_class_arity_and_guid_order() {
         "wrapper_byte_offset": 200, "path_reference_offset": 211
     }))
     .unwrap();
-    let guids = |offsets: &[u64]| {
-        offsets
-            .iter()
-            .map(|offset| crate::records::identity::Located {
-                value: "11111111-1111-4111-8111-111111111111"
-                    .to_owned()
-                    .try_into()
-                    .unwrap(),
-                offset: *offset,
-            })
-            .collect()
-    };
     for tag in ["294", "299", "307", "329", "330", "386", "390"] {
         for count in [0, 1, 3, 4, 8] {
             let offsets: Vec<_> = (0..count).map(|index| 500 + index * 80).collect();
@@ -921,6 +917,7 @@ fn component_occurrence_derives_guid_and_transform_offsets_at_admission() {
             .try_into()
             .unwrap(),
         placement,
+        owner_entity: 9,
     };
     let matrix = [
         [1.0, 0.0, 0.0, 0.0],
@@ -929,19 +926,21 @@ fn component_occurrence_derives_guid_and_transform_offsets_at_admission() {
         [0.0, 0.0, 0.0, 1.0],
     ];
     for (placement, last_offset) in [
-        (Placement::Base, 124),
+        (Placement::Base, 219),
         (
             Placement::Explicit {
                 ordinal: std::num::NonZeroU32::MIN,
                 transform: matrix.try_into().unwrap(),
             },
-            209,
+            347,
         ),
     ] {
         let occurrence = Occurrence::try_new(draft(100, placement)).unwrap();
         let wire = serde_json::to_value(&occurrence).unwrap();
         assert_eq!(wire["component_guid_offset"], 148);
         assert_eq!(wire["occurrence_guid_offset"], 224);
+        assert_eq!(wire["owner_entity"], 9);
+        assert_eq!(wire["owner_entity_offset"], 100 + last_offset);
         assert_eq!(
             serde_json::from_value::<Occurrence>(wire.clone()).unwrap(),
             occurrence
@@ -950,6 +949,7 @@ fn component_occurrence_derives_guid_and_transform_offsets_at_admission() {
             "component_guid_offset",
             "occurrence_guid_offset",
             "transform_offset",
+            "owner_entity_offset",
         ] {
             if field == "transform_offset" && matches!(placement, Placement::Base) {
                 continue;
@@ -1012,81 +1012,6 @@ fn assembly_axial_selector_native_retained_limit_refuses_before_clone() {
         || super::ASSEMBLY_AXIAL_SELECTOR_CLONE_COUNT.with(|count| count.set(0)),
         || super::ASSEMBLY_AXIAL_SELECTOR_CLONE_COUNT.with(std::cell::Cell::get),
     );
-}
-fn continuation_path(record_index: u32, byte_offset: u64) -> super::DesignAssemblyOperandPath {
-    serde_json::from_value(serde_json::json!({
-        "link": {
-            "locator_reference_offset": 11, "locator_record_index": 10,
-            "locator_class_tag": "390", "locator_byte_offset": 100,
-            "locator_scope_reference_offset": 111, "wrapper_record_index": 20,
-            "wrapper_reference_offset": 122, "wrapper_class_tag": "397",
-            "wrapper_byte_offset": 200, "path_reference_offset": 211
-        },
-        "record_index": record_index,
-        "class_tag": "330",
-        "byte_offset": byte_offset,
-        "occurrence_guids": ["11111111-1111-1111-1111-111111111111"],
-        "occurrence_guid_offsets": [byte_offset + 10],
-        "identity_guids": [
-            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-            "cccccccc-cccc-cccc-cccc-cccccccccccc",
-            "dddddddd-dddd-dddd-dddd-dddddddddddd"
-        ],
-        "identity_guid_offsets": [
-            byte_offset + 100,
-            byte_offset + 180,
-            byte_offset + 260,
-            byte_offset + 340
-        ]
-    }))
-    .unwrap()
-}
-
-#[test]
-fn assembly_path_append_occurrences_refuse_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let error = continuation_path(30, 300)
-        .try_append(continuation_path(31, 1000), &ctx)
-        .unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(failure)
-        if failure.dimension == ResourceDimension::CollectionItems
-            && failure.operation == "f3d assembly path appended occurrences")
-    );
-}
-
-#[test]
-fn assembly_path_append_identities_refuse_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_collection_items = 1;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let error = continuation_path(30, 300)
-        .try_append(continuation_path(31, 1000), &ctx)
-        .unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(failure)
-        if failure.dimension == ResourceDimension::CollectionItems
-            && failure.operation == "f3d assembly path appended identities")
-    );
-
-    let arena = DecodeArena::new();
-    policy.limits.max_collection_items = 5;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let path = continuation_path(30, 300)
-        .try_append(continuation_path(31, 1000), &ctx)
-        .unwrap()
-        .unwrap();
-    assert_eq!(path.occurrence_guids().len(), 2);
-    assert_eq!(path.identity_guids().len(), 8);
 }
 
 #[test]
@@ -1200,18 +1125,16 @@ fn native_legacy_alignment_wire_rewrite_matches_the_typed_selection_walk() {
     let mut value = serde_json::to_value(&alignment).unwrap();
     let ctx = cadmpeg_test_support::service_decode_context();
     let remap = |id: &str| {
-        ctx.format_retained(
-            format_args!("f3d:occurrence:{}", id.strip_prefix("f3d:model:").unwrap()),
-            "test native identity",
-        )
+        Ok(format!(
+            "f3d:occurrence:{}",
+            id.strip_prefix("f3d:model:").unwrap()
+        ))
     };
-    let expected =
-        cadmpeg_ir::schema::rewrite::identities(&ctx, "test typed alignment", alignment, remap)
-            .unwrap();
-    let mut identities = IdentityMap::new(&ctx, "test native alignment", remap).unwrap();
+    let expected = cadmpeg_ir::schema::rewrite::identities(&ctx, alignment, remap).unwrap();
+    let mut identities = IdentityMap::new(remap);
     super::DesignAssemblyAlignment::rewrite_native_value(&ctx, &mut value, &mut identities)
         .unwrap();
-    identities.finish(&ctx).unwrap();
+    identities.finish().unwrap();
     assert_eq!(value, serde_json::to_value(expected).unwrap());
     for operand in value["legacy_operand_carriers"].as_array().unwrap() {
         assert_eq!(
@@ -1225,4 +1148,43 @@ fn native_legacy_alignment_wire_rewrite_matches_the_typed_selection_walk() {
     }
     drop(identities);
     ctx.finish_session().unwrap();
+}
+
+fn guids<T: TryFrom<String, Error = String>>(
+    offsets: &[u64],
+) -> Vec<crate::records::identity::Located<T>> {
+    offsets
+        .iter()
+        .map(|offset| crate::records::identity::Located {
+            value: T::try_from("11111111-1111-4111-8111-111111111111".to_owned()).unwrap(),
+            offset: *offset,
+        })
+        .collect()
+}
+
+#[test]
+fn root_operand_paths_refuse_continuations() {
+    let path = |root, shift| {
+        let mut wire = serde_json::to_value(borrowed_assembly_path(true)).unwrap();
+        wire["type_guid"] = serde_json::json!(super::TYPED_OCCURRENCE_PATH_TYPE_GUID);
+        wire["byte_offset"] = serde_json::json!(300 + shift);
+        wire["occurrence_guid_offsets"] = serde_json::json!([400 + shift]);
+        wire["identity_guid_offsets"] =
+            serde_json::json!([500 + shift, 580 + shift, 660 + shift, 740 + shift]);
+        if root {
+            wire["occurrence_guids"] = serde_json::json!(["00000000-0000-0000-0000-000000000000"]);
+            wire["identity_guids"].as_array_mut().unwrap().truncate(2);
+            wire["identity_guid_offsets"]
+                .as_array_mut()
+                .unwrap()
+                .truncate(2);
+        }
+        let path: super::DesignAssemblyOperandPath = serde_json::from_value(wire).unwrap();
+        assert_eq!(path.is_root(), root);
+        path
+    };
+    assert!(path(false, 0).try_append(path(false, 1000)).is_some());
+    assert!(path(true, 0).try_append(path(true, 1000)).is_none());
+    assert!(path(true, 0).try_append(path(false, 1000)).is_none());
+    assert!(path(false, 0).try_append(path(true, 1000)).is_none());
 }

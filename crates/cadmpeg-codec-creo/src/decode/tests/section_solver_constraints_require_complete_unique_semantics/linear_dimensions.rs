@@ -4,6 +4,7 @@ use super::super::{declared_solver_rows, synchronize_segment_count};
 use super::fixtures::base_definition;
 use crate::decode::sketch::coordinates::resolved_section_points;
 use crate::decode::sketch_transfer::constraints::section_dimension_constraints;
+use crate::decode::with_service_context;
 use crate::feature::definitions::test_support::append_points;
 use crate::feature::definitions::{ScalarLane, VariableType};
 use cadmpeg_ir::features::ParameterId;
@@ -36,12 +37,9 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         [Some(15), Some(16), Some(15), Some(1)],
     ]);
     assert_eq!(
-        crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(
-            ctx,
-            &unspanned_distance
-        ))
-        .expect("test section solve")
-        .get(&5),
+        with_service_context(|ctx| resolved_section_points(ctx, &unspanned_distance))
+            .expect("test section solve")
+            .get(&5),
         Some(&[3.0, 2.0])
     );
     let mut disabled_distance = distance_definition.clone();
@@ -84,12 +82,9 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         }],
     });
     assert!(
-        !crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(
-            ctx,
-            &disabled_distance
-        ))
-        .expect("test section solve")
-        .contains_key(&2)
+        !with_service_context(|ctx| resolved_section_points(ctx, &disabled_distance))
+            .expect("test section solve")
+            .contains_key(&2)
     );
     declared_solver_rows(
         &mut distance_definition
@@ -100,7 +95,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
     )
     .clear();
     assert_eq!(
-        *(crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        *(with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &distance_definition,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -135,7 +130,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         }],
     );
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &conflicting_spanning_distance,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -178,7 +173,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
             offset: 96,
         });
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &conflicting_saved_spanning_distance,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -203,7 +198,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
     };
     line.endpoints[1][0] = Some(0.0);
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &agreeing_saved_spanning_distance,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -256,7 +251,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         }],
     });
     assert_eq!(
-        *(crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        *(with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &schema_orientation,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -277,7 +272,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .rows[0]
         .value = crate::feature::definitions::DimensionValue::Resolved(1.0);
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &schema_orientation,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -300,7 +295,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         [Some(15), Some(16), Some(15), Some(1)],
     ]);
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &separate_point_distance,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -322,7 +317,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .expect("point 5")
         .value = ScalarLane::Value(0.0);
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &coincident_point_keys,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -341,7 +336,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .edit_ordinary(|rows| rows.retain(|segment| !segment.point_ids().contains(&5)));
     synchronize_segment_count(&mut separate_point_distance);
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &separate_point_distance,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -387,7 +382,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .expect("skamp header")
         .declared_count = 1;
     assert_eq!(
-        *(crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        *(with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &incidence_oriented_distance,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -423,7 +418,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         offset: 82,
     };
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &incomplete_skamps,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -462,7 +457,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .expect("skamp header")
         .declared_count = 2;
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &conflicting_orientation,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -483,7 +478,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
     )
     .clear();
     assert_eq!(
-        crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(ctx, &solver_definition))
+        with_service_context(|ctx| resolved_section_points(ctx, &solver_definition))
             .expect("test section solve")
             .get(&2),
         Some(&[0.0, 5.0])
@@ -495,12 +490,9 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .expect("relations")
         .declared_count = 4;
     assert!(
-        !crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(
-            ctx,
-            &incomplete_relations
-        ))
-        .expect("test section solve")
-        .contains_key(&2)
+        !with_service_context(|ctx| resolved_section_points(ctx, &incomplete_relations))
+            .expect("test section solve")
+            .contains_key(&2)
     );
     let mut equivalent_relation = solver_definition.clone();
     let duplicate = equivalent_relation
@@ -521,12 +513,9 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .expect("relations")
         .declared_count = 4;
     assert_eq!(
-        crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(
-            ctx,
-            &equivalent_relation
-        ))
-        .expect("test section solve")
-        .get(&2),
+        with_service_context(|ctx| resolved_section_points(ctx, &equivalent_relation))
+            .expect("test section solve")
+            .get(&2),
         Some(&[0.0, 5.0])
     );
     let conflicting_relation = equivalent_relation
@@ -538,12 +527,9 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .expect("duplicate relation");
     conflicting_relation.sign = 0xf6;
     assert!(
-        !crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(
-            ctx,
-            &equivalent_relation
-        ))
-        .expect("test section solve")
-        .contains_key(&2)
+        !with_service_context(|ctx| resolved_section_points(ctx, &equivalent_relation))
+            .expect("test section solve")
+            .contains_key(&2)
     );
     let mut duplicate_identity = solver_definition.clone();
     let mut duplicate = duplicate_identity
@@ -566,12 +552,9 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         ));
     synchronize_segment_count(&mut duplicate_identity);
     assert!(
-        !crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(
-            ctx,
-            &duplicate_identity
-        ))
-        .expect("test section solve")
-        .contains_key(&2)
+        !with_service_context(|ctx| resolved_section_points(ctx, &duplicate_identity))
+            .expect("test section solve")
+            .contains_key(&2)
     );
     let mut duplicate_endpoint_segment = solver_definition;
     let mut duplicate = duplicate_endpoint_segment
@@ -595,12 +578,9 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         ));
     synchronize_segment_count(&mut duplicate_endpoint_segment);
     assert!(
-        !crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(
-            ctx,
-            &duplicate_endpoint_segment
-        ))
-        .expect("test section solve")
-        .contains_key(&2)
+        !with_service_context(|ctx| resolved_section_points(ctx, &duplicate_endpoint_segment))
+            .expect("test section solve")
+            .contains_key(&2)
     );
     let mut shared_vertex_definition = distance_definition.clone();
     let mut incident = shared_vertex_definition
@@ -622,7 +602,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .insert(crate::feature::segment_rows::SegmentRow::Ordinary(incident));
     synchronize_segment_count(&mut shared_vertex_definition);
     assert_eq!(
-        *(crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(
+        *(with_service_context(|ctx| section_dimension_constraints(
             ctx,
             &shared_vertex_definition,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
@@ -658,7 +638,19 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .expect("relations")
         .rows
         .push(duplicate);
-    let duplicate_constraints = crate::decode::with_test_decode_ctx(|ctx| {
+    // Keep the table complete so duplicate identity, rather than a stale
+    // allocation count, is the sole reason source-row ownership is ambiguous.
+    duplicate_relation_id
+        .relations
+        .as_mut()
+        .expect("relations")
+        .declared_count = 4;
+    assert!(
+        crate::decode::feature_history::dimensions::feature_relation_table_complete(
+            duplicate_relation_id.relations.as_ref().expect("relations")
+        )
+    );
+    let duplicate_constraints = with_service_context(|ctx| {
         section_dimension_constraints(
             ctx,
             &duplicate_relation_id,
@@ -666,35 +658,33 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         )
     })
     .expect("test section solve");
-    assert!(duplicate_constraints
+    assert!(
+        duplicate_constraints.is_empty(),
+        "ambiguous source rows without uniquely owned operands or entities cannot form admitted Native constraints"
+    );
+    let retained_rows = &duplicate_relation_id
+        .relations
+        .as_ref()
+        .expect("relations")
+        .rows;
+    assert_eq!(retained_rows.len(), 2);
+    assert_eq!(
+        retained_rows
+            .iter()
+            .map(|row| row.relation_id)
+            .collect::<Vec<_>>(),
+        vec![8, 8]
+    );
+    assert_eq!(
+        retained_rows
+            .iter()
+            .map(|row| row.offset)
+            .collect::<Vec<_>>(),
+        vec![80, 500]
+    );
+    assert!(retained_rows
         .iter()
-        .all(|(constraint, _, _)| matches!(
-            constraint.definition.kind(),
-            SketchConstraintDefinitionInput::Native { .. }
-        )));
-    assert_eq!(
-        duplicate_constraints[0].0.id.as_str(),
-        "creo:featdefs:sketch_constraint#917:relation:offset:80"
-    );
-    assert_eq!(
-        duplicate_constraints[1].0.id.as_str(),
-        "creo:featdefs:sketch_constraint#917:relation:offset:500"
-    );
-    for (constraint, _, _) in &duplicate_constraints {
-        let SketchConstraintDefinitionInput::Native {
-            native_properties,
-            operands,
-            ..
-        } = constraint.definition.kind()
-        else {
-            panic!("duplicate relation must remain native");
-        };
-        assert_eq!(
-            native_properties.get("relation_id").map(String::as_str),
-            Some("8")
-        );
-        assert!(operands.iter().all(|operand| operand.field.is_some()));
-    }
+        .all(|row| row.operand_vectors.is_some()));
     let mut duplicate_measured_segment = distance_definition.clone();
     let duplicate = duplicate_measured_segment
         .segments
@@ -715,7 +705,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         ));
     synchronize_segment_count(&mut duplicate_measured_segment);
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(ctx,
+        with_service_context(|ctx| section_dimension_constraints(ctx,
             &duplicate_measured_segment,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
         )).expect("test section solve")[0]
@@ -736,7 +726,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
                 crate::feature::definitions::FeatureSegmentKind::Line([8, 9]);
         });
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(ctx,
+        with_service_context(|ctx| section_dimension_constraints(ctx,
             &duplicate_measured_segment,
             &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
         )).expect("test section solve")[0]
@@ -755,16 +745,22 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .rows[0]
         .dimension_type = 10;
     assert!(matches!(
-        crate::decode::with_test_decode_ctx(|ctx| section_dimension_constraints(ctx, &angular_distance, &SketchId::mint("creo:model:sketch#917").expect("valid test fixture"))).expect("test section solve")[0]
+        with_service_context(|ctx| section_dimension_constraints(
+            ctx,
+            &angular_distance,
+            &SketchId::mint("creo:model:sketch#917").expect("valid test fixture")
+        ))
+        .expect("test section solve")[0]
             .0
-            .definition.kind(),
+            .definition
+            .kind(),
         SketchConstraintDefinitionInput::Native {
             ref native_kind,
             ..
         } if native_kind == "creo:relation:0"
     ));
     assert!(
-        !crate::decode::with_test_decode_ctx(|ctx| resolved_section_points(ctx, &angular_distance))
+        !with_service_context(|ctx| resolved_section_points(ctx, &angular_distance))
             .expect("test section solve")
             .contains_key(&2)
     );
@@ -781,7 +777,7 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         .expect("dimensions")
         .rows
         .push(duplicate);
-    let duplicate_constraint = crate::decode::with_test_decode_ctx(|ctx| {
+    let duplicate_constraint = with_service_context(|ctx| {
         section_dimension_constraints(
             ctx,
             &duplicate_dimension,
@@ -793,11 +789,21 @@ fn section_solver_linear_dimensions_require_complete_unique_semantics() {
         duplicate_constraint[0].0.definition.kind(),
         SketchConstraintDefinitionInput::Native {
             native_kind,
+            native_properties,
             parameter: None,
+            entities,
             operands,
             ..
         } if native_kind == "creo:relation:0"
-            && operands.first().is_some_and(|operand| operand.object_index == Some(8))
-            && operands.iter().any(|operand| operand.field.as_ref().map(|field| field.name.as_str()) == Some("c[3]"))
+            && entities.is_empty()
+            && native_properties == &std::collections::BTreeMap::from([
+                ("dimension_id".to_string(), "0".to_string()),
+                ("sign".to_string(), "1".to_string()),
+            ])
+            && matches!(operands.as_slice(), [operand]
+                if operand.native_kind == "relat_ptr"
+                    && operand.object_index == Some(8)
+                    && operand.field.is_none()
+                    && operand.native_ref.as_deref() == Some("creo:featdefs:sketch#917"))
     ));
 }

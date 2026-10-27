@@ -1,6 +1,7 @@
 {
   "ir": {
-    "ir_version": "38",
+    "decode_depth": "full",
+    "ir_version": "9",
     "model": {
       "appearance_bindings": [],
       "appearances": [],
@@ -219,10 +220,14 @@
         "pm_dc_directions": [],
         "pm_dc_entity_style_links": [],
         "pm_dc_expressions": [],
+        "pm_dc_feature_dimensions": [],
         "pm_dc_feature_labels": [],
         "pm_dc_feature_properties": [],
         "pm_dc_feature_terminators": [],
         "pm_dc_features": [],
+        "pm_dc_kernel_entity_links": [],
+        "pm_dc_model_roots": [],
+        "pm_dc_parameter_tables": [],
         "pm_dc_parameters": [],
         "pm_dc_pattern_features": [],
         "pm_dc_sketch_constraints": [],
@@ -230,6 +235,7 @@
         "pm_dc_sketches": [],
         "pm_dc_transforms": [],
         "pm_dc_units": [],
+        "pm_dc_work_planes": [],
         "pm_graphics_faces": [],
         "pm_graphics_primary_color_styles": [],
         "pm_graphics_style_collections": [],
@@ -464,6 +470,8 @@
       "pm_dc_feature_properties": 0,
       "pm_dc_feature_terminators": 0,
       "pm_dc_features": 0,
+      "pm_dc_model_roots": 0,
+      "pm_dc_parameter_tables": 0,
       "pm_dc_parameters": 0,
       "pm_dc_pattern_features": 0,
       "pm_dc_sketch_constraints": 0,
@@ -535,7 +543,7 @@
           "scope": "namespaced",
           "strict_floor": "warning"
         },
-        "message": "the active kernel carrier decoded no surfaces, points, or faces",
+        "message": "the part has no bodies: its active kernel carrier holds no model records",
         "severity": "blocking"
       },
       {

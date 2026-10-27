@@ -7,6 +7,7 @@ use cadmpeg_core::text::NonBlankString;
 use cadmpeg_ir::scalar::FiniteReal;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::num::NonZeroU64;
+use std::sync::LazyLock;
 
 cadmpeg_core::named_optional_field!(
     deserialize_family_discriminator,
@@ -79,13 +80,16 @@ impl TryFrom<u64> for DesignParameterDiscriminator {
 /// Source family and ownership of one Design parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DesignParameterSource {
+    /// A document parameter. The discriminated form stores a family
+    /// discriminator; the typed compact form stores none.
     User {
-        family_discriminator: Located<DesignParameterDiscriminator>,
+        family_discriminator: Option<Located<DesignParameterDiscriminator>>,
     },
     Owned(OwnedDesignParameter),
 }
 
-const USER_PARAMETER_SOURCE_KIND: &str = "User Parameter";
+static USER_PARAMETER_SOURCE_KIND: LazyLock<NonBlankString> =
+    LazyLock::new(|| cadmpeg_core::nonblank_literal!("User Parameter"));
 
 /// An owned source family. Its nonempty name cannot identify a user parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,16 +109,12 @@ impl DesignParameterSource {
             return Err("design parameter source_kind is empty".into());
         };
         match (
-            source_kind == USER_PARAMETER_SOURCE_KIND,
+            source_kind == *USER_PARAMETER_SOURCE_KIND,
             owner_record_index,
         ) {
-            (true, None) => family_discriminator
-                .map(|family_discriminator| Self::User {
-                    family_discriminator,
-                })
-                .ok_or_else(|| {
-                    "design parameter family_discriminator is missing for user source_kind".into()
-                }),
+            (true, None) => Ok(Self::User {
+                family_discriminator,
+            }),
             (true, Some(_)) => {
                 Err("design parameter owner_record_index is present for user source_kind".into())
             }
@@ -273,13 +273,16 @@ fn check_parameter_discriminator_offset(
     let family_discriminator = match source {
         DesignParameterSource::User {
             family_discriminator,
-        } => Some(*family_discriminator),
+        } => *family_discriminator,
         DesignParameterSource::Owned(source) => source.family_discriminator,
     };
+    // The wide discriminated form stores four further zero bytes before it.
     if family_discriminator.is_some_and(|field| {
-        byte_offset.checked_add(22) != Some(field.offset) || field.offset >= expression_offset
+        (byte_offset.checked_add(22) != Some(field.offset)
+            && byte_offset.checked_add(26) != Some(field.offset))
+            || field.offset >= expression_offset
     }) {
-        return Err("family_discriminator_offset must follow byte_offset by 22 bytes and precede expression_offset".into());
+        return Err("family_discriminator_offset must follow byte_offset by 22 or 26 bytes and precede expression_offset".into());
     }
     Ok(())
 }
@@ -347,20 +350,25 @@ impl DesignParameter {
         match &self.source {
             DesignParameterSource::User {
                 family_discriminator,
-            } => Some(*family_discriminator),
+            } => *family_discriminator,
             DesignParameterSource::Owned(source) => source.family_discriminator,
         }
     }
 
-    pub(crate) fn source_kind(&self) -> &str {
+    pub(crate) fn source_kind(&self) -> &NonBlankString {
         match &self.source {
-            DesignParameterSource::User { .. } => USER_PARAMETER_SOURCE_KIND,
-            DesignParameterSource::Owned(source) => source.source_kind.as_str(),
+            DesignParameterSource::User { .. } => &USER_PARAMETER_SOURCE_KIND,
+            DesignParameterSource::Owned(source) => &source.source_kind,
         }
     }
 
+    /// The source kind as text.
+    pub(crate) fn source_kind_str(&self) -> &str {
+        self.source_kind().as_str()
+    }
+
     pub(crate) fn kind(&self) -> DesignParameterKind {
-        design_parameter_kind_from_source(self.source_kind())
+        design_parameter_kind_from_source(self.source_kind_str())
     }
 
     pub(crate) fn owner_record_index(&self) -> Option<u32> {
@@ -412,7 +420,7 @@ impl Serialize for DesignParameter {
             owner_record_index: self.owner_record_index(),
             expression: self.expression.as_str(),
             expression_offset: self.expression_offset,
-            source_kind: self.source_kind(),
+            source_kind: self.source_kind_str(),
             source_kind_offset: self.source_kind_offset,
             kind: self.kind(),
             unit: self.unit.as_ref().map(|field| field.value.as_str()),
@@ -541,7 +549,7 @@ impl From<DesignParameter> for DesignParameterSerde {
         let owner_record_index = parameter.owner_record_index();
         let family_discriminator = parameter.family_discriminator();
         let source_kind = match parameter.source {
-            DesignParameterSource::User { .. } => USER_PARAMETER_SOURCE_KIND.to_owned(),
+            DesignParameterSource::User { .. } => USER_PARAMETER_SOURCE_KIND.to_string(),
             DesignParameterSource::Owned(source) => source.source_kind.to_string(),
         };
         Self {
@@ -771,6 +779,8 @@ impl DesignParameterOwner {
         } else {
             return Err("record_index, parameter_record_index, and companion_record_index must follow a parameter frame order".into());
         };
+        // A variant byte either ends its scope lane, keeping the variant-less
+        // length, or is followed by one flag byte.
         let modern = matches!(
             (
                 wire.frame_length,
@@ -780,25 +790,34 @@ impl DesignParameterOwner {
             (99 | 103, Some(40), None)
                 | (100, Some(41), None)
                 | (107, Some(44), None)
-                | (101, Some(41), Some(0..=1))
-                | (104, Some(40), Some(0..=1))
-                | (108, Some(44), Some(0..=1))
+                | (100 | 101, Some(41), Some(0..=1))
+                | (103 | 104, Some(40), Some(0..=1))
+                | (107 | 108, Some(44), Some(0..=1))
+        );
+        // The typed-reference spelling widens each of the five reference
+        // fields by forty bytes; one of them precedes the scalar envelope.
+        let typed = matches!(
+            (
+                wire.frame_length,
+                wire.evaluated_value_offset.checked_sub(wire.byte_offset),
+                wire.variant
+            ),
+            (299 | 303, Some(80), None)
+                | (300, Some(81), None)
+                | (307, Some(84), None)
+                | (300 | 301, Some(81), Some(0..=1))
+                | (303 | 304, Some(80), Some(0..=1))
+                | (307 | 308, Some(84), Some(0..=1))
         );
         let legacy = wire.local_ordinal == 0
             && match wire.frame_length {
-                68 => {
-                    crate::design::decode::parameters::is_legacy_parameter_owner_68_class(
-                        wire.class_tag.as_str(),
-                    ) && wire.scope_record_index == 0
-                }
-                88 => {
-                    crate::design::decode::parameters::is_legacy_parameter_owner_88_class(
-                        wire.class_tag.as_str(),
-                    ) && wire.scope_record_index != 0
-                }
+                // Class tags are dynamic; the decoder admits these forms by the
+                // owner record's type, so the wire form is its length and lanes.
+                68 => wire.scope_record_index == 0,
+                88 => wire.scope_record_index != 0,
                 _ => false,
             };
-        if !modern && !legacy {
+        if !modern && !typed && !legacy {
             return Err("frame_length, evaluated_value_offset, and variant must describe a parameter owner frame".into());
         }
         Ok(Self {
@@ -1012,6 +1031,12 @@ impl DesignParameterCompanion {
     #[must_use]
     pub(crate) fn timestamp_micros_offset(&self) -> u64 {
         self.timestamp_micros_offset
+    }
+
+    /// Start of the owned payload: the timestamp is followed by eight zero
+    /// bytes in both reference spellings of the prefix.
+    pub(crate) fn payload_byte_offset(&self) -> Option<u64> {
+        self.timestamp_micros_offset.checked_add(16)
     }
 
     /// Owned payload, when the binding pass reached this companion.

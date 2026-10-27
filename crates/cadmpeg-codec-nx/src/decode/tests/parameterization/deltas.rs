@@ -81,7 +81,7 @@ fn every_unselected_deltas_family_preserves_its_paired_primary_model() {
         ),
         (
             s::charted_intersection_curve_topology_partition_stream(),
-            s::ext11_charted_intersection_curve_stream(),
+            s::ext11_intersection_deltas(&s::ext11_charted_intersection_curve_stream()),
         ),
     ];
     for (primary, delta) in cases {
@@ -111,15 +111,27 @@ fn every_unselected_deltas_family_preserves_its_paired_primary_model() {
 
 #[test]
 fn unpaired_deltas_and_schema_only_streams_contribute_no_geometry() {
+    // Container classification requires the TRANSMIT FILE spelling of the
+    // Deltas description; the owner fixtures use a shorter description.
+    let transmit_file = |bytes: Vec<u8>| {
+        let short = b"Transmit (deltas)";
+        let long = b": TRANSMIT FILE (deltas)";
+        assert_eq!(&bytes[6..6 + short.len()], short);
+        let mut relabeled = b"PS".to_vec();
+        relabeled.extend_from_slice(&u32::try_from(long.len()).unwrap().to_be_bytes());
+        relabeled.extend_from_slice(long);
+        relabeled.extend_from_slice(&bytes[6 + short.len()..]);
+        relabeled
+    };
     let mut schema_only = crate::test_support::test_pmarks::prefix(1);
     schema_only.extend(crate::test_support::owned_deltas::body(36).0);
     for bytes in [
         d::deltas_point_partition_stream(),
         d::status_framed_deltas_stream(),
         d::variable_status_framed_deltas_stream(),
-        schema_only,
-        crate::test_support::test_pmarks::complete(crate::test_support::owned_deltas::body_stream(
-            36,
+        transmit_file(schema_only),
+        transmit_file(crate::test_support::test_pmarks::complete(
+            crate::test_support::owned_deltas::body_stream(36),
         )),
     ] {
         let decoded = NxCodec
@@ -133,6 +145,7 @@ fn unpaired_deltas_and_schema_only_streams_contribute_no_geometry() {
         assert!(decoded.ir().model.curves.is_empty());
         assert!(decoded.ir().model.surfaces.is_empty());
         let attributes = &decoded.ir().source.as_ref().unwrap().attributes;
+
         assert_eq!(
             attributes.get("deltas.0.selection").map(String::as_str),
             Some("unresolved")

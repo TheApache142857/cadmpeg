@@ -181,7 +181,7 @@ pub(crate) enum StepLossCode {
     HiddenPmiVisibilityUnsupported,
     /// A wire shell has free vertices without an edge-based STEP carrier.
     WireShellFreeVertices,
-    /// Bodies have no owning product representation.
+    /// Bodies without component ownership are assigned to the root product.
     BodyWithoutProductRepresentation,
     /// Solid and sheet shells omit wire edges and free vertices.
     SurfaceShellWireTopologyOmitted,
@@ -215,6 +215,9 @@ pub(crate) enum StepLossCode {
     GeometryCarrierNotWritten,
     /// Coedge pcurve carriers use unwritable geometry or surface references.
     PcurveCarrierUnwritable,
+    /// Pcurves on helix surfaces written as fitted B-spline surfaces, whose
+    /// parameters differ from the native ones.
+    PcurveOnFittedHelixSurface,
     /// Assembly occurrences were omitted because the parent has no local product.
     AssemblyOccurrenceOmittedNoParentProduct,
     /// Regions have no shell list and were not written.
@@ -283,6 +286,15 @@ pub(crate) enum StepLossCode {
     SourceAttributeNotWritten,
     /// Procedural definitions were reduced to solved STEP carriers.
     ProceduralReducedToCarrier,
+    /// Helix definitions without a solved carrier were written as fitted
+    /// cubic B-splines.
+    HelixFittedToBspline,
+    /// Procedural definitions without another STEP carrier were written as
+    /// sampled cubic B-splines.
+    ProceduralSampledToBspline,
+    /// A helix definition without a solved carrier had no B-spline within the
+    /// linear tolerance, so its carrier was not written.
+    HelixFitFailed,
     /// A procedural definition has no emitted native construction or solved carrier.
     ProceduralDefinitionNotWritten,
     /// Source-native records were not represented.
@@ -303,6 +315,8 @@ pub(crate) enum StepLossCode {
     FaceOmittedUnclassifiedLoop,
     /// A face has no writable bounds.
     FaceNoWritableBounds,
+    /// A face's implicit outer boundary has no STEP bound.
+    FaceImplicitOuterBoundUnwritable,
     /// A loop was omitted because its record is missing.
     LoopRecordMissing,
     /// A loop was omitted because its vertex is missing.
@@ -333,6 +347,27 @@ pub(crate) enum StepLossCode {
     EdgeStartVertexMissing,
     /// An edge was omitted because its end vertex is missing.
     EdgeEndVertexMissing,
+    /// An anchor or REFERENCE expansion passed its value-node limit; the
+    /// binding or instance remains source-only.
+    ParseExpansionBounded,
+    /// Product occurrence expansion stopped at its occurrence limit.
+    OccurrenceExpansionOutputTruncated,
+    /// Product occurrence expansion stopped a branch at its path-depth limit.
+    OccurrenceExpansionDepthTruncated,
+    /// A non-manifold edge of a closed shell was written as one edge per
+    /// forward and reversed use pair.
+    NonManifoldEdgeSplit,
+    /// An edge vertex lies off its own carrier by more than the document
+    /// tolerance, and the edge's parameter range was derived anyway.
+    ///
+    /// The conic inversion takes the parameter from the IN-PLANE components of
+    /// the vertex alone, so the axial and radial offsets cannot change the
+    /// answer: the parameter is exact for any vertex off the axis. Refusing it
+    /// on the total 3D distance rejects a correct parameter for a defect no
+    /// parameter can repair, and costs the whole body downstream. The offset is
+    /// reported here instead, with its measured value, because the cost is
+    /// continuous and a threshold cannot express it.
+    EdgeVertexOffCarrier,
 }
 
 impl StepLossCode {
@@ -432,6 +467,7 @@ impl StepLossCode {
         Self::UnknownSurfaceFaceOmitted,
         Self::GeometryCarrierNotWritten,
         Self::PcurveCarrierUnwritable,
+        Self::PcurveOnFittedHelixSurface,
         Self::AssemblyOccurrenceOmittedNoParentProduct,
         Self::RegionNoShellList,
         Self::WireRegionNoConnectedEdgeSet,
@@ -466,6 +502,9 @@ impl StepLossCode {
         Self::AppearanceBindingMetadataReduced,
         Self::SourceAttributeNotWritten,
         Self::ProceduralReducedToCarrier,
+        Self::HelixFittedToBspline,
+        Self::ProceduralSampledToBspline,
+        Self::HelixFitFailed,
         Self::ProceduralDefinitionNotWritten,
         Self::SourceNativeRecordOmitted,
         Self::RegionNoWritableOuterShell,
@@ -476,6 +515,7 @@ impl StepLossCode {
         Self::FaceOmittedInnerLoop,
         Self::FaceOmittedUnclassifiedLoop,
         Self::FaceNoWritableBounds,
+        Self::FaceImplicitOuterBoundUnwritable,
         Self::LoopRecordMissing,
         Self::LoopVertexMissing,
         Self::LoopCoedgeRecordMissing,
@@ -491,6 +531,11 @@ impl StepLossCode {
         Self::EdgeRecordMissing,
         Self::EdgeStartVertexMissing,
         Self::EdgeEndVertexMissing,
+        Self::ParseExpansionBounded,
+        Self::OccurrenceExpansionOutputTruncated,
+        Self::OccurrenceExpansionDepthTruncated,
+        Self::NonManifoldEdgeSplit,
+        Self::EdgeVertexOffCarrier,
     ];
 
     /// The stable string identifier. This is the gating contract.
@@ -608,6 +653,7 @@ impl StepLossCode {
             Self::UnknownSurfaceFaceOmitted => "geometry.unknown-surface-face-omitted",
             Self::GeometryCarrierNotWritten => "geometry.carrier-not-written",
             Self::PcurveCarrierUnwritable => "pcurve.carrier-unwritable",
+            Self::PcurveOnFittedHelixSurface => "pcurve.on-fitted-helix-surface",
             Self::AssemblyOccurrenceOmittedNoParentProduct => {
                 "assembly.occurrence-omitted-no-parent-product"
             }
@@ -644,6 +690,9 @@ impl StepLossCode {
             Self::AppearanceBindingMetadataReduced => "appearance.binding-metadata-reduced",
             Self::SourceAttributeNotWritten => "attribute.source-record-not-written",
             Self::ProceduralReducedToCarrier => "geometry.procedural-reduced-to-carrier",
+            Self::HelixFittedToBspline => "geometry.helix-fitted-to-bspline",
+            Self::ProceduralSampledToBspline => "geometry.procedural-sampled-to-bspline",
+            Self::HelixFitFailed => "geometry.helix-fit-failed",
             Self::ProceduralDefinitionNotWritten => "geometry.procedural-definition-not-written",
             Self::SourceNativeRecordOmitted => "native.source-record-omitted",
             Self::RegionNoWritableOuterShell => "topology.region-no-writable-outer-shell",
@@ -654,6 +703,9 @@ impl StepLossCode {
             Self::FaceOmittedInnerLoop => "topology.face-omitted-inner-loop",
             Self::FaceOmittedUnclassifiedLoop => "topology.face-omitted-unclassified-loop",
             Self::FaceNoWritableBounds => "topology.face-no-writable-bounds",
+            Self::FaceImplicitOuterBoundUnwritable => {
+                "topology.face-implicit-outer-bound-unwritable"
+            }
             Self::LoopRecordMissing => "topology.loop-record-missing",
             Self::LoopVertexMissing => "topology.loop-vertex-missing",
             Self::LoopCoedgeRecordMissing => "topology.loop-coedge-record-missing",
@@ -669,6 +721,11 @@ impl StepLossCode {
             Self::EdgeRecordMissing => "topology.edge-record-missing",
             Self::EdgeStartVertexMissing => "topology.edge-start-vertex-missing",
             Self::EdgeEndVertexMissing => "topology.edge-end-vertex-missing",
+            Self::ParseExpansionBounded => "parse.expansion-bounded",
+            Self::OccurrenceExpansionOutputTruncated => "occurrence.expansion-output-truncated",
+            Self::OccurrenceExpansionDepthTruncated => "occurrence.expansion-depth-truncated",
+            Self::NonManifoldEdgeSplit => "topology.non-manifold-edge-split",
+            Self::EdgeVertexOffCarrier => "geometry.edge-vertex-off-carrier",
         }
     }
 
@@ -698,6 +755,7 @@ impl StepLossCode {
             | Self::FaceOmittedOuterLoop
             | Self::FaceOmittedUnclassifiedLoop
             | Self::FaceNoWritableBounds
+            | Self::FaceImplicitOuterBoundUnwritable
             | Self::LoopCoedgeRecordMissing
             | Self::LoopEdgeNotWritable
             | Self::LoopDuplicateCoedge
@@ -724,7 +782,10 @@ impl StepLossCode {
             | Self::AppearanceBindingMetadataReduced
             | Self::SourceAttributeNotWritten
             | Self::ProceduralReducedToCarrier
-            | Self::SourceNativeRecordOmitted => Severity::Info,
+            | Self::HelixFittedToBspline
+            | Self::ProceduralSampledToBspline
+            | Self::SourceNativeRecordOmitted
+            | Self::NonManifoldEdgeSplit => Severity::Info,
             _ => Severity::Warning,
         }
     }
@@ -740,11 +801,14 @@ impl StepLossCode {
             | Self::HeaderMetadataNoncanonical => LossTaxonomy::NoncanonicalSourceSyntax,
             Self::DecodeWarning
             | Self::ByteAccountingUnclassified
-            | Self::PcurveGlobalFidelityUnproved => LossTaxonomy::DecodeDiagnostic,
+            | Self::PcurveGlobalFidelityUnproved
+            | Self::OccurrenceExpansionOutputTruncated
+            | Self::OccurrenceExpansionDepthTruncated => LossTaxonomy::DecodeDiagnostic,
             Self::ParseDraftGrammar => LossTaxonomy::SourceDialectUnverified,
             Self::OpaqueRecordPreserved
             | Self::DrawingRecordTooFewParameters
-            | Self::DrawingOrderUnstatable => LossTaxonomy::RecordNotTyped,
+            | Self::DrawingOrderUnstatable
+            | Self::ParseExpansionBounded => LossTaxonomy::RecordNotTyped,
             Self::ImplementationLevelUnverified | Self::SourceDialectUnverified => {
                 LossTaxonomy::SourceDialectUnverified
             }
@@ -794,6 +858,7 @@ impl StepLossCode {
             | Self::PmiAngleUnitUnresolved
             | Self::ValidationMeasureUnitUnresolved
             | Self::GeometryCarrierNotWritten
+            | Self::HelixFitFailed
             | Self::ProceduralDefinitionNotWritten => LossTaxonomy::GeometryNotTransferred,
             Self::TopologyRootRejected
             | Self::TopologyRootIncomplete
@@ -816,6 +881,7 @@ impl StepLossCode {
             | Self::FaceOmittedUnclassifiedLoop
             | Self::FaceOmittedInnerLoop
             | Self::FaceNoWritableBounds
+            | Self::FaceImplicitOuterBoundUnwritable
             | Self::LoopRecordMissing
             | Self::LoopVertexMissing
             | Self::LoopCoedgeRecordMissing
@@ -830,7 +896,8 @@ impl StepLossCode {
             | Self::LoopNoContinuousOrdering
             | Self::EdgeRecordMissing
             | Self::EdgeStartVertexMissing
-            | Self::EdgeEndVertexMissing => LossTaxonomy::TopologyNotTransferred,
+            | Self::EdgeEndVertexMissing
+            | Self::NonManifoldEdgeSplit => LossTaxonomy::TopologyNotTransferred,
             Self::SeamEdgePcurveUnresolved
             | Self::EdgeNoSurfaceOrCurveForPcurve
             | Self::PcurveAssociationAmbiguous
@@ -845,12 +912,13 @@ impl StepLossCode {
             Self::PcurveEndpointsDiscontinuous
             | Self::PcurveLocusDiscontinuous
             | Self::PcurveCarrierUnwritable
+            | Self::PcurveOnFittedHelixSurface
             | Self::CoedgePcurveNoGeometry
             | Self::CoedgePcurveNativeMetadata
             | Self::PcurveUseNativeMetadata => LossTaxonomy::PcurveOmitted,
-            Self::FaceMultipleOuterBounds | Self::ShellDisconnectedFaces => {
-                LossTaxonomy::SourceTopologyInvalid
-            }
+            Self::FaceMultipleOuterBounds
+            | Self::ShellDisconnectedFaces
+            | Self::EdgeVertexOffCarrier => LossTaxonomy::SourceTopologyInvalid,
             Self::NauoPlacementUnresolved
             | Self::NauoPlacementAmbiguous
             | Self::BodyConflictingMappedPlacements
@@ -886,7 +954,9 @@ impl StepLossCode {
             Self::AppearanceReducedToBaseColor | Self::AppearanceBindingMetadataReduced => {
                 LossTaxonomy::AppearanceReduced
             }
-            Self::ProceduralReducedToCarrier => LossTaxonomy::ProceduralReduced,
+            Self::ProceduralReducedToCarrier
+            | Self::HelixFittedToBspline
+            | Self::ProceduralSampledToBspline => LossTaxonomy::ProceduralReduced,
         }
     }
 
@@ -1012,6 +1082,7 @@ mod tests {
                 "geometry.unknown-surface-face-omitted",
                 "geometry.carrier-not-written",
                 "pcurve.carrier-unwritable",
+                "pcurve.on-fitted-helix-surface",
                 "assembly.occurrence-omitted-no-parent-product",
                 "topology.region-no-shell-list",
                 "topology.wire-region-no-connected-edge-set",
@@ -1046,6 +1117,9 @@ mod tests {
                 "appearance.binding-metadata-reduced",
                 "attribute.source-record-not-written",
                 "geometry.procedural-reduced-to-carrier",
+                "geometry.helix-fitted-to-bspline",
+                "geometry.procedural-sampled-to-bspline",
+                "geometry.helix-fit-failed",
                 "geometry.procedural-definition-not-written",
                 "native.source-record-omitted",
                 "topology.region-no-writable-outer-shell",
@@ -1056,6 +1130,7 @@ mod tests {
                 "topology.face-omitted-inner-loop",
                 "topology.face-omitted-unclassified-loop",
                 "topology.face-no-writable-bounds",
+                "topology.face-implicit-outer-bound-unwritable",
                 "topology.loop-record-missing",
                 "topology.loop-vertex-missing",
                 "topology.loop-coedge-record-missing",
@@ -1071,6 +1146,11 @@ mod tests {
                 "topology.edge-record-missing",
                 "topology.edge-start-vertex-missing",
                 "topology.edge-end-vertex-missing",
+                "parse.expansion-bounded",
+                "occurrence.expansion-output-truncated",
+                "occurrence.expansion-depth-truncated",
+                "topology.non-manifold-edge-split",
+                "geometry.edge-vertex-off-carrier",
             ]
         );
     }

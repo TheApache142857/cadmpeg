@@ -1,6 +1,7 @@
 {
   "ir": {
-    "ir_version": "38",
+    "decode_depth": "full",
+    "ir_version": "9",
     "model": {
       "appearance_bindings": [],
       "appearances": [],
@@ -9,7 +10,7 @@
       "bodies": [
         {
           "id": "sat:brep:entity#1",
-          "kind": "sheet",
+          "kind": "solid",
           "regions": [
             "sat:brep:entity#2"
           ]

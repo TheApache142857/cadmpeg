@@ -2,8 +2,6 @@
 
 use crate::test_support::{owned_deltas, test_pmarks, test_prt, with_decode_context};
 use crate::NxCodec;
-use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-use cadmpeg_core::CodecError;
 use cadmpeg_ir::codec::{Codec, CodecBackend, DecodeOptions};
 use cadmpeg_ir::hash::digest::Sha256Digest;
 use cadmpeg_ir::report::check::{Check, Finding};
@@ -131,7 +129,11 @@ fn canonical_identity_order_does_not_replace_physical_declaration_and_instance_o
     for arena in [SCHEMAS, INSTANCES] {
         let offsets = namespace.arenas()[arena]
             .iter()
-            .map(|record| record.fields()["inflated_offset"].as_u64().unwrap())
+            .map(|record| {
+                record.fields().unwrap()["inflated_offset"]
+                    .as_u64()
+                    .unwrap()
+            })
             .collect::<Vec<_>>();
         assert!(
             offsets.windows(2).any(|pair| pair[0] > pair[1]),
@@ -258,7 +260,7 @@ fn deleting_every_record_for_one_stream_is_detected_from_retained_streams() {
     let namespace = ir.native.namespace_mut("nx");
     for (arena, records) in namespace.arenas_mut() {
         if arena.starts_with("parasolid_deltas_") {
-            records.retain(|record| record.fields()["stream_ordinal"] != 1);
+            records.retain(|record| record.fields().unwrap()["stream_ordinal"] != 1);
         }
     }
     source_error(&ir, &fidelity);
@@ -418,63 +420,6 @@ fn header_prefix_and_projected_record_values_are_authenticated() {
     });
     structurally_valid(&reordered);
     source_error(&reordered, &fidelity);
-}
-
-#[test]
-fn native_source_work_and_allocation_limits_remain_typed_refusals() {
-    let (ir, _, fidelity) = decoded(&[body_stream()]);
-    for allocation in [false, true] {
-        let mut policy = DecodePolicy::service();
-        let maximum = if allocation {
-            policy.limits.max_materialized_bytes
-        } else {
-            policy.limits.max_work_units
-        };
-        if allocation {
-            policy.limits.max_materialized_bytes = 0;
-        } else {
-            policy.limits.max_work_units = 0;
-        }
-        let (dimension, operation) = if allocation {
-            (
-                ResourceDimension::MaterializedBytes,
-                "classify retained NX schema token",
-            )
-        } else {
-            (
-                ResourceDimension::WorkUnits,
-                "compare NX Deltas record identity",
-            )
-        };
-        loop {
-            let arena = DecodeArena::new();
-            let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            let error =
-                <NxCodec as CodecBackend>::validate_native(&ctx, &ir, Some(&fidelity)).unwrap_err();
-            let CodecError::ResourceLimit(limit) = error else {
-                panic!("unexpected source validation error: {error}");
-            };
-            assert_eq!(limit.dimension, dimension);
-            assert!(matches!(ctx.finish_session(),
-                Err(CodecError::ResourceLimit(sticky)) if sticky == limit));
-            let needed = limit.used.checked_add(limit.additional).unwrap();
-            if limit.operation == operation {
-                break;
-            }
-            let cap = if allocation {
-                &mut policy.limits.max_materialized_bytes
-            } else {
-                &mut policy.limits.max_work_units
-            };
-            assert!(needed > *cap);
-            assert!(
-                needed <= maximum,
-                "source validation exceeded service policy"
-            );
-            *cap = needed;
-        }
-    }
-    assert!(findings(&ir, Some(&fidelity)).is_empty());
 }
 
 const METADATA: &str = "parasolid_deltas_metadata";

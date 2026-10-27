@@ -1,6 +1,7 @@
 {
   "ir": {
-    "ir_version": "38",
+    "ir_version": "9",
+    "decode_depth": "full",
     "source": {
       "identity": {
         "classification": "classified",
@@ -94,6 +95,7 @@
         "asm_bulletin_boards": [],
         "asm_delta_states": [],
         "asm_entity_changes": [],
+        "asm_face_boundaries": [],
         "asm_histories": [],
         "asm_history_records": [],
         "body_native_keys": [],
@@ -104,6 +106,7 @@
         "design_body_bounds": [],
         "design_body_members": [],
         "design_body_recipe_operands": [],
+        "design_body_reference_tails": [],
         "design_canvas_images": [],
         "design_component_naming_spaces": [],
         "design_component_occurrences": [],
@@ -128,6 +131,8 @@
         "design_face_source_groups": [],
         "design_feature_timelines": [],
         "design_fillet_radius_groups": [],
+        "design_intent_failures": [],
+        "design_joint_motions": [],
         "design_loft_legacy_body_carriers": [],
         "design_material_assignments": [],
         "design_mesh_features": [],
@@ -135,6 +140,8 @@
         "design_parameter_owners": [],
         "design_parameter_scopes": [],
         "design_parameters": [],
+        "design_placement_constructions": [],
+        "design_profile_curve_selections": [],
         "design_record_headers": [],
         "design_sheet_metal_settings": [],
         "design_sketch_placements": [],
@@ -210,7 +217,7 @@
           "strict_floor": "warning"
         },
         "severity": "blocking",
-        "message": "ASM BREP geometry was not transferred: the selected stream `FusionAssetName[Active]/Breps.BlobParts/Body1.smbh` is not a decodable BinaryFile4/BinaryFile8 SAB (or its framing failed). 1 BREP stream(s) were located, but no surfaces, curves, or points were produced."
+        "message": "The selected model BREP stream `FusionAssetName[Active]/Breps.BlobParts/Body1.smbh` decoded successfully; the selected model has no surfaces, faces, or points."
       },
       {
         "code": {
@@ -221,7 +228,7 @@
           "strict_floor": "warning"
         },
         "severity": "blocking",
-        "message": "B-rep topology graph (body/region/shell/face/loop/coedge/edge/vertex) was not built for the selected stream `FusionAssetName[Active]/Breps.BlobParts/Body1.smbh`."
+        "message": "The selected model BREP stream `FusionAssetName[Active]/Breps.BlobParts/Body1.smbh` decoded successfully; no B-rep topology was transferred."
       },
       {
         "code": {

@@ -7,14 +7,12 @@
 )]
 
 mod construction;
-mod construction_budget;
-mod edge_index;
+mod construction_candidates;
 mod face_sources;
-mod header_index;
-mod recipe_id_limits;
-mod recipe_structure_limits;
+mod recipe_structures;
 mod recipes;
 mod selection;
+mod typed_profile;
 mod work_point;
 
 mod body_recipes;

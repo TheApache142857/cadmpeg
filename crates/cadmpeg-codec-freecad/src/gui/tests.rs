@@ -3,8 +3,6 @@
 
 #![allow(clippy::doc_markdown)]
 
-mod resource_admission;
-
 use cadmpeg_test_support::wire;
 
 use crate::test_support::test_archive::{archive_entries, assert_valid_document};
@@ -52,14 +50,14 @@ fn assert_untransferred_primitive_size_reports_loss(style: super::PrimitiveStyle
     use cadmpeg_ir::topology::{Edge, EdgeCarrier, Vertex};
 
     let mut ir = cadmpeg_ir::CadIr::empty();
-    let vertex = VertexId::mint("fcstd:test:vertex#0").expect("vertex id");
+    let vertex = VertexId::mint("fcstd:test:vertex#shape:0").expect("vertex id");
     ir.model.vertices.push(Vertex {
         id: vertex.clone(),
         point: PointId::mint("fcstd:test:point#0").expect("point id"),
         tolerance: None,
     });
     ir.model.edges.push(Edge {
-        id: EdgeId::mint("fcstd:test:edge#0").expect("edge id"),
+        id: EdgeId::mint("fcstd:test:edge#shape:0").expect("edge id"),
         carrier: EdgeCarrier::unbounded(None),
         start: vertex.clone(),
         end: vertex,
@@ -67,13 +65,9 @@ fn assert_untransferred_primitive_size_reports_loss(style: super::PrimitiveStyle
     });
     let mut plan = super::AppearancePlan::default();
     let mut losses = Vec::new();
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::service();
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root is within policy");
     super::transfer_primitive_appearance(
-        &ctx,
         &ir,
+        &super::TopologyIndex::new(&ir),
         &mut plan,
         &mut losses,
         super::PrimitiveAppearanceSource {
@@ -81,7 +75,7 @@ fn assert_untransferred_primitive_size_reports_loss(style: super::PrimitiveStyle
             object_id: "fcstd:object#Model",
             packed_color: 0xff00_00ff,
             style,
-            payload_prefixes: &[String::new()],
+            payload_ids: &["shape"],
             provenance: cadmpeg_ir::SourceProvenance::in_stream(
                 "fcstd",
                 cadmpeg_ir::stream_name!("GuiDocument.xml"),
@@ -165,18 +159,13 @@ fn negative_primitive_sizes_keep_native_values_and_report_neutral_losses() {
     });
     let mut plan = super::AppearancePlan::default();
     let mut losses = Vec::new();
-    let prefixes = [String::from("shape:")];
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::service();
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root is within policy");
     for style in [
         super::PrimitiveStyle::Line(super::PrimitiveSize::Admitted(FiniteReal::ONE.negated())),
         super::PrimitiveStyle::Point(super::PrimitiveSize::Admitted(FiniteReal::ONE.negated())),
     ] {
         super::transfer_primitive_appearance(
-            &ctx,
             &ir,
+            &super::TopologyIndex::new(&ir),
             &mut plan,
             &mut losses,
             super::PrimitiveAppearanceSource {
@@ -184,7 +173,7 @@ fn negative_primitive_sizes_keep_native_values_and_report_neutral_losses() {
                 object_id: "shape",
                 packed_color: 0x1122_3344,
                 style,
-                payload_prefixes: &prefixes,
+                payload_ids: &["shape"],
                 provenance: cadmpeg_ir::SourceProvenance::in_stream(
                     "fcstd",
                     cadmpeg_ir::stream_name!("GuiDocument.xml"),
@@ -1936,3 +1925,5 @@ fn assert_gui_metadata_recovery(
 }
 
 mod metadata_recovery;
+
+mod topology_appearance;

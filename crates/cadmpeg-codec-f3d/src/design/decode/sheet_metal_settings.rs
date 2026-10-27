@@ -10,7 +10,7 @@ use crate::records::sheet_metal_settings::{
     V3RuleReferenceTail, PAIRED_GUID, PRESENTATION_GUID, RULE_GUID, SETTINGS_GUID,
 };
 use cadmpeg_core::container::{ContainerEntry, ContainerRole};
-use cadmpeg_core::decode::{u64_from_index, DecodeContext, View};
+use cadmpeg_core::decode::{u64_from_index, View};
 use cadmpeg_core::CodecError;
 use std::collections::{HashMap, HashSet};
 
@@ -41,8 +41,26 @@ pub(super) fn has_supported_settings(meta: &crate::metastream::MetaStream) -> bo
     })
 }
 
+/// The stream and record index of every record a settings record links: the
+/// record itself, its present input slots, and its rule, presentation, owner
+/// and context records. Their headers are kept with the Design record
+/// headers.
+pub(crate) fn linked_record_indices(settings: &[DesignSheetMetalSettings]) -> Vec<(String, u32)> {
+    settings
+        .iter()
+        .flat_map(|settings| {
+            let stream = crate::ids::native_stream(settings.id())
+                .unwrap_or(crate::ids::DEFAULT_STREAM)
+                .to_owned();
+            settings
+                .record_references()
+                .filter_map(|index| u32::try_from(index).ok())
+                .map(move |index| (stream.clone(), index))
+        })
+        .collect()
+}
+
 pub(crate) fn decode_settings(
-    ctx: &DecodeContext<'_>,
     scan: &ContainerScan,
 ) -> Result<Vec<DesignSheetMetalSettings>, CodecError> {
     let mut out = Vec::new();
@@ -51,7 +69,7 @@ pub(crate) fn decode_settings(
         .iter()
         .filter(|entry| is_settings_stream(scan, entry, ContainerRole::Bulkstream))
     {
-        let Some(meta) = super::meta::metadata_for_bulk_stream(ctx, scan, &entry.name)? else {
+        let Some(meta) = super::meta::metadata_for_bulk_stream(scan, &entry.name)? else {
             continue;
         };
         if !has_supported_settings(&meta) {
@@ -65,21 +83,18 @@ pub(crate) fn decode_settings(
                         "F3D settings type registration repeats an entity ID".into(),
                     ));
                 }
-                ctx.insert_hash_map(
-                    &mut by_entity,
-                    id,
-                    (row.type_guid.as_str(), row.version),
-                    "index F3D settings entity types",
-                )?;
+                by_entity.insert(id, (row.type_guid.as_str(), row.version));
             }
         }
         let bytes = scan.entry_bytes(&entry.name)?;
-        let frames = primary_record_frames(ctx, &meta, bytes.len())?;
-        let primary = ctx.collect_hash_set(
-            frames.iter().map(|frame| frame.entity_id),
-            "index F3D settings primary references",
-        )?;
-        for frame in frames {
+        let frames = primary_record_frames(&meta, bytes.len())?;
+        let primary =
+            (frames.iter().map(|frame| frame.entity_id)).collect::<std::collections::HashSet<_>>();
+        let rule_starts = frames
+            .iter()
+            .map(|frame| (frame.entity_id, frame.start))
+            .collect::<HashMap<_, _>>();
+        for frame in &frames {
             let Some((guid, version)) = by_entity.get(&frame.entity_id) else {
                 continue;
             };
@@ -87,19 +102,20 @@ pub(crate) fn decode_settings(
                 continue;
             }
             let Some(fields) =
-                parse_settings(bytes, frame, *version, &primary, &by_entity, &meta.types)
+                parse_settings(bytes, *frame, *version, &primary, &by_entity, &meta.types)
             else {
                 return Err(CodecError::Malformed(
                     "F3D sheet-metal settings frame or typed link is invalid".into(),
                 ));
             };
-            let id = super::text::design_record_id_charged(
-                ctx,
+            let rule = rule_starts
+                .get(&fields.rule)
+                .and_then(|start| rule_thickness(bytes, *start));
+            let id = super::text::design_record_id(
                 &entry.name,
                 ":design-sheet-metal-settings#",
                 u64_from_index(frame.start),
-                "F3D sheet-metal settings identity",
-            )?;
+            );
             let record = DesignSheetMetalSettings::try_from(DesignSheetMetalSettingsWire {
                 id,
                 record_index: frame.entity_id,
@@ -111,12 +127,36 @@ pub(crate) fn decode_settings(
                 presentation_record_index: fields.presentation,
                 owner_record_index: fields.owner,
                 context_record_index: fields.context,
+                rule_thickness: rule.map(|(thickness, _)| thickness),
+                rule_thickness_offset: rule.map(|(_, offset)| offset),
             })
             .map_err(CodecError::Malformed)?;
-            ctx.push_vec(&mut out, record, "retain F3D sheet-metal settings")?;
+            out.push(record);
         }
     }
     Ok(out)
+}
+
+/// The thickness a sheet-metal rule record states and its offset: after the
+/// indexed header and ten zero bytes, a u32 word, then the first entry, an
+/// LP-UTF16 `Thickness` followed by the f64 value in centimetres.
+pub(crate) fn rule_thickness(
+    bytes: &[u8],
+    start: usize,
+) -> Option<(cadmpeg_ir::scalar::PositiveReal, u64)> {
+    use crate::layout::sheet_metal_rule_prefix as rule;
+    if bytes.get(start.checked_add(rule::ZERO_RUN_11)?..start.checked_add(rule::ENTRY_WORD)?)?
+        != [0; 10]
+    {
+        return None;
+    }
+    let (name, name_end) =
+        crate::bytes::lp_utf16_bounded(bytes, start.checked_add(rule::FIRST_ENTRY_NAME)?, 1..=64)?;
+    if name != "Thickness" || Some(name_end) != start.checked_add(rule::THICKNESS) {
+        return None;
+    }
+    let thickness = cadmpeg_ir::scalar::PositiveReal::new(View::f64_le_at(bytes, name_end)?)?;
+    Some((thickness, u64_from_index(name_end)))
 }
 
 struct SettingsFields {

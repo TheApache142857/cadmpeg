@@ -5,7 +5,6 @@ use crate::deltas::pmark_state::PmarkState;
 use crate::deltas::section::{MapEntry, SectionKind, TerminalWord};
 use crate::records::deltas::Metadata;
 use cadmpeg_core::decode::{u64_from_index, DecodeContext};
-use cadmpeg_core::CodecError;
 use cadmpeg_ir::hash::digest::Sha256Digest;
 use cadmpeg_ir::native::{NativeConvertError, NativeNamespace};
 use serde::{Deserialize, Serialize};
@@ -182,19 +181,17 @@ impl Production {
 
 impl ParasolidDeltasMetadata {
     pub(super) fn from_owned(
-        ctx: &DecodeContext<'_>,
         source: &[u8],
         stream_ordinal: u32,
         range: Range<usize>,
         metadata: &Metadata,
-    ) -> Result<Self, CodecError> {
+    ) -> Self {
         let production = match metadata {
             Metadata::Map {
                 entries,
                 terminal_word,
             } => Production::Map {
-                entries: ctx
-                    .collect_vec(entries.iter().copied(), "NX Deltas native map entries")?,
+                entries: entries.clone(),
                 terminal_word: *terminal_word,
             },
             Metadata::Pmark(state) => Production::Pmark { state: *state },
@@ -207,20 +204,15 @@ impl ParasolidDeltasMetadata {
             },
             Metadata::FinalTerminator => Production::FinalTerminator,
         };
-        let ordinal = usize::try_from(stream_ordinal)
-            .map_err(|_| ctx.refuse_codec_limit("NX deltas stream ordinal", 0, 1))?;
-        Ok(Self {
-            id: deltas_event_id(ctx, ordinal, "deltas-metadata", range.start, None)?,
+        let ordinal = cadmpeg_core::decode::index_from_u32(stream_ordinal);
+        Self {
+            id: deltas_event_id(ordinal, "deltas-metadata", range.start, None),
             stream_ordinal,
             inflated_offset: u64_from_index(range.start),
             byte_len: u64_from_index(range.len()),
-            sha256: Sha256Digest::digest_for_decode(
-                ctx,
-                &source[range],
-                "NX Deltas metadata digest",
-            )?,
+            sha256: Sha256Digest::digest(&source[range]),
             production,
-        })
+        }
     }
 }
 
@@ -230,15 +222,7 @@ pub(in crate::native) fn admit(
 ) -> Result<(), NativeConvertError> {
     let mut records = namespace
         .arena_as_for_decode::<ParasolidDeltasMetadata>(ctx, "parasolid_deltas_metadata")?;
-    ctx.sort_unstable_by(
-        &mut records,
-        |left, right| {
-            (left.stream_ordinal, left.inflated_offset)
-                .cmp(&(right.stream_ordinal, right.inflated_offset))
-        },
-        |_| 0,
-        "order NX Deltas metadata",
-    )?;
+    records.sort_unstable_by_key(|record| (record.stream_ordinal, record.inflated_offset));
     let mut previous: Option<(u32, u64)> = None;
     for record in records {
         if previous.is_some_and(|(stream, end)| {

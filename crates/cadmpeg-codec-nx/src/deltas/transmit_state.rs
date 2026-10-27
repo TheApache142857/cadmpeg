@@ -48,22 +48,6 @@ impl TransmitState {
             user_field_size,
         })
     }
-
-    pub(crate) fn description(&self) -> &str {
-        &self.description
-    }
-
-    pub(crate) fn schema(&self) -> &str {
-        &self.schema
-    }
-
-    pub(crate) fn maximum_node_type(&self) -> u16 {
-        self.maximum_node_type.get()
-    }
-
-    pub(crate) fn user_field_size(&self) -> u32 {
-        self.user_field_size
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

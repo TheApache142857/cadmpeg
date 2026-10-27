@@ -90,7 +90,9 @@ pub use diff::{
     diff, ArenaDiff, ArenaKind, AttributeChange, DialectsChange, IrDiff, ModifiedEntity,
     NonEmptyFields, SourceDiff,
 };
-pub use document::{ArenaName, CadIr, CensusKey, SourceMeta, IR_VERSION};
+pub use document::{
+    ArenaClass, ArenaName, CadIr, CensusKey, DesignBelowFullDepth, SourceMeta, IR_VERSION,
+};
 pub use draft::ModelDraft;
 pub use features::{
     BodyMember, BodyMembers, BodyRetentionMode, BodySelection, BodyTrimSide, CoilConstruction,
@@ -116,8 +118,8 @@ pub use presentation::{PresentationItem, PresentationLayer};
 pub use products::{
     AssemblyGraph, AssemblyGraphError, AssemblyJoint, CopyOnChange, CopyOnChangePolicy,
     ExternalDocument, JointConnector, JointId, JointLimits, JointOperand, JointOperands,
-    LinkMember, LinkState, Occurrence, OperandContainer, PairedJointKind, ProductDefinition,
-    ProductDefinitionKind, PrototypeReference,
+    LinkMember, LinkState, Occurrence, OperandContainer, PairedJointKind, PlaneSense,
+    ProductDefinition, ProductDefinitionKind, PrototypeReference, TangentContact,
 };
 /// Source location attached to a [`report::loss::LossNote`].
 pub use provenance::{

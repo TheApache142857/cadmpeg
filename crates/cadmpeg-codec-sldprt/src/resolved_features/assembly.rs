@@ -1,16 +1,19 @@
 //! Feature-input lane assembly from container streams.
 
-use super::markers::{
-    admit_sketch_input_entities, reference_cells_charged, relation_bindings_charged,
-};
+use super::markers::{admit_sketch_input_entities, reference_cells, relation_bindings};
 use super::names::{class_declarations, configuration, object_names};
-use super::scalars::named_scalars_charged;
+use super::scalars::named_scalars;
 use super::{LEGACY_EXTENDED_SKETCH_MARKER, LEGACY_SKETCH_MARKER, SKETCH_MARKER};
 use crate::container::ContainerScan;
-use crate::records::{FeatureInputClassRole, FeatureInputLane};
-use cadmpeg_core::decode::DecodeContext;
+use crate::loss::SldprtLossCode;
+use crate::records::{ArchiveParameterClass, FeatureInputClassRole, FeatureInputLane};
+use cadmpeg_core::decode::{u64_from_index, DecodeContext};
 use cadmpeg_ir::annotations::Annotations;
+use cadmpeg_ir::report::loss::LossNote;
 use cadmpeg_ir::Exactness;
+use std::collections::HashMap;
+
+const RESOLVED_FEATURES_SUFFIX: &str = "-resolvedfeatures";
 
 pub(crate) fn is_supplemental_config_lane(lane: &FeatureInputLane) -> bool {
     lane.id.contains(":config-objects#")
@@ -20,6 +23,7 @@ pub(crate) fn lanes(
     ctx: &DecodeContext<'_>,
     scan: &ContainerScan,
     annotations: &mut Annotations,
+    losses: &mut Vec<LossNote>,
 ) -> Result<Vec<FeatureInputLane>, cadmpeg_core::CodecError> {
     let has_explicit_lanes = scan.sections().any(|source| {
         source
@@ -38,11 +42,84 @@ pub(crate) fn lanes(
         } {
             continue;
         }
-        let lane = feature_input_lane(ctx, source, section, "resolved-features", annotations)?;
-        ctx.reserve_vec(&mut result, 1, "collect SLDPRT feature input lanes")?;
+        let mut lane = feature_input_lane(ctx, source, section, "resolved-features", annotations)?;
+        if has_explicit_lanes {
+            type_scalars_from_archive(ctx, scan, section, source.payload(), &mut lane, losses)?;
+        }
         result.push(lane);
     }
     Ok(result)
+}
+
+/// Give each scalar of a `Config-N-ResolvedFeatures` lane the class of the
+/// parameter object whose value it is, from the exact walk of the stream.
+/// Scalars the walk did not reach keep no class.
+fn type_scalars_from_archive(
+    ctx: &DecodeContext<'_>,
+    scan: &ContainerScan,
+    section: &str,
+    resolved: &[u8],
+    lane: &mut FeatureInputLane,
+    losses: &mut Vec<LossNote>,
+) -> Result<(), cadmpeg_core::CodecError> {
+    let Some(config_name) = configuration_name(section) else {
+        return Ok(());
+    };
+    let Some(config) = scan.sections().find_map(|other| {
+        other
+            .name()
+            .filter(|name| name.replace('\\', "/").eq_ignore_ascii_case(&config_name))
+            .map(|_| other.payload())
+    }) else {
+        return Ok(());
+    };
+    let Some(version) =
+        crate::carchive::walk_version(crate::container::declared_sw_version(scan), config)
+    else {
+        return Ok(());
+    };
+    let Some(walk) = crate::carchive::walk_configuration(ctx, config, resolved, Some(version))?
+    else {
+        return Ok(());
+    };
+    if let crate::carchive::Status::Stop(_) = walk.status {
+        losses.push(SldprtLossCode::FeatureInputArchiveWalkStopped.note(format!(
+            "the archive walk of {config_name} stopped before the end of the stream, so its \
+             scalars keep no parameter class"
+        )));
+        return Ok(());
+    }
+    let classes = scalar_archive_classes(&walk);
+    for scalar in &mut lane.scalars {
+        scalar.archive_class = classes.get(&scalar.offset).copied();
+    }
+    Ok(())
+}
+
+/// The `Config-N` name a `Config-N-ResolvedFeatures` section belongs to.
+fn configuration_name(section: &str) -> Option<String> {
+    let normalized = section.replace('\\', "/");
+    normalized
+        .len()
+        .checked_sub(RESOLVED_FEATURES_SUFFIX.len())
+        .filter(|&length| {
+            normalized.is_char_boundary(length)
+                && normalized[length..].eq_ignore_ascii_case(RESOLVED_FEATURES_SUFFIX)
+        })
+        .map(|length| normalized[..length].to_owned())
+}
+
+/// The archive parameter class of each scalar value offset.
+fn scalar_archive_classes(walk: &crate::carchive::Walk) -> HashMap<u64, ArchiveParameterClass> {
+    walk.parameters
+        .iter()
+        .filter_map(|parameter| {
+            Some((
+                u64_from_index(parameter.value_at),
+                ArchiveParameterClass::from_class_name(&parameter.class)?,
+            ))
+        })
+        .collect()
 }
 
 pub(crate) fn supplemental_config_lanes(
@@ -63,12 +140,14 @@ pub(crate) fn supplemental_config_lanes(
         let Some(section) = source.name() else {
             continue;
         };
-        if legacy_feature_input_section(section)
-            && legacy_sketch_object_stream(ctx, source.payload())?
-        {
-            let lane = feature_input_lane(ctx, source, section, "config-objects", annotations)?;
-            ctx.reserve_vec(&mut lanes, 1, "collect SLDPRT supplemental feature lanes")?;
-            lanes.push(lane);
+        if legacy_feature_input_section(section) && legacy_sketch_object_stream(source.payload())? {
+            lanes.push(feature_input_lane(
+                ctx,
+                source,
+                section,
+                "config-objects",
+                annotations,
+            )?);
         }
     }
     Ok(lanes)
@@ -83,12 +162,12 @@ fn feature_input_lane(
 ) -> Result<FeatureInputLane, cadmpeg_core::CodecError> {
     let parent = format!("sldprt:feature-input:{family}#{}", source.ordinal());
     let payload = source.payload();
-    let classes = class_declarations(ctx, payload, &parent)?;
+    let classes = class_declarations(payload, &parent)?;
     let names = object_names(ctx, payload, &parent)?;
-    let scalars = named_scalars_charged(ctx, payload, &parent, &names)?;
-    let relation_bindings = relation_bindings_charged(ctx, &parent, &classes, &scalars)?;
-    let references = reference_cells_charged(ctx, &scalars, &classes)?;
-    let sketch_entities = admit_sketch_input_entities(ctx, payload, &parent)?;
+    let scalars = named_scalars(payload, &parent, &names)?;
+    let relation_bindings = relation_bindings(&parent, &classes, &scalars, &[])?;
+    let references = reference_cells(&scalars, &classes)?;
+    let sketch_entities = admit_sketch_input_entities(payload, &parent)?;
     for entity in &sketch_entities {
         let signature = usize::try_from(entity.offset())
             .ok()
@@ -103,7 +182,6 @@ fn feature_input_lane(
                 }
             });
         crate::annotations::note(
-            ctx,
             annotations,
             entity.id(),
             source.source_stream(),
@@ -113,7 +191,6 @@ fn feature_input_lane(
         )?;
     }
     crate::annotations::note(
-        ctx,
         annotations,
         parent.as_str(),
         source.source_stream(),
@@ -125,12 +202,14 @@ fn feature_input_lane(
         },
         Exactness::ByteExact,
     )?;
+    ctx.retain_bytes(
+        u64_from_index(payload.len()),
+        "retain SLDPRT feature input payload",
+    )?;
     Ok(FeatureInputLane {
         id: parent,
-        configuration: configuration(ctx, section)?,
-        native_payload: ctx
-            .copy_retained(payload, "retain SLDPRT feature input payload")?
-            .into(),
+        configuration: configuration(section),
+        native_payload: payload.to_vec().into(),
         classes,
         names,
         scalars,
@@ -164,11 +243,8 @@ pub(super) fn contains_ascii_case_insensitive(text: &str, needle: &str) -> bool 
         .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
-fn legacy_sketch_object_stream(
-    ctx: &DecodeContext<'_>,
-    payload: &[u8],
-) -> Result<bool, cadmpeg_core::CodecError> {
-    let classes = class_declarations(ctx, payload, "legacy-sketch-probe")?;
+fn legacy_sketch_object_stream(payload: &[u8]) -> Result<bool, cadmpeg_core::CodecError> {
+    let classes = class_declarations(payload, "legacy-sketch-probe")?;
     Ok(classes.iter().any(|class| class.name == "sgSketch")
         && classes
             .iter()

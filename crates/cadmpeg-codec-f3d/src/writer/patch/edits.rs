@@ -29,7 +29,9 @@ use super::{
     records::native_stream,
 };
 use crate::native::F3dNative;
-use crate::writer::generate::native_geometry::{native_support_pcurve, pcurve_support_geometry};
+use crate::writer::generate::native_geometry::{
+    native_support_pcurve, pcurve_support_geometry, pcurve_support_surface,
+};
 use crate::writer::primitives::normalized_face_sense_to_native;
 use cadmpeg_asm::nurbs::reader::LEN_TO_MM;
 
@@ -733,6 +735,8 @@ pub(super) struct NurbsCurveEdit {
 
 pub(super) enum PcurveEdit {
     Inline {
+        /// The surface of the faces that use the pcurve.
+        support: String,
         native_geometry: PcurveNurbs,
         periodic: Option<bool>,
         wrapper_reversed: Option<bool>,
@@ -741,10 +745,33 @@ pub(super) enum PcurveEdit {
         fit_tolerance: Option<f64>,
     },
     Ref {
+        /// The surface of the faces that use the pcurve.
+        support: String,
         native_geometry: PcurveNurbs,
         periodic: Option<bool>,
         parameter_range: Option<[f64; 2]>,
     },
+}
+
+impl PcurveEdit {
+    /// The surface of the faces that use the pcurve.
+    pub(super) fn support(&self) -> &str {
+        match self {
+            Self::Inline { support, .. } | Self::Ref { support, .. } => support,
+        }
+    }
+
+    /// The edited pcurve in the writer's native support chart.
+    pub(super) fn native_geometry(&self) -> &PcurveNurbs {
+        match self {
+            Self::Inline {
+                native_geometry, ..
+            }
+            | Self::Ref {
+                native_geometry, ..
+            } => native_geometry,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2232,7 +2259,7 @@ pub(super) fn validate_history_state_edits(
     let mut edits: BTreeMap<String, HistoryEdits> = BTreeMap::new();
     for history in target {
         let before = baseline_by_id[history.id.as_str()];
-        if before.states.len() != history.states.len() {
+        if before.states().len() != history.states().len() {
             return Err(CodecError::NotImplemented(format!(
                 "F3D history edit changes the state count: {}",
                 history.id
@@ -2240,7 +2267,7 @@ pub(super) fn validate_history_state_edits(
         }
         let mut normalized = history.clone();
         normalized.preamble = before.preamble;
-        for (state, before_state) in normalized.states.iter_mut().zip(&before.states) {
+        for (state, before_state) in normalized.states_mut().iter_mut().zip(before.states()) {
             state.state_id = before_state.state_id;
             state.version_flag = before_state.version_flag;
             state.state_flag = before_state.state_flag;
@@ -2289,7 +2316,7 @@ pub(super) fn validate_history_state_edits(
             })?;
         if let Some(preamble) = history.preamble {
             if history
-                .states
+                .states()
                 .first()
                 .is_none_or(|state| state.state_id != preamble.stream_size)
                 || preamble.history_entry_count < 0
@@ -2319,7 +2346,7 @@ pub(super) fn validate_history_state_edits(
                 history_entry_count: preamble.history_entry_count,
             });
         }
-        for (state, before_state) in history.states.iter().zip(&before.states) {
+        for (state, before_state) in history.states().iter().zip(before.states()) {
             if state != before_state {
                 edits
                     .entry(stream.clone())
@@ -2383,6 +2410,14 @@ pub(super) fn validate_sketch_point_edits(
     }
     let mut edits: BTreeMap<String, Vec<SketchPointEdit>> = BTreeMap::new();
     for point in target {
+        point
+            .validate_for_write(
+                target_native
+                    .as_ref()
+                    .map(|native| native.sketch_curve_identities.as_slice())
+                    .unwrap_or_default(),
+            )
+            .map_err(CodecError::Malformed)?;
         let before = by_id[point.id.as_str()];
         let mut normalized = point.clone();
         normalized
@@ -3131,11 +3166,15 @@ pub(super) fn validate_pcurve_edits(
         let parameter_range = (before.parameter_range() != after.parameter_range())
             .then_some(after.parameter_range())
             .flatten();
+        let support = pcurve_support_surface(target_model, &after.id)?
+            .as_str()
+            .to_owned();
         let edit = match &before.metadata {
             cadmpeg_ir::geometry::pcurve::PcurveMetadata::General { form: metadata }
                 if metadata.wrapper_reversed.is_none() && metadata.fit_tolerance().is_none() =>
             {
                 PcurveEdit::Ref {
+                    support,
                     native_geometry: after_native,
                     periodic,
                     parameter_range: parameter_range.map(cadmpeg_ir::units::FiniteVector::get),
@@ -3143,6 +3182,7 @@ pub(super) fn validate_pcurve_edits(
             }
             cadmpeg_ir::geometry::pcurve::PcurveMetadata::AsmInline { .. }
             | cadmpeg_ir::geometry::pcurve::PcurveMetadata::General { .. } => PcurveEdit::Inline {
+                support,
                 native_geometry: after_native,
                 periodic,
                 wrapper_reversed: (before.wrapper_reversed() != after.wrapper_reversed())
@@ -3767,6 +3807,7 @@ fn spring_patch_shape_agrees(
 #[cfg(test)]
 mod tests {
     mod timestamps;
+    mod zstd_members;
 
     use super::{
         validate_curve_edits, validate_material_assignment_edits, validate_surface_edits,
@@ -3836,16 +3877,8 @@ mod tests {
         weights: Option<Vec<f64>>,
     ) -> SolvedCurveGeometry {
         SolvedCurveGeometry::Nurbs(
-            NurbsCurve::from_lanes(
-                &cadmpeg_test_support::service_decode_context(),
-                1,
-                knots,
-                poles(pole_count),
-                weights,
-                false,
-            )
-            .expect("fixture constructor admission")
-            .expect("degree, knots and control points agree"),
+            NurbsCurve::from_lanes(1, knots, poles(pole_count), weights, false)
+                .expect("degree, knots and control points agree"),
         )
     }
 
@@ -3858,13 +3891,11 @@ mod tests {
     ) -> SolvedSurfaceGeometry {
         SolvedSurfaceGeometry::Nurbs(
             NurbsSurface::from_lanes(
-                &cadmpeg_test_support::service_decode_context(),
                 NurbsSurfaceAxis::new(1, u_knots, false),
                 NurbsSurfaceAxis::new(1, v_knots, false),
                 NurbsSurfaceLanes::new((0..u_count).map(|_| poles(v_count)).collect(), weights),
                 false,
             )
-            .expect("fixture constructor admission")
             .expect("degrees, knots and control grid agree"),
         )
     }
@@ -3945,16 +3976,8 @@ mod tests {
     #[test]
     fn a_same_kind_nurbs_curve_edit_that_leaves_the_writable_degree_range_is_malformed() {
         let degree_zero = SolvedCurveGeometry::Nurbs(
-            NurbsCurve::from_lanes(
-                &cadmpeg_test_support::service_decode_context(),
-                0,
-                vec![0.0, 0.0, 1.0],
-                poles(2),
-                None,
-                false,
-            )
-            .expect("fixture constructor admission")
-            .expect("degree, knots and control points agree"),
+            NurbsCurve::from_lanes(0, vec![0.0, 0.0, 1.0], poles(2), None, false)
+                .expect("degree, knots and control points agree"),
         );
         let error = validate_curve_edits(
             &curve(
@@ -4041,14 +4064,12 @@ mod tests {
             "f3d:brep:entity#7",
             SolvedCurveGeometry::Nurbs(
                 NurbsCurve::from_lanes(
-                    &cadmpeg_test_support::service_decode_context(),
                     1,
                     vec![0.0, 0.0, 1.0, 1.0],
                     vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 5.0, 0.0)],
                     weights,
                     false,
                 )
-                .expect("fixture constructor admission")
                 .expect("degree, knots and control points agree"),
             ),
         );
@@ -4207,13 +4228,11 @@ mod tests {
     fn a_same_kind_nurbs_surface_edit_that_leaves_the_writable_u_degree_range_is_malformed() {
         let u_degree_zero = SolvedSurfaceGeometry::Nurbs(
             NurbsSurface::from_lanes(
-                &cadmpeg_test_support::service_decode_context(),
                 NurbsSurfaceAxis::new(0, vec![0.0, 0.0, 1.0], false),
                 NurbsSurfaceAxis::new(1, vec![0.0, 0.0, 1.0, 1.0], false),
                 NurbsSurfaceLanes::new((0..2).map(|_| poles(2)).collect(), None),
                 false,
             )
-            .expect("fixture constructor admission")
             .expect("degrees, knots and control grid agree"),
         );
         let error = validate_surface_edits(
@@ -4242,13 +4261,11 @@ mod tests {
     fn a_same_kind_nurbs_surface_edit_that_leaves_the_writable_v_degree_range_is_malformed() {
         let v_degree_zero = SolvedSurfaceGeometry::Nurbs(
             NurbsSurface::from_lanes(
-                &cadmpeg_test_support::service_decode_context(),
                 NurbsSurfaceAxis::new(1, vec![0.0, 0.0, 1.0, 1.0], false),
                 NurbsSurfaceAxis::new(0, vec![0.0, 0.0, 1.0], false),
                 NurbsSurfaceLanes::new((0..2).map(|_| poles(2)).collect(), None),
                 false,
             )
-            .expect("fixture constructor admission")
             .expect("degrees, knots and control grid agree"),
         );
         let error = validate_surface_edits(
@@ -4392,13 +4409,11 @@ mod tests {
             "f3d:brep:entity#9",
             SolvedSurfaceGeometry::Nurbs(
                 NurbsSurface::from_lanes(
-                    &cadmpeg_test_support::service_decode_context(),
                     NurbsSurfaceAxis::new(1, vec![0.0, 0.0, 1.0, 1.0], false),
                     NurbsSurfaceAxis::new(1, vec![0.0, 0.0, 1.0, 1.0], false),
                     NurbsSurfaceLanes::new(moved, Some(weight_grid(2, 2, -1.0))),
                     false,
                 )
-                .expect("fixture constructor admission")
                 .expect("degrees, knots and control grid agree"),
             ),
         );

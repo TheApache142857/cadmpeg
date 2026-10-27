@@ -4,7 +4,7 @@ use super::super::ParasolidDeltasRecord;
 
 fn wire(references: &[u32]) -> serde_json::Value {
     serde_json::json!({
-        "id":"region", "stream_ordinal":0, "family":"REGION", "kind":19,
+        "id":"nx:test:region#0", "stream_ordinal":0, "family":"REGION", "kind":19,
         "xmt":52, "node_id":49, "region_type":83,
         "byte_len":9+references.len()*3, "references":references,
         "inflated_offset":61

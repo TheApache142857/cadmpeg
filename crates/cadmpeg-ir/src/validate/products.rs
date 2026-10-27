@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Product graph and placement validation.
 
-use super::orders::Orders;
 use crate::index::identities::BorrowedIdentities;
 use cadmpeg_core::decode::DecodeContext;
 use cadmpeg_core::CodecError;
@@ -16,86 +15,109 @@ pub(super) fn check_products(
     ir: &CadIr,
     findings: &mut Vec<Finding>,
 ) -> Result<(), CodecError> {
-    let definitions = BorrowedIdentities::build(ctx, |add| {
+    let definitions = BorrowedIdentities::build(|add| {
         for definition in &ir.model.product_definitions {
-            add(definition.id.as_str(), ())?;
+            add(definition.id.as_str(), ());
         }
-        Ok(())
-    })?;
-    let occurrences = BorrowedIdentities::build(ctx, |add| {
+    });
+    let occurrences = BorrowedIdentities::build(|add| {
         for occurrence in &ir.model.occurrences {
-            add(occurrence.id.as_str(), ())?;
+            add(occurrence.id.as_str(), ());
         }
-        Ok(())
-    })?;
-    let bodies = BorrowedIdentities::build(ctx, |add| {
+    });
+    let parameters = BorrowedIdentities::build(|add| {
+        for parameter in &ir.model.parameters {
+            add(parameter.id.as_str(), ());
+        }
+    });
+    let bodies = BorrowedIdentities::build(|add| {
         for body in &ir.model.bodies {
-            add(body.id.as_str(), ())?;
+            add(body.id.as_str(), ());
         }
-        Ok(())
-    })?;
+    });
+    let sketches = BorrowedIdentities::build(|add| {
+        for sketch in &ir.model.sketches {
+            add(sketch.id.as_str(), ());
+        }
+    });
+    let mut sketch_owners = std::collections::BTreeMap::new();
     for definition in &ir.model.product_definitions {
-        ctx.charge_work(1, "product definition row")?;
-        for body in &definition.bodies {
-            ctx.charge_work(1, "product body reference")?;
-            if !bodies.contains(ctx, body.as_str())? {
+        for sketch in &definition.sketches {
+            let message = if !sketches.contains(sketch.as_str()) {
+                Some("invalid product sketch reference")
+            } else if let Some(owner) = sketch_owners.insert(sketch, &definition.id) {
+                Some(if owner == &definition.id {
+                    "duplicate product sketch reference"
+                } else {
+                    "sketch has multiple product definitions"
+                })
+            } else {
+                None
+            };
+            if let Some(message) = message {
                 record_finding(
-                    ctx,
+                    findings,
+                    Check::ReferentialIntegrity,
+                    crate::report::Severity::Error,
+                    Some(definition.id.as_str()),
+                    format_args!("{message}"),
+                );
+                break;
+            }
+        }
+        for body in &definition.bodies {
+            if !bodies.contains(body.as_str()) {
+                record_finding(
                     findings,
                     Check::ReferentialIntegrity,
                     crate::report::Severity::Error,
                     Some(definition.id.as_str()),
                     format_args!("invalid product body reference"),
-                )?;
+                );
                 break;
             }
         }
     }
     if !crate::products::assembly_graph::validate(ctx, &ir.model.occurrences)? {
         record_finding(
-            ctx,
             findings,
             Check::ReferentialIntegrity,
             crate::report::Severity::Error,
             Some("model:assembly"),
             format_args!("invalid occurrence parent graph"),
-        )?;
+        );
     }
-    let mut root_ordinals = Orders::new(ctx)?;
-    let mut sibling_ordinals: BorrowedIdentities<'_, '_, Orders<'_, '_>> =
-        BorrowedIdentities::build(ctx, |_| Ok(()))?;
+    let mut root_ordinals = std::collections::BTreeSet::new();
+    let mut sibling_ordinals: BorrowedIdentities<'_, std::collections::BTreeSet<u32>> =
+        BorrowedIdentities::new();
     for occurrence in &ir.model.occurrences {
-        ctx.charge_work(1, "product occurrence row")?;
         let valid_prototype = match &occurrence.prototype {
-            PrototypeReference::Local { definition } => {
-                definitions.contains(ctx, definition.as_str())?
-            }
+            PrototypeReference::Local { definition } => definitions.contains(definition.as_str()),
             PrototypeReference::External { .. } | PrototypeReference::Unresolved {} => true,
         };
         let valid_parent = match &occurrence.parent {
             OccurrenceParent::Root {} => true,
             OccurrenceParent::Occurrence { occurrence } => {
-                occurrences.contains(ctx, occurrence.as_str())?
+                occurrences.contains(occurrence.as_str())
             }
         };
         let ordinal_unique = match &occurrence.parent {
-            OccurrenceParent::Root {} => root_ordinals.insert(occurrence.ordinal)?,
+            OccurrenceParent::Root {} => root_ordinals.insert(occurrence.ordinal),
             OccurrenceParent::Occurrence { occurrence: parent } => {
-                if let Some(orders) = sibling_ordinals.get_mut(ctx, parent.as_str())? {
-                    orders.insert(occurrence.ordinal)?
+                if let Some(orders) = sibling_ordinals.get_mut(parent.as_str()) {
+                    orders.insert(occurrence.ordinal)
                 } else {
-                    let mut orders = Orders::new(ctx)?;
-                    let unique = orders.insert(occurrence.ordinal)?;
-                    sibling_ordinals.insert_unique(parent.as_str(), orders)?;
+                    let mut orders = std::collections::BTreeSet::new();
+                    let unique = orders.insert(occurrence.ordinal);
+                    sibling_ordinals.insert_unique(parent.as_str(), orders);
                     unique
                 }
             }
         };
         let mut auxiliary_definitions = true;
         if let Some(link) = &occurrence.link {
-            ctx.charge_work(1, "product occurrence link")?;
             let element_valid = match link.element_component() {
-                Some(definition) => definitions.contains(ctx, definition.as_str())?,
+                Some(definition) => definitions.contains(definition.as_str()),
                 None => true,
             };
             let mut copy_targets_valid = true;
@@ -104,9 +126,8 @@ pub(super) fn check_products(
                     .into_iter()
                     .flatten()
                 {
-                    ctx.charge_work(1, "product copy target")?;
                     if let PrototypeReference::Local { definition } = reference {
-                        if !definitions.contains(ctx, definition.as_str())? {
+                        if !definitions.contains(definition.as_str()) {
                             copy_targets_valid = false;
                             break;
                         }
@@ -117,29 +138,48 @@ pub(super) fn check_products(
         }
         if !valid_prototype || !valid_parent || !ordinal_unique || !auxiliary_definitions {
             record_finding(
-                ctx,
                 findings,
                 Check::ReferentialIntegrity,
                 crate::report::Severity::Error,
                 Some(occurrence.id.as_str()),
                 format_args!("invalid occurrence reference, ordinal, or affine transform"),
-            )?;
+            );
         }
     }
     for joint in &ir.model.assembly_joints {
-        ctx.charge_work(1, "assembly joint row")?;
+        // A kind that states its own sense leaves no room for another.
+        if let (Some(kind_sense), Some(frame_sense)) = (joint.kind_sense(), joint.frame_sense()) {
+            if kind_sense != frame_sense {
+                record_finding(
+                    findings,
+                    Check::ReferentialIntegrity,
+                    crate::report::Severity::Error,
+                    Some(joint.id.as_str()),
+                    format_args!("assembly joint frame sense contradicts its kind's sense"),
+                );
+            }
+        }
+        if let Some(parameter) = &joint.driving_parameter {
+            if !parameters.contains(parameter.as_str()) {
+                record_finding(
+                    findings,
+                    Check::ReferentialIntegrity,
+                    crate::report::Severity::Error,
+                    Some(joint.id.as_str()),
+                    format_args!("invalid assembly joint driving parameter"),
+                );
+            }
+        }
         for connector in joint.connectors() {
-            ctx.charge_work(1, "assembly joint connector")?;
-            if let OperandContainer::Occurrence { occurrence } = &connector.operand.container {
-                if !occurrences.contains(ctx, occurrence.as_str())? {
+            if let OperandContainer::Occurrence { occurrence, .. } = &connector.operand.container {
+                if !occurrences.contains(occurrence.as_str()) {
                     record_finding(
-                        ctx,
                         findings,
                         Check::ReferentialIntegrity,
                         crate::report::Severity::Error,
                         Some(joint.id.as_str()),
                         format_args!("invalid assembly joint operands, frames, or limits"),
-                    )?;
+                    );
                     break;
                 }
             }
@@ -162,6 +202,53 @@ mod tests {
 
     fn root_operand(object: &str) -> JointOperand {
         JointOperand::root(object, Vec::new())
+    }
+
+    /// A kind that states its own sense requires the frame sense to agree.
+    #[test]
+    fn a_frame_sense_must_agree_with_its_kinds_sense() {
+        use crate::products::PlaneSense;
+        let findings = |frame_sense| {
+            let mut ir = CadIr::empty();
+            let mut joint = AssemblyJoint::paired(
+                JointId::mint("test:model:joint#plane").expect("identity grammar"),
+                PairedJointKind::PlaneCoincidence {
+                    sense: PlaneSense::Opposed,
+                    offset: None,
+                },
+                [
+                    JointConnector {
+                        operand: root_operand("root:first"),
+                        frame: Transform::identity(),
+                        detached: false,
+                    },
+                    JointConnector {
+                        operand: root_operand("root:second"),
+                        frame: Transform::identity(),
+                        detached: false,
+                    },
+                ],
+                None,
+            );
+            assert!(joint.set_frame_sense(frame_sense));
+            ir.model.assembly_joints.push(joint);
+            let mut findings = Vec::new();
+            check_products(
+                &cadmpeg_test_support::service_decode_context(),
+                &ir,
+                &mut findings,
+            )
+            .unwrap();
+            findings
+        };
+        assert!(findings(None).is_empty());
+        assert!(findings(Some(PlaneSense::Opposed)).is_empty());
+        let contradicted = findings(Some(PlaneSense::Aligned));
+        assert_eq!(contradicted.len(), 1);
+        assert_eq!(
+            contradicted[0].message,
+            "assembly joint frame sense contradicts its kind's sense"
+        );
     }
 
     #[test]
@@ -222,5 +309,43 @@ mod tests {
             "resolution": "unresolved"
         });
         assert!(serde_json::from_value::<AssemblyJoint>(wire).is_err());
+    }
+
+    #[test]
+    fn a_joint_driving_parameter_must_name_a_design_parameter() {
+        let mut ir = CadIr::empty();
+        let mut joint = AssemblyJoint::paired(
+            JointId::mint("test:model:joint#driven").expect("identity grammar"),
+            PairedJointKind::AxisCoincidence {},
+            [
+                JointConnector {
+                    operand: root_operand("root:first"),
+                    frame: Transform::identity(),
+                    detached: false,
+                },
+                JointConnector {
+                    operand: root_operand("root:second"),
+                    frame: Transform::identity(),
+                    detached: false,
+                },
+            ],
+            None,
+        );
+        joint.driving_parameter = Some(
+            crate::features::ParameterId::mint("test:model:parameter#absent")
+                .expect("identity grammar"),
+        );
+        ir.model.assembly_joints.push(joint);
+        let mut findings = Vec::new();
+        check_products(
+            &cadmpeg_test_support::service_decode_context(),
+            &ir,
+            &mut findings,
+        )
+        .unwrap();
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0]
+            .message
+            .contains("invalid assembly joint driving parameter"));
     }
 }

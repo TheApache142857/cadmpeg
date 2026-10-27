@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::default_trait_access)]
 
-use cadmpeg_core::decode::ResourceDimension;
 use cadmpeg_test_support::EditableDecodeResult;
 
 const TOLERANT_INTERSECTION_FIT: f64 = 1.0e-8;
@@ -23,8 +23,10 @@ use crate::test_support::test_prt::prt_with_named_payloads;
 use crate::test_support::test_prt::prt_with_partition;
 use crate::test_support::test_prt::single_part_prt;
 use crate::test_support::test_prt::topology_part_prt;
+use crate::test_support::test_prt::without_footer;
 use crate::test_support::test_streams::external_reference_stream;
 use crate::test_support::test_streams::pcurve_topology_partition_stream;
+use crate::test_support::test_streams::quarter_disc_topology_partition_stream;
 use crate::test_support::test_streams::shared_region_shells_partition_stream;
 use crate::test_support::test_streams::topology_partition_stream;
 
@@ -305,7 +307,7 @@ fn decode_synthesizes_vertex_for_closed_null_vertex_fin() {
     assert_eq!(result.ir().model.coedges.len(), 1);
     assert!(
         cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -344,7 +346,7 @@ fn decode_aliases_partner_closed_null_vertex_fin_to_edge_start() {
     assert_eq!(result.ir().model.coedges.len(), 1);
     assert!(
         cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -397,15 +399,8 @@ fn decode_retains_topology_owned_point_at_origin() {
         .expect("point record");
     put_vec3(&mut stream, point + 16, [0.0, 0.0, 0.0]);
 
-    assert_eq!(
-        crate::test_support::with_decode_context(|ctx| {
-            crate::geometry::points(ctx, &stream).unwrap().len()
-        }),
-        1
-    );
-    let graph =
-        crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &stream))
-            .unwrap();
+    assert_eq!(crate::geometry::points(&stream).len(), 1);
+    let graph = crate::topology::Graph::parse(&stream);
     assert_eq!(
         graph
             .get(NodeKind::Point, 11)
@@ -434,75 +429,6 @@ fn single_point_candidate_stream() -> Vec<u8> {
 }
 
 #[test]
-fn ordered_point_candidates_refuse_index_node_at_collection_limit() {
-    let stream = single_point_candidate_stream();
-    let graph =
-        crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &stream))
-            .unwrap();
-
-    crate::test_support::with_decode_context_over(
-        &[],
-        |policy| {
-            policy.limits.max_collection_items = 0;
-        },
-        |ctx| {
-            assert!(matches!(
-                ordered_point_candidates(ctx, &graph),
-                Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-                    if limit.dimension == ResourceDimension::CollectionItems
-                        && limit.operation == "nx analytic candidate index"
-            ));
-        },
-    );
-}
-
-#[test]
-fn ordered_point_candidates_refuse_output_slot_at_collection_limit() {
-    let stream = single_point_candidate_stream();
-    let graph =
-        crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &stream))
-            .unwrap();
-
-    crate::test_support::with_decode_context_over(
-        &[],
-        |policy| {
-            policy.limits.max_collection_items = 1;
-        },
-        |ctx| {
-            assert!(matches!(
-                ordered_point_candidates(ctx, &graph),
-                Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-                    if limit.dimension == ResourceDimension::CollectionItems
-                        && limit.operation == "nx ordered analytic candidates"
-            ));
-        },
-    );
-}
-
-#[test]
-fn ordered_point_candidates_refuse_scan_work_at_caller_limit() {
-    let stream = single_point_candidate_stream();
-    let graph =
-        crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &stream))
-            .unwrap();
-
-    crate::test_support::with_decode_context_over(
-        &[],
-        |policy| {
-            policy.limits.max_work_units = 0;
-        },
-        |ctx| {
-            assert!(matches!(
-                ordered_point_candidates(ctx, &graph),
-                Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-                    if limit.dimension == ResourceDimension::WorkUnits
-                        && limit.operation == "scan NX analytic candidates"
-            ));
-        },
-    );
-}
-
-#[test]
 fn decode_orders_graph_only_origin_before_later_nonzero_point() {
     let mut stream = topology_partition_stream();
     let first = stream
@@ -515,12 +441,8 @@ fn decode_orders_graph_only_origin_before_later_nonzero_point() {
     put_vec3(&mut second, 16, [0.04, 0.05, 0.06]);
     stream.extend(second);
 
-    let graph =
-        crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &stream))
-            .unwrap();
-    let points = crate::test_support::with_decode_context(|ctx| {
-        ordered_point_candidates(ctx, &graph).unwrap()
-    });
+    let graph = crate::topology::Graph::parse(&stream);
+    let points = ordered_point_candidates(&graph);
     assert_eq!(points.len(), 2);
     assert_eq!(points[0].1.pos(), first);
     assert_eq!(points[0].0, cadmpeg_ir::math::Point3::new(0.0, 0.0, 0.0));
@@ -559,21 +481,15 @@ fn decode_orders_graph_only_escaped_analytics_before_later_records() {
     put_vec3(&mut line, 43, [0.0, 1.0, 0.0]);
     stream.extend(line);
 
-    let graph =
-        crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &stream))
-            .unwrap();
-    let surfaces = crate::test_support::with_decode_context(|ctx| {
-        ordered_surface_candidates(ctx, &graph).unwrap()
-    });
+    let graph = crate::topology::Graph::parse(&stream);
+    let surfaces = ordered_surface_candidates(&graph);
     assert_eq!(surfaces.len(), 2);
     assert_eq!(surfaces[0].1.pos(), first_surface);
     assert_eq!(surfaces[0].1.xmt(), 6);
     assert_eq!(surfaces[1].1.pos(), second_surface_offset);
     assert_eq!(surfaces[1].1.xmt(), 77);
 
-    let curves = crate::test_support::with_decode_context(|ctx| {
-        ordered_curve_candidates(ctx, &graph).unwrap()
-    });
+    let curves = ordered_curve_candidates(&graph);
     assert_eq!(curves.len(), 2);
     assert_eq!(curves[0].1.pos(), first_curve);
     assert_eq!(curves[0].1.xmt(), 9);
@@ -592,19 +508,10 @@ fn decode_rejects_scanner_geometry_with_an_ambiguous_record_identity() {
     let mut stream = plane.clone();
     stream.extend(plane);
 
-    assert_eq!(
-        crate::test_support::with_decode_context(|ctx| {
-            crate::geometry::surfaces(ctx, &stream).unwrap().len()
-        }),
-        2
-    );
-    let graph =
-        crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &stream))
-            .unwrap();
+    assert_eq!(crate::geometry::surfaces(&stream).len(), 2);
+    let graph = crate::topology::Graph::parse(&stream);
     assert!(graph.get(NodeKind::Plane, 77).is_none());
-    assert!(crate::test_support::with_decode_context(|ctx| {
-        ordered_surface_candidates(ctx, &graph).unwrap().is_empty()
-    }));
+    assert!(ordered_surface_candidates(&graph).is_empty());
 }
 
 #[test]
@@ -626,7 +533,7 @@ fn decode_does_not_attach_unreferenced_point_to_solid_topology() {
     assert_eq!(result.ir().model.bodies.len(), 1);
     assert!(
         cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -657,7 +564,7 @@ fn decode_retains_connected_topology_with_unknown_surface_carrier() {
         SurfaceGeometry::Solved(SolvedSurfaceGeometry::Unknown { .. })
     ));
     let validation = cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "findings: {:?}", validation.findings);
 }
 
@@ -691,7 +598,7 @@ fn decode_retains_unknown_non_null_edge_curve_carrier() {
     ));
     assert!(
         cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -741,7 +648,7 @@ fn decode_retains_native_carrierless_edge() {
     assert_eq!(edge.param_range(), None);
     assert!(
         cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -784,7 +691,7 @@ fn decode_attaches_dimension_two_bcurve_through_surface_curve() {
         cadmpeg_ir::math::Point3::new(10.0, 20.0, 0.0)
     );
     let validation = cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(
         validation.findings.is_empty(),
         "findings: {:?}",
@@ -932,7 +839,7 @@ fn decode_assigns_descending_pcurve_trim_to_the_coedge_use() {
     );
     assert!(
         cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -957,7 +864,7 @@ fn decode_omits_surface_curve_missing_tolerance_sentinel() {
     assert_eq!(result.ir().model.pcurves[0].fit_tolerance(), None);
     assert!(
         cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -979,7 +886,7 @@ fn decode_rejects_overflowing_pcurve_parameter_conversion() {
     assert!(result.ir().model.coedges[0].pcurves.is_empty());
     assert!(
         cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -998,7 +905,7 @@ fn decode_preserves_multiple_shells_in_one_region() {
     assert_eq!(result.ir().model.regions[0].shells.len(), 2);
     assert_eq!(result.ir().model.bodies[0].regions.len(), 1);
     let validation = cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "findings: {:?}", validation.findings);
 }
 
@@ -1111,8 +1018,87 @@ fn decode_transfers_point_plane_cylinder_line() {
     );
 
     let report = cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(report.is_ok(), "findings: {:?}", report.findings);
+}
+
+#[test]
+fn decode_runs_each_edge_along_its_curve_and_chains_loop_coedges() {
+    let result = NxCodec
+        .decode(
+            &mut Cursor::new(prt_with_partition(&quarter_disc_topology_partition_stream())),
+            &DecodeOptions::default(),
+        )
+        .unwrap();
+    let model = &result.ir().model;
+    let position = |vertex: &cadmpeg_ir::ids::VertexId| {
+        let point = &model
+            .vertices
+            .iter()
+            .find(|candidate| &candidate.id == vertex)
+            .expect("vertex")
+            .point;
+        let position = model
+            .points
+            .iter()
+            .find(|candidate| &candidate.id == point)
+            .expect("point")
+            .position()
+            .get();
+        [position.x, position.y, position.z]
+    };
+    let edge = |suffix: &str| {
+        model
+            .edges
+            .iter()
+            .find(|edge| edge.id.as_str().ends_with(suffix))
+            .expect("edge")
+    };
+
+    assert_eq!(model.edges.len(), 3);
+    assert_eq!(position(&edge("#8").start), [10.0, 0.0, 0.0]);
+    assert_eq!(position(&edge("#8").end), [0.0, 10.0, 0.0]);
+    assert_eq!(position(&edge("#15").start), [0.0, 10.0, 0.0]);
+    assert_eq!(position(&edge("#16").start), [10.0, 0.0, 0.0]);
+    assert_eq!(position(&edge("#16").end), [0.0, 0.0, 0.0]);
+    let traversal = |coedge: &cadmpeg_ir::ids::CoedgeId| {
+        let coedge = model
+            .coedges
+            .iter()
+            .find(|candidate| &candidate.id == coedge)
+            .expect("coedge");
+        let edge = model
+            .edges
+            .iter()
+            .find(|candidate| candidate.id == coedge.edge)
+            .expect("edge");
+        match coedge.sense {
+            cadmpeg_ir::topology::Sense::Forward => (edge.start.clone(), edge.end.clone()),
+            cadmpeg_ir::topology::Sense::Reversed => (edge.end.clone(), edge.start.clone()),
+        }
+    };
+    let coedges = model.loops[0].coedges();
+    assert_eq!(coedges.len(), 3);
+    for (index, coedge) in coedges.iter().enumerate() {
+        let next = &coedges[(index + 1) % coedges.len()];
+        assert_eq!(traversal(coedge).1, traversal(next).0);
+    }
+}
+
+#[test]
+fn decode_emits_the_same_brep_without_a_footer_region() {
+    let decode = |bytes: Vec<u8>| {
+        NxCodec
+            .decode(&mut Cursor::new(bytes), &DecodeOptions::default())
+            .unwrap()
+    };
+    let footed = decode(topology_part_prt());
+    let footerless = decode(without_footer(topology_part_prt()));
+
+    assert_eq!(footerless.ir().model.faces.len(), 1);
+    assert_eq!(footerless.ir().model.faces, footed.ir().model.faces);
+    assert_eq!(footerless.ir().model.edges, footed.ir().model.edges);
+    assert_eq!(footerless.ir().model.surfaces, footed.ir().model.surfaces);
 }
 
 #[test]
@@ -1182,7 +1168,7 @@ fn decode_emits_connected_primitive_brep() {
             && loss.message.contains("Assembly occurrence placements")
     }));
     let validation = cadmpeg_ir::validate::validate_neutral(result.ir(), Vec::new())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "findings: {:?}", validation.findings);
 }
 
@@ -1237,20 +1223,12 @@ mod intersection_charts;
 #[test]
 fn graph_analytic_candidates_do_not_scan_discarded_fallbacks() {
     let stream = single_point_candidate_stream();
-    let graph =
-        crate::test_support::with_decode_context(|ctx| crate::topology::Graph::parse(ctx, &stream))
-            .unwrap();
-    crate::test_support::with_decode_context_over(
-        &[],
-        |policy| policy.limits.max_work_units = 1,
-        |ctx| {
-            let candidates = ordered_point_candidates(ctx, &graph).unwrap();
-            assert_eq!(candidates.len(), 1);
-            assert_eq!(
-                candidates[0].0.get(),
-                cadmpeg_ir::math::Point3::new(0.0, 0.0, 0.0)
-            );
-        },
+    let graph = crate::topology::Graph::parse(&stream);
+    let candidates = ordered_point_candidates(&graph);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        candidates[0].0.get(),
+        cadmpeg_ir::math::Point3::new(0.0, 0.0, 0.0)
     );
 }
 

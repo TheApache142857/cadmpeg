@@ -11,16 +11,15 @@ fn complete_region_layouts_preserve_source_fields_and_reject_truncation() {
             let mut bytes = prefix.clone();
             bytes.extend(&region);
             for end in prefix.len() + 1..bytes.len() {
-                let owner = with_decode_context(|ctx| {
-                    crate::records::DeltasRecords::read(ctx, &bytes[..end])
-                })
-                .unwrap();
+                let owner =
+                    with_decode_context(|_ctx| crate::records::DeltasRecords::read(&bytes[..end]))
+                        .unwrap();
                 assert_eq!(owner.census().instance_count(), 0);
                 assert_eq!(owner.suffix(), prefix.len()..end);
             }
             let bytes = test_pmarks::complete(bytes);
-            let owner = with_decode_context(|ctx| crate::records::DeltasRecords::read(ctx, &bytes))
-                .unwrap();
+            let owner =
+                with_decode_context(|_ctx| crate::records::DeltasRecords::read(&bytes)).unwrap();
             assert_eq!(owner.census().instance_count(), 1);
             assert!(
                 super::RegionLayout::from_schema(owner.definitions().last().unwrap().plan())
@@ -85,8 +84,8 @@ fn retained_fitting_and_shcs_bytes_keep_first_and_ordinary_region_fields() {
         bytes.extend(fixture);
         let instance_end = bytes.len();
         let bytes = test_pmarks::complete(bytes);
-        with_decode_context(|ctx| {
-            let owner = crate::records::DeltasRecords::read(ctx, &bytes).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = crate::records::DeltasRecords::read(&bytes).unwrap();
             assert_eq!(owner.suffix().start, bytes.len());
             let regions: Vec<_> = owner
                 .events()

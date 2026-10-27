@@ -2,7 +2,6 @@
 //! Preserve source dependency for carriers without standalone topology.
 
 use super::EntityStatus;
-use cadmpeg_core::{decode::DecodeContext, CodecError};
 use cadmpeg_ir::geometry::Surface;
 use cadmpeg_ir::ids::SurfaceId;
 use cadmpeg_ir::{CadIr, CodecFormat, SourceGeometryRole, SourceObjectAssociation};
@@ -14,15 +13,10 @@ pub(super) struct SourceOwnership<'ir> {
 }
 
 impl<'ir> SourceOwnership<'ir> {
-    pub(super) fn build(ctx: &DecodeContext<'_>, ir: &'ir CadIr) -> Result<Self, CodecError> {
+    pub(super) fn build(ir: &'ir CadIr) -> Self {
         let mut owned_surfaces = BTreeSet::new();
         for face in &ir.model.faces {
-            ctx.charge_work(1, "iges surface ownership scan")?;
-            ctx.insert_btree_set(
-                &mut owned_surfaces,
-                &face.surface,
-                "iges surface ownership index",
-            )?;
+            owned_surfaces.insert(&face.surface);
         }
         let mut statuses = BTreeMap::new();
         for record in ir
@@ -32,7 +26,6 @@ impl<'ir> SourceOwnership<'ir> {
             .filter_map(|namespace| namespace.arenas().get("entities"))
             .flatten()
         {
-            ctx.charge_work(1, "iges carrier ownership scan")?;
             let status = match record
                 .field("subordinate_status")
                 .and_then(|value| value.as_i64())
@@ -45,8 +38,7 @@ impl<'ir> SourceOwnership<'ir> {
                 Some(3) => EntityStatus::BothDependent,
                 _ => continue,
             };
-            ctx.insert_btree_map(
-                &mut statuses,
+            statuses.insert(
                 match record
                     .field("directory_sequence")
                     .and_then(|value| value.as_u64())
@@ -56,13 +48,12 @@ impl<'ir> SourceOwnership<'ir> {
                     None => continue,
                 },
                 status,
-                "iges carrier ownership index",
-            )?;
+            );
         }
-        Ok(Self {
+        Self {
             statuses,
             owned_surfaces,
-        })
+        }
     }
 
     pub(super) fn status(&self, source: Option<&SourceObjectAssociation>) -> EntityStatus {
@@ -74,13 +65,19 @@ impl<'ir> SourceOwnership<'ir> {
             .copied()
             .unwrap_or(EntityStatus::Independent);
         if source.is_some_and(|source| source.geometry_role == Some(SourceGeometryRole::Support)) {
-            match status {
-                EntityStatus::Independent | EntityStatus::Definition => {
-                    EntityStatus::PhysicallyDependent
-                }
-                EntityStatus::LogicallyDependent => EntityStatus::BothDependent,
-                status => status,
-            }
+            physically_dependent(status)
+        } else {
+            status
+        }
+    }
+
+    /// The status of a carrier that exported topology uses. A carrier with no
+    /// stated geometry role is support of that topology; only an explicit
+    /// `independent` role also makes it standalone geometry.
+    pub(super) fn topology_status(&self, source: Option<&SourceObjectAssociation>) -> EntityStatus {
+        let status = self.status(source);
+        if source.and_then(|source| source.geometry_role).is_none() {
+            physically_dependent(status)
         } else {
             status
         }
@@ -92,5 +89,14 @@ impl<'ir> SourceOwnership<'ir> {
         // standalone geometry by some importers. Withhold that orphan instead.
         (!status.is_physically_dependent() || self.owned_surfaces.contains(&surface.id))
             .then_some(status)
+    }
+}
+
+/// `status` with physical dependence added.
+const fn physically_dependent(status: EntityStatus) -> EntityStatus {
+    match status {
+        EntityStatus::Independent | EntityStatus::Definition => EntityStatus::PhysicallyDependent,
+        EntityStatus::LogicallyDependent => EntityStatus::BothDependent,
+        status => status,
     }
 }

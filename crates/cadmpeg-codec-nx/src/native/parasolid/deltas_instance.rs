@@ -115,37 +115,26 @@ pub(in crate::native) struct ParasolidDeltasInstance {
 }
 
 impl ParasolidDeltasSchema {
-    pub(super) fn from_owned(
-        ctx: &DecodeContext<'_>,
-        source: &[u8],
-        ordinal: u32,
-        definition: &Definition,
-    ) -> Result<Self, CodecError> {
+    pub(super) fn from_owned(source: &[u8], ordinal: u32, definition: &Definition) -> Self {
         let range = definition.declaration();
-        Ok(Self {
+        Self {
             id: deltas_event_id(
-                ctx,
                 cadmpeg_core::decode::index_from_u32(ordinal),
                 "deltas-schema",
                 range.start,
                 None,
-            )?,
+            ),
             stream_ordinal: ordinal,
             inflated_offset: u64_from_index(range.start),
             byte_len: u64_from_index(range.len()),
             definition: definition.shared_plan(),
-            sha256: Sha256Digest::digest_for_decode(
-                ctx,
-                &source[range],
-                "NX Deltas schema digest",
-            )?,
-        })
+            sha256: Sha256Digest::digest(&source[range]),
+        }
     }
 }
 
 impl ParasolidDeltasInstance {
     pub(super) fn from_owned(
-        ctx: &DecodeContext<'_>,
         source: &[u8],
         ordinal: u32,
         event: &Event,
@@ -165,45 +154,35 @@ impl ParasolidDeltasInstance {
             let mut view = View::over_retained(&source[range.clone()]);
             let mut values = Vec::new();
             while !view.is_empty() {
-                ctx.charge_work(1, "project NX Deltas field")?;
                 let value = FieldValue::read(field.data_type, &mut view)
                     .ok_or_else(|| CodecError::Malformed("invalid owned NX Deltas field".into()))?;
-                ctx.push_vec(&mut values, value, "NX Deltas native values")?;
+                values.push(value);
             }
-            ctx.push_vec(
-                &mut fields,
-                FieldWire {
-                    inflated_offset: u64_from_index(range.start),
-                    byte_len: u64_from_index(range.len()),
-                    values,
-                },
-                "NX Deltas native fields",
-            )?;
+            fields.push(FieldWire {
+                inflated_offset: u64_from_index(range.start),
+                byte_len: u64_from_index(range.len()),
+                values,
+            });
         }
         let range = event.range();
         let value = Self {
             id: deltas_event_id(
-                ctx,
                 cadmpeg_core::decode::index_from_u32(ordinal),
                 "deltas-instance",
                 range.start,
                 None,
-            )?,
+            ),
             stream_ordinal: ordinal,
-            schema: ctx.copy_retained_text(&schema.id, "NX Deltas instance schema")?,
+            schema: schema.id.clone(),
             inflated_offset: u64_from_index(range.start),
             byte_len: u64_from_index(range.len()),
             identity_offset: u64_from_index(instance.identity_at()),
             xmt: instance.xmt(),
             variable_length: instance.variable_length(),
             fields,
-            sha256: Sha256Digest::digest_for_decode(
-                ctx,
-                &source[range],
-                "NX Deltas instance digest",
-            )?,
+            sha256: Sha256Digest::digest(&source[range]),
         };
-        value.validate_source(ctx, schema, source)?;
+        value.validate_source(schema, source)?;
         Ok(value)
     }
 
@@ -211,16 +190,15 @@ impl ParasolidDeltasInstance {
     /// BODY has no role projection: its values remain generic physical fields.
     pub(super) fn project_record(
         &self,
-        ctx: &DecodeContext<'_>,
         schema: &ParasolidDeltasSchema,
-    ) -> Result<Option<crate::deltas::record_family::RecordFamily>, CodecError> {
+    ) -> Option<crate::deltas::record_family::RecordFamily> {
         use crate::deltas::record_family::RecordFamily;
         let plan = &schema.definition;
         let region =
             plan.kind == 19 && crate::deltas::region::RegionLayout::from_schema(plan).is_some();
         let group = plan.matches_base_with_pointer_tail(90, &[]);
         if !region && !group {
-            return Ok(None);
+            return None;
         }
         let mut references = Vec::new();
         let mut node_id = None;
@@ -229,15 +207,11 @@ impl ParasolidDeltasInstance {
         let mut linked_status = None;
         for (descriptor, field) in plan.fields.iter().zip(&self.fields) {
             let [value] = field.values.as_slice() else {
-                return Ok(None);
+                return None;
             };
             match value {
                 FieldValue::Pointer { target, status } => {
-                    ctx.push_vec(
-                        &mut references,
-                        target.get(),
-                        "NX Deltas projected references",
-                    )?;
+                    references.push(target.get());
                     if descriptor.name.as_str() == "first_member" {
                         linked_status =
                             crate::deltas::group::GroupReferenceStatus::try_from(u8::from(*status))
@@ -253,10 +227,10 @@ impl ParasolidDeltasInstance {
                 FieldValue::Char(value) if region && descriptor.name.as_str() == "type" => {
                     region_type = crate::deltas::region::RegionType::try_from(*value).ok();
                 }
-                _ => return Ok(None),
+                _ => return None,
             }
         }
-        Ok((|| {
+        (|| {
             if group {
                 Some(RecordFamily::Group {
                     node_id: node_id?,
@@ -273,7 +247,7 @@ impl ParasolidDeltasInstance {
                     )?,
                 })
             }
-        })())
+        })()
     }
 
     fn validate(&self, schema: &ParasolidDeltasSchema) -> Result<(), &'static str> {
@@ -364,7 +338,6 @@ impl ParasolidDeltasInstance {
     // a matching declaration hash alone does not authenticate a serialized plan.
     fn validate_source(
         &self,
-        ctx: &DecodeContext<'_>,
         schema: &ParasolidDeltasSchema,
         source: &[u8],
     ) -> Result<(), CodecError> {
@@ -382,10 +355,8 @@ impl ParasolidDeltasInstance {
             .get(range(schema.inflated_offset, schema.byte_len).ok_or_else(bad)?)
             .ok_or_else(bad)?;
         if View::u16_be_at(event, 0) != Some(schema.definition.kind)
-            || Sha256Digest::digest_for_decode(ctx, event, "admit NX Deltas instance digest")?
-                != self.sha256
-            || Sha256Digest::digest_for_decode(ctx, declaration, "admit NX Deltas schema digest")?
-                != schema.sha256
+            || Sha256Digest::digest(event) != self.sha256
+            || Sha256Digest::digest(declaration) != schema.sha256
         {
             return Err(bad());
         }
@@ -419,7 +390,6 @@ impl ParasolidDeltasInstance {
                     .ok_or_else(bad)?,
             );
             for value in &field.values {
-                ctx.charge_work(1, "admit NX Deltas field value")?;
                 if FieldValue::read(descriptor.data_type, &mut view).as_ref() != Some(value) {
                     return Err(bad());
                 }
@@ -438,15 +408,7 @@ pub(in crate::native) fn admit(
 ) -> Result<(), NativeConvertError> {
     let mut declarations =
         namespace.arena_as_for_decode::<ParasolidDeltasSchema>(ctx, "parasolid_deltas_schemas")?;
-    ctx.sort_unstable_by(
-        &mut declarations,
-        |left, right| {
-            (left.stream_ordinal, left.inflated_offset)
-                .cmp(&(right.stream_ordinal, right.inflated_offset))
-        },
-        |_| 0,
-        "order NX Deltas declarations",
-    )?;
+    declarations.sort_unstable_by_key(|schema| (schema.stream_ordinal, schema.inflated_offset));
     let mut schemas = BTreeMap::new();
     let mut kinds = std::collections::BTreeSet::new();
     let mut declaration_ends = BTreeMap::<u32, u64>::new();
@@ -466,39 +428,24 @@ pub(in crate::native) fn admit(
                 "duplicate Deltas kind or overlapping declaration".into(),
             ));
         }
-        ctx.insert_btree_set(&mut kinds, kind, "admit NX Deltas kinds")?;
-        ctx.insert_btree_map(
-            &mut declaration_ends,
+        kinds.insert(kind);
+        declaration_ends.insert(
             schema.stream_ordinal,
             schema.inflated_offset + schema.byte_len,
-            "admit NX Deltas declaration ranges",
-        )?;
-        let key = ctx.copy_retained_text(&schema.id, "admit NX Deltas schema id")?;
-        ctx.insert_btree_map(&mut schemas, key, schema, "admit NX Deltas schemas")?;
+        );
+        schemas.insert(schema.id.clone(), schema);
     }
     let mut previous = BTreeMap::<u32, u64>::new();
     let mut first_uses = std::collections::BTreeSet::new();
     let mut instances = namespace
         .arena_as_for_decode::<ParasolidDeltasInstance>(ctx, "parasolid_deltas_instances")?;
-    ctx.sort_unstable_by(
-        &mut instances,
-        |left, right| {
-            (left.stream_ordinal, left.inflated_offset)
-                .cmp(&(right.stream_ordinal, right.inflated_offset))
-        },
-        |_| 0,
-        "order NX Deltas instances",
-    )?;
+    instances.sort_unstable_by_key(|instance| (instance.stream_ordinal, instance.inflated_offset));
     for instance in instances {
         let schema = schemas
             .get(&instance.schema)
             .ok_or_else(|| NativeConvertError::InvalidOwner(instance.schema.clone()))?;
         if instance.inflated_offset == schema.inflated_offset {
-            ctx.insert_btree_set(
-                &mut first_uses,
-                ctx.copy_retained_text(&schema.id, "admit NX Deltas first use")?,
-                "admit NX Deltas first uses",
-            )?;
+            first_uses.insert(schema.id.clone());
         }
         instance
             .validate(schema)
@@ -511,12 +458,10 @@ pub(in crate::native) fn admit(
                 "overlapping Deltas instances".into(),
             ));
         }
-        ctx.insert_btree_map(
-            &mut previous,
+        previous.insert(
             instance.stream_ordinal,
             instance.inflated_offset + instance.byte_len,
-            "admit NX Deltas instance ranges",
-        )?;
+        );
     }
     if schemas.values().any(|schema| {
         (schema.definition.kind == 2 || schema.definition.kind > 4)
@@ -537,14 +482,13 @@ mod tests {
     #[test]
     fn native_admission_rejects_missing_schema_wrong_cardinality_ranges_and_source_bytes() {
         let bytes = crate::test_support::test_pmarks::complete(owned_deltas::body_stream(36));
-        with_decode_context(|ctx| {
-            let owner = crate::records::DeltasRecords::read(ctx, &bytes).unwrap();
-            let schema =
-                ParasolidDeltasSchema::from_owned(ctx, &bytes, 0, &owner.definitions()[2]).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = crate::records::DeltasRecords::read(&bytes).unwrap();
+            let schema = ParasolidDeltasSchema::from_owned(&bytes, 0, &owner.definitions()[2]);
             let instance =
-                ParasolidDeltasInstance::from_owned(ctx, &bytes, 0, &owner.events()[2], &schema)
+                ParasolidDeltasInstance::from_owned(&bytes, 0, &owner.events()[2], &schema)
                     .unwrap();
-            instance.validate_source(ctx, &schema, &bytes).unwrap();
+            instance.validate_source(&schema, &bytes).unwrap();
             assert!(cadmpeg_ir::ids::is_valid_identity(&schema.id));
             assert!(cadmpeg_ir::ids::is_valid_identity(&instance.id));
             let wire = serde_json::to_value(&instance).unwrap();
@@ -576,10 +520,10 @@ mod tests {
             let mut changed = bytes.clone();
             let last = owner.events()[2].range().end - 1;
             changed[last] ^= 1;
-            assert!(instance.validate_source(ctx, &schema, &changed).is_err());
+            assert!(instance.validate_source(&schema, &changed).is_err());
             let mut changed_value = instance.clone();
             changed_value.fields[0].values[0] = FieldValue::Integer(0);
-            assert!(changed_value.validate_source(ctx, &schema, &bytes).is_err());
+            assert!(changed_value.validate_source(&schema, &bytes).is_err());
         });
     }
 
@@ -588,8 +532,8 @@ mod tests {
         for bits in [0x7ff8_1234_5678_9abcu64, 0x7ff0_0000_0000_0000, 1] {
             let mut bytes =
                 crate::test_support::test_pmarks::complete(owned_deltas::body_stream(36));
-            let span = with_decode_context(|ctx| {
-                let owner = crate::records::DeltasRecords::read(ctx, &bytes).unwrap();
+            let span = with_decode_context(|_ctx| {
+                let owner = crate::records::DeltasRecords::read(&bytes).unwrap();
                 let EventContent::Instance(instance) = owner.events()[2].content() else {
                     panic!("BODY");
                 };
@@ -597,26 +541,21 @@ mod tests {
             });
             assert_eq!(span.len(), 8);
             bytes[span].copy_from_slice(&bits.to_be_bytes());
-            with_decode_context(|ctx| {
-                let owner = crate::records::DeltasRecords::read(ctx, &bytes).unwrap();
+            with_decode_context(|_ctx| {
+                let owner = crate::records::DeltasRecords::read(&bytes).unwrap();
                 let definition = &owner.definitions()[2];
-                let schema = ParasolidDeltasSchema::from_owned(ctx, &bytes, 0, definition).unwrap();
+                let schema = ParasolidDeltasSchema::from_owned(&bytes, 0, definition);
                 assert!(Rc::ptr_eq(&schema.definition, &definition.shared_plan()));
-                let instance = ParasolidDeltasInstance::from_owned(
-                    ctx,
-                    &bytes,
-                    0,
-                    &owner.events()[2],
-                    &schema,
-                )
-                .unwrap();
+                let instance =
+                    ParasolidDeltasInstance::from_owned(&bytes, 0, &owner.events()[2], &schema)
+                        .unwrap();
                 let wire = serde_json::to_value(&instance).unwrap();
                 assert_eq!(
                     wire["fields"][10]["values"][0]["value"],
                     format!("{bits:016x}")
                 );
                 let restored: ParasolidDeltasInstance = serde_json::from_value(wire).unwrap();
-                restored.validate_source(ctx, &schema, &bytes).unwrap();
+                restored.validate_source(&schema, &bytes).unwrap();
             });
         }
     }
@@ -628,10 +567,9 @@ mod tests {
         bytes[maximum..maximum + 2].copy_from_slice(&500u16.to_be_bytes());
         bytes.extend(b"\0\xf0\x01\x07MY_KIND\x06custom\x05value\0\0\0\x01\x01d\0\x02\0\0\0\x07");
         let bytes = crate::test_support::test_pmarks::complete(bytes);
-        with_decode_context(|ctx| {
-            let owner = crate::records::DeltasRecords::read(ctx, &bytes).unwrap();
-            let schema =
-                ParasolidDeltasSchema::from_owned(ctx, &bytes, 0, &owner.definitions()[2]).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = crate::records::DeltasRecords::read(&bytes).unwrap();
+            let schema = ParasolidDeltasSchema::from_owned(&bytes, 0, &owner.definitions()[2]);
             let wire = serde_json::to_value(&schema).unwrap();
             assert_eq!(wire["custom_name"], "MY_KIND");
             assert_eq!(wire["custom_description"], "custom");

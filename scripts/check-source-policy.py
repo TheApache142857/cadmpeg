@@ -11,11 +11,15 @@ from __future__ import annotations
 import argparse
 import ast
 from bisect import bisect_right
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from contextvars import ContextVar
-from functools import wraps
+from functools import lru_cache, wraps
 import json
+import multiprocessing
+import os
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -89,7 +93,7 @@ NAMED_TOLERANCE_DECL = re.compile(
 # inside nested arrays or blocks. Comments and literals are already masked.
 VEC_MACRO = re.compile(r"\bvec!\s*\[")
 VEC_REPEAT_LITERAL = re.compile(r"^(?:0x[0-9a-fA-F]+|\d+)$")
-ADMITTED_LEN_REPEAT = re.compile(
+EXISTING_LEN_REPEAT = re.compile(
     r"^(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*\.len\(\)"
     r"(?:\s*[+-]\s*\d+)?$"
 )
@@ -101,9 +105,15 @@ MOD_DECL = re.compile(
 
 
 def is_production_rs(path: Path) -> bool:
-    """True when ``path`` is a production ``.rs`` file under the filter."""
+    """True when ``path`` is a production ``.rs`` file under the filter.
+
+    An absolute path is tested relative to ``ROOT``: the directories that
+    hold the checkout are not part of the crate layout.
+    """
     if path.suffix != ".rs":
         return False
+    if path.is_absolute():
+        path = Path(relative_path(path))
     parts = path.parts
     if any(part in {"tests", "test_support", "golden_tests", "integration_tests", "benches"} for part in parts):
         return False
@@ -483,31 +493,6 @@ def resolve_module_target(
     return None
 
 
-# Hand-written one-item charge followed by a map or set insert. The core
-# operations charge only when a new key is inserted; a charge before the
-# insert also bills a key that was already present.
-CHARGE_ONE_CALL = re.compile(r"(?<![\w])charge_collection_items\s*\(")
-CHARGE_ONE_ARG = re.compile(r"1|u64_from_index\s*\(\s*1\s*\)")
-CHARGE_RECEIVER = re.compile(r"[\w.\s]*")
-INSERT_STATEMENT = re.compile(
-    r"(?:let\s+[^=;]*?=\s*)?(?P<place>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)"
-    r"\s*\.\s*(?P<method>insert|entry)\s*\("
-)
-SKIPPED_STATEMENT = re.compile(
-    r"(?:let\b|(?:[\w.\s]*\.\s*)?(?:charge_retained|charge_work)\s*\(|[\w.\s]*\.\s*grow\s*\()"
-)
-STOPPING_STATEMENT = re.compile(r"(?:return|continue|break)\b")
-KEYED_COLLECTION = r"(?:BTreeMap|HashMap|BTreeSet|HashSet)"
-FN_ITEM = re.compile(r"\bfn\s+[A-Za-z_]\w*")
-COLLECTION_CHARGE_EXEMPT_FILES = {
-    "crates/cadmpeg-core/src/decode/collect.rs",
-    "crates/cadmpeg-core/src/decode/context.rs",
-}
-COLLECTION_CHARGE_MESSAGE = (
-    "Use ctx.insert_btree_set / insert_btree_map / admit_btree_entry (or the hash forms "
-    "insert_hash_set / insert_hash_map / admit_hash_map_entry), which charge only a new key, "
-    "instead of charging one collection item by hand before the insert."
-)
 _OPENERS = {"(": ")", "[": "]", "{": "}"}
 
 
@@ -526,199 +511,14 @@ def matching_close(code: str, open_index: int) -> int | None:
     return None
 
 
-def top_level_arguments(code: str, open_index: int, close_index: int) -> list[str]:
-    """Split the arguments between a call's parentheses at depth-zero commas."""
-    arguments, depth, start = [], 0, open_index + 1
-    for index in range(open_index + 1, close_index):
-        char = code[index]
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth -= 1
-        elif char == "," and depth == 0:
-            arguments.append(code[start:index])
-            start = index + 1
-    arguments.append(code[start:close_index])
-    if len(arguments) > 1 and not arguments[-1].strip():
-        arguments.pop()
-    return [argument.strip() for argument in arguments]
-
-
-def next_statement(code: str, start: int) -> tuple[int, str, int] | None:
-    """Offset, text and end of the statement at ``start``; None at the block's end."""
-    index = start
-    while index < len(code) and code[index].isspace():
-        index += 1
-    if index >= len(code) or code[index] == "}":
-        return None
-    begin, depth = index, 0
-    while index < len(code):
-        char = code[index]
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            if depth == 0:
-                return begin, code[begin:index], index
-            depth -= 1
-            if char == "}" and depth == 0:
-                after = index + 1
-                while after < len(code) and code[after].isspace():
-                    after += 1
-                if code[after:after + 1] not in {";", ".", "?"} and not code.startswith("else", after):
-                    return begin, code[begin:index + 1], index + 1
-        elif char == ";" and depth == 0:
-            return begin, code[begin:index], index + 1
-        index += 1
-    return begin, code[begin:], len(code)
-
-
-def enclosing_function(code: str, offset: int) -> str:
-    """Signature and body of the innermost function containing ``offset``."""
-    best = None
-    for match in FN_ITEM.finditer(code, 0, offset):
-        brace = code.find("{", match.end())
-        semicolon = code.find(";", match.end())
-        if brace == -1 or (semicolon != -1 and semicolon < brace):
-            continue
-        close = matching_close(code, brace)
-        if close is not None and close >= offset:
-            best = (match.start(), close + 1)
-    return code[best[0]:best[1]] if best else ""
-
-
-def declares_keyed_collection(function: str, name: str) -> bool:
-    """True when ``name`` is a parameter or let binding of a map or set in ``function``."""
-    ident = re.escape(name)
-    if re.search(
-        rf"(?<![\w.]){ident}\s*:\s*(?:&\s*(?:'\w+\s*)?(?:mut\s+)?)?(?:\w+\s*::\s*)*{KEYED_COLLECTION}\b",
-        function,
-    ):
-        return True
-    for binding in re.finditer(rf"\blet\s+(?:mut\s+)?{ident}\b", function):
-        end, depth = binding.end(), 0
-        while end < len(function):
-            char = function[end]
-            if char in "([{":
-                depth += 1
-            elif char in ")]}":
-                depth -= 1
-            elif char == ";" and depth <= 0:
-                break
-            end += 1
-        if re.search(rf"\b{KEYED_COLLECTION}\b", function[binding.end():end]):
-            return True
-    return False
-
-
-def keyed_insert(statement: str, function: str) -> bool:
-    """True when ``statement`` inserts into, or takes an entry of, a local map or set."""
-    match = INSERT_STATEMENT.match(statement)
-    if match is None:
-        return False
-    open_index = match.end() - 1
-    close = matching_close(statement, open_index)
-    if close is None:
-        return False
-    arguments = top_level_arguments(statement, open_index, close)
-    place = re.sub(r"\s+", "", match["place"])
-    if "." in place or not declares_keyed_collection(function, place):
-        return False
-    if match["method"] == "entry":
-        return True
-    return len(arguments) in {1, 2}
-
-
-def charges_nested_member(code: str, statement: str, cursor: int, charge: int) -> bool:
-    """Recognize a charged vector append or singleton set below an admitted map entry."""
-    match = INSERT_STATEMENT.match(statement)
-    if match is None:
-        return False
-    opening = match.end() - 1
-    close = matching_close(statement, opening)
-    if close is None:
-        return False
-    arguments = top_level_arguments(statement, opening, close)
-    if match["method"] == "entry":
-        binding = re.match(r"let\s+(?:mut\s+)?([A-Za-z_]\w*)\s*=", statement)
-        if binding is None or not re.fullmatch(r"\s*\.\s*or_default\s*\(\s*\)\s*", statement[close + 1:]):
-            return False
-        following = next_statement(code, cursor)
-        if following is None:
-            return False
-        _, reserve, after_reserve = following
-        if not re.match(r"(?:[A-Za-z_]\w*\s*::\s*)*reserve_admitted_vec\s*\(", reserve):
-            return False
-        reserve_open = reserve.index("(")
-        reserve_close = matching_close(reserve, reserve_open)
-        if reserve_close is None:
-            return False
-        reserve_args = top_level_arguments(reserve, reserve_open, reserve_close)
-        if len(reserve_args) < 2 or reserve_args[:2] != [binding[1], "1"]:
-            return False
-        append = next_statement(code, after_reserve)
-        return append is not None and re.match(re.escape(binding[1]) + r"\s*\.\s*push\s*\(", append[1]) is not None
-    if match["method"] != "insert" or len(arguments) != 2:
-        return False
-    singleton = re.fullmatch(r"(?:[A-Za-z_]\w*\s*::\s*)*BTreeSet\s*::\s*from\s*\(\s*\[([^\[\]]*)\]\s*\)", arguments[1])
-    if singleton is None or "," in singleton[1] or not singleton[1].strip():
-        return False
-    place = re.sub(r"\s+", "", match["place"])
-    key = re.sub(r"\s+", "", arguments[0])
-    prefix = code[:charge]
-    admission = re.compile(r"\.\s*admit_btree_entry\s*\(")
-    for admitted in admission.finditer(prefix):
-        admission_close = matching_close(prefix, admitted.end() - 1)
-        if admission_close is None:
-            continue
-        args = top_level_arguments(prefix, admitted.end() - 1, admission_close)
-        if len(args) >= 2 and re.sub(r"\s+", "", args[0]).removeprefix("&mut").removeprefix("&") == place and re.sub(r"\s+", "", args[1]).removeprefix("&") == key:
-            tail = prefix[admission_close + 1:]
-            if re.fullmatch(r"\s*\?\s*;\s*[\w.\s]*", tail):
-                return True
-    return False
-
-
-def scan_hand_charged_inserts(code: str):
-    """Yield (charge offset, insert offset) for each hand-charged map or set insert."""
-    for call in CHARGE_ONE_CALL.finditer(code):
-        open_index = call.end() - 1
-        close = matching_close(code, open_index)
-        if close is None:
-            continue
-        arguments = top_level_arguments(code, open_index, close)
-        if not arguments or not CHARGE_ONE_ARG.fullmatch(arguments[0]):
-            continue
-        lead = max(code.rfind(";", 0, call.start()), code.rfind("{", 0, call.start()),
-                   code.rfind("}", 0, call.start()))
-        if not CHARGE_RECEIVER.fullmatch(code[lead + 1:call.start()]):
-            continue
-        after = close + 1
-        while code[after:after + 1].isspace() or code[after:after + 1] == "?":
-            after += 1
-        if code[after:after + 1] != ";":
-            continue
-        cursor, function = after + 1, None
-        while (found := next_statement(code, cursor)) is not None:
-            begin, statement, cursor = found
-            if STOPPING_STATEMENT.match(statement):
-                break
-            if function is None:
-                function = enclosing_function(code, call.start())
-            if keyed_insert(statement, function):
-                if charges_nested_member(code, statement, cursor, call.start()):
-                    break
-                yield call.start(), begin
-                break
-            if not SKIPPED_STATEMENT.match(statement):
-                break
-
-
 def scan_saturating_arithmetic(path: Path, code: str) -> list[Finding]:
     """Require checked arithmetic with an explicit overflow branch."""
     return [Finding(
         "saturating_arithmetic", relative_path(path), code.count("\n", 0, match.start()) + 1,
-        "Use checked arithmetic and propagate a resource refusal or typed error on overflow.",
-    ) for match in re.finditer(r"\bsaturating_\w+\s*(?:::\s*<[^;{}]*>)?\s*\(", code)]
+        "Use checked arithmetic; on overflow return a structured malformed error or parse error in decode code, or a typed error elsewhere.",
+    ) for match in re.finditer(
+        r"\bsaturating_\w+\b(?=\s*(?:::\s*<[^;{}]*>)?\s*\()|(?<=::)saturating_\w+\b", code
+    )]
 
 
 def integer_limit_default(words: list[str]) -> bool:
@@ -939,6 +739,40 @@ def scan_patterns(path: Path, source: str) -> list[Finding]:
     def report(rule: str, line: int, message: str) -> None:
         findings.append(Finding(rule, relative_path(path), line, message))
 
+    codec = re.match(r"crates/(cadmpeg-codec-[^/]+)/src/", relative_path(path))
+    if codec is not None:
+        namespace_calls = list(re.finditer(r"\.\s*namespace(?:_mut)?\s*\(", code))
+        native_maps = list(re.finditer(r"\.\s*native\s*\.\s*0\b", code))
+        if namespace_calls or native_maps:
+            # Keep literals for argument checks, but find calls only in production code.
+            arguments = list(code)
+            for start, end in rust_non_code_spans(source):
+                if re.match(r'(?:r#{0,255})?"', source[start:end]):
+                    arguments[start:end] = source[start:end]
+            arguments = "".join(arguments)
+            format_id = codec_native_format(ROOT / "crates" / codec[1])
+            own_literal = re.compile(
+                r'\s*(?:"' + re.escape(format_id or "")
+                + r'"|r(?P<hashes>#{0,255})"' + re.escape(format_id or "")
+                + r'"(?P=hashes))\s*(?=[,)])'
+            )
+            for call in namespace_calls:
+                # Other APIs use namespace() with no argument.
+                if re.match(r"\s*\)", arguments[call.end():]):
+                    continue
+                if format_id is None or own_literal.match(arguments, call.end()) is None:
+                    report("foreign_native_namespace", code.count("\n", 0, call.start()) + 1,
+                           "Codec crates read only their own native namespace; the convert gate assumes it (ExportPlan::carried_errors).")
+            for access in native_maps:
+                method = re.match(
+                    r"\s*\.\s*(?:get|get_mut|remove|insert|entry|contains_key)\s*\(",
+                    code[access.end():],
+                )
+                if (format_id is None or method is None
+                        or own_literal.match(arguments, access.end() + method.end()) is None):
+                    report("foreign_native_namespace", code.count("\n", 0, access.start()) + 1,
+                           "Codec crates read only their own native namespace; the convert gate assumes it (ExportPlan::carried_errors).")
+
     if size > PRODUCTION_LINE_LIMIT:
         report("production_size", 1,
                f"Production file has {size} lines excluding cfg(test) items; limit is {PRODUCTION_LINE_LIMIT}.")
@@ -992,15 +826,26 @@ def scan_patterns(path: Path, source: str) -> list[Finding]:
         if match.start() not in declarations:
             report("bare_tolerance", code.count("\n", 0, match.start()) + 1,
                    "Give the tolerance a module-local constant name that states its intent.")
-    if relative_path(path) not in COLLECTION_CHARGE_EXEMPT_FILES:
-        for charge, _insert in scan_hand_charged_inserts(code):
-            report("hand_charged_collection_insert", code.count("\n", 0, charge) + 1,
-                   COLLECTION_CHARGE_MESSAGE)
     for offset, count in iter_vec_repeats(code):
-        if not VEC_REPEAT_LITERAL.fullmatch(count) and not ADMITTED_LEN_REPEAT.fullmatch(count):
+        if not VEC_REPEAT_LITERAL.fullmatch(count) and not EXISTING_LEN_REPEAT.fullmatch(count):
             report("unchecked_vec_repeat", code.count("\n", 0, offset) + 1,
-                   "Use checked allocation for a repeat whose count is not a literal or an admitted collection length.")
+                   "Allocate a repeat whose count is not a literal or an existing collection length with DecodeContext::alloc_filled, after View::counted or bounded_len validates the count.")
     return findings
+
+
+@cached_analysis
+def codec_native_format(crate_root: Path) -> str | None:
+    """Read the format id from the codec's generated dialect registry."""
+    registry = crate_root / "src/dialect/registry_ids.rs"
+    if not registry.is_file():
+        return None
+    source = registry.read_text(encoding="utf-8")
+    code, _ = production_source(source)
+    for declaration in re.finditer(r"\bconst\s+FORMAT\s*:\s*&str\s*=", code):
+        literal = re.match(r'\s*"([a-z0-9]+)"\s*;', source[declaration.end():])
+        if literal is not None:
+            return literal[1]
+    return None
 
 
 def scan_placement(sources: dict[Path, str]) -> list[Finding]:
@@ -1733,6 +1578,62 @@ def scan_authoring_paths() -> list[Finding]:
     return findings
 
 
+MEASUREMENT_CRATE = "cadmpeg-measure"
+MEASUREMENT_CONSUMERS = {"cadmpeg"}
+PRODUCTION_DEPENDENCY_HEADER = re.compile(
+    r"^\s*\[\s*(?:target\.[^\]]+?\.)?(?:build-)?dependencies\s*(?:\.|\])"
+)
+TABLE_HEADER = re.compile(r"^\s*\[")
+
+
+def dependency_packages(table: object) -> set[str]:
+    """The package names a dependency table lists, following `package` renames."""
+    if not isinstance(table, dict):
+        return set()
+    packages = set()
+    for key, value in table.items():
+        package = value.get("package") if isinstance(value, dict) else None
+        packages.add(package if isinstance(package, str) else key)
+    return packages
+
+
+def scan_measurement_dependency() -> list[Finding]:
+    """Report a production dependency on the measurement crate outside the CLI."""
+    findings: list[Finding] = []
+    for manifest in sorted((ROOT / "crates").glob("*/Cargo.toml")):
+        if manifest.parent.name in MEASUREMENT_CONSUMERS:
+            continue
+        text = manifest.read_text(encoding="utf-8", errors="replace")
+        try:
+            data = tomllib.loads(text)
+        except tomllib.TOMLDecodeError:
+            continue
+        tables = [data.get(name) for name in ("dependencies", "build-dependencies")]
+        targets = data.get("target")
+        if isinstance(targets, dict):
+            for target in targets.values():
+                if isinstance(target, dict):
+                    tables += [target.get(name) for name in ("dependencies", "build-dependencies")]
+        if not any(MEASUREMENT_CRATE in dependency_packages(table) for table in tables):
+            continue
+        line = 1
+        production = False
+        for number, content in enumerate(text.splitlines(), start=1):
+            if TABLE_HEADER.match(content):
+                production = bool(PRODUCTION_DEPENDENCY_HEADER.match(content))
+            if production and MEASUREMENT_CRATE in content:
+                line = number
+                break
+        findings.append(Finding(
+            "measurement_dependency",
+            str(manifest.relative_to(ROOT)),
+            line,
+            f"Only the cadmpeg CLI lists {MEASUREMENT_CRATE} outside [dev-dependencies]; "
+            "a decoder or encoder never consumes measurement.",
+        ))
+    return findings
+
+
 def is_main_guard(node: ast.AST) -> bool:
     """Whether one statement is the ``if __name__ == "__main__":`` block."""
     if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
@@ -1823,6 +1724,7 @@ EVALUATION_DROPS = {
 }
 
 
+@lru_cache(maxsize=2)
 def evaluation_tokens(code: str):
     tokens = list(RUST_TOKEN.finditer(code))
     pairs: dict[int, int] = {}
@@ -1992,9 +1894,15 @@ def scan_evaluation_refusals(sources: dict[Path, str]) -> list[Finding]:
                 if body in pairs and words[body] == "{":
                     contents = words[body + 1:pairs[body]]
                     for parameter in range(len(parameters) - 2):
-                        if parameters[parameter + 1:parameter + 3] == [":", "ResourceLimit"]:
+                        # A carrier stores the limit, or the evaluation refusal
+                        # that holds it, in its refusal field.
+                        if (parameters[parameter + 1:parameter + 3] == [":", "ResourceLimit"]
+                                or parameters[parameter + 1:parameter + 6]
+                                == [":", "impl", "Into", "<", "EvaluationRefusal"]):
                             limit = parameters[parameter]
-                            if any(contents[offset:offset + 6] == ["resource", ":", "Some", "(", limit, ")"]
+                            if any(contents[offset:offset + 6] in (
+                                    ["resource", ":", "Some", "(", limit, ")"],
+                                    ["refusal", ":", "Some", "(", limit, ")"])
                                    for offset in range(len(contents) - 5)):
                                 retained.setdefault(path, set()).add((owner, name))
             result_type = next((word for word in output if re.fullmatch(r"[A-Za-z_]\w*", word)
@@ -2011,6 +1919,16 @@ def scan_evaluation_refusals(sources: dict[Path, str]) -> list[Finding]:
                 functions[evaluation_module(path) + evaluation_inline_module(tokens, parents, index) + (name,)] = levels
     names = {key[-1] for key, levels in functions.items() if levels}
     method_names = {name for (_, name), levels in methods.items() if any(levels)}
+    method_owners: dict[str, set[str]] = {}
+    method_levels: dict[str, set[int]] = {}
+    for (owner, method), levels in methods.items():
+        method_levels.setdefault(method, set()).update(levels)
+        if any(levels):
+            method_owners.setdefault(method, set()).add(owner)
+    owner_constructors: dict[str, list[str]] = {}
+    for constructor, result_types in returns.items():
+        if len(result_types) == 1:
+            owner_constructors.setdefault(next(iter(result_types)), []).append(constructor)
     findings = []
     call_names = re.compile(r"\b(?:" + "|".join(sorted(names | method_names)) + r")\b") if names or method_names else None
     for path, code in production.items():
@@ -2030,6 +1948,20 @@ def scan_evaluation_refusals(sources: dict[Path, str]) -> list[Finding]:
         refused: dict[int, int] = {}
         bindings: dict[str, list[tuple[int, int, int]]] = {}
         candidate_names = names | method_names | imports.keys()
+        receiver_types: dict[tuple[str, str], bool] = {}
+
+        def receiver_has_type(receiver, owner):
+            key = receiver, owner
+            if key not in receiver_types:
+                receiver_types[key] = bool(
+                    re.search(r"\b" + re.escape(receiver) + r"\s*:\s*(?:&\s*(?:'\w+\s*)?(?:mut\s*)?)?(?:\w+::)*"
+                              + re.escape(owner) + r"\b", code)
+                    or re.search(r"\blet\s+(?:mut\s+)?" + re.escape(receiver)
+                                 + r"\s*=\s*(?:[\w]+::)*" + re.escape(owner) + r"::", code)
+                    or any(re.search(r"\blet\s+(?:mut\s+)?" + re.escape(receiver)
+                                     + r"\s*=\s*(?:[\w]+::)*" + re.escape(constructor) + r"\s*\(", code)
+                           for constructor in owner_constructors.get(owner, ())))
+            return receiver_types[key]
 
         def qualify(parts):
             parts = list(parts)
@@ -2057,31 +1989,19 @@ def scan_evaluation_refusals(sources: dict[Path, str]) -> list[Finding]:
                     return 0
                 # Ambiguous standard method names need a stated receiver type.
                 receiver = words[index - 2] if index > 1 else ""
-                candidates = {owner for owner, method in methods if method == name
-                              and any(methods[(owner, method)])}
-                for owner in candidates:
-                    enclosing = [item for item in signatures if item[0] < index]
-                    if receiver == "self" and enclosing and enclosing[-1][3] == owner:
-                        return max(methods[(owner, name)])
+                for owner in method_owners.get(name, ()):
+                    if receiver == "self":
+                        enclosing = [item for item in signatures if item[0] < index]
+                        if enclosing and enclosing[-1][3] == owner:
+                            return max(methods[(owner, name)])
                     if receiver == ")" and index - 2 in pairs:
                         constructor = pairs[index - 2]
                         if words[constructor - 3:constructor - 1] == [owner, "::"]:
                             return max(methods[(owner, name)])
-                    if re.search(r"\b" + re.escape(receiver) + r"\s*:\s*(?:&\s*(?:'\w+\s*)?(?:mut\s*)?)?(?:\w+::)*"
-                                 + re.escape(owner) + r"\b", code):
+                    if receiver_has_type(receiver, owner):
                         return max(methods[(owner, name)])
-                    if re.search(r"\blet\s+(?:mut\s+)?" + re.escape(receiver)
-                                 + r"\s*=\s*(?:[\w]+::)*" + re.escape(owner) + r"::", code):
-                        return max(methods[(owner, name)])
-                    for constructor, result_types in returns.items():
-                        if result_types == {owner} and re.search(
-                            r"\blet\s+(?:mut\s+)?" + re.escape(receiver)
-                            + r"\s*=\s*(?:[\w]+::)*" + re.escape(constructor) + r"\s*\(", code
-                        ):
-                            return max(methods[(owner, name)])
                 if name not in {"map", "first", "second", "point", "normal", "evaluate", "tangent", "partials"}:
-                    return max(level for (owner, method), levels in methods.items()
-                               if method == name for level in levels)
+                    return max(method_levels[name])
                 return 0
             if name not in names and name not in method_names and name not in imports:
                 return 0
@@ -2282,138 +2202,6 @@ def scan_evaluation_refusals(sources: dict[Path, str]) -> list[Finding]:
     return findings
 
 
-SLICE_SORT_METHODS = {
-    "sort", "sort_by", "sort_by_key", "sort_unstable", "sort_unstable_by",
-    "sort_unstable_by_key", "sort_by_cached_key",
-}
-DECODE_SORT_EXEMPT_FILES = {
-    "crates/cadmpeg-core/src/decode/context.rs",
-    "crates/cadmpeg-core/src/decode/sort.rs",
-}
-# Decode crates sort input-derived values in helpers that receive no context;
-# their encoders sort values of an already admitted document.
-DECODE_SORT_CRATE = re.compile(r"cadmpeg-(?:codec-[a-z0-9]+|container|asm|parasolid|protein)")
-ENCODE_SORT_PATH = re.compile(
-    r"crates/[^/]+/src/(?:"
-    r"(?:.+/)?writer(?:/.*|\.rs|_[a-z_]+\.rs)"
-    r"|bin/.*"
-    r"|history/(?:encode|write)/.*"
-    r"|resolved_features/(?:sketch_write|write_generate|write_prepare)\.rs"
-    r"|zip_write\.rs"
-    r"|export\.rs"
-    r")"
-)
-DECODE_CONTEXT_BINDING = re.compile(
-    r"\b([A-Za-z_]\w*)\s*:\s*(?:&\s*(?:'[A-Za-z_]\w*\s*)?(?:mut\s+)?)?"
-    r"(?:::\s*)?(?:[A-Za-z_]\w*\s*::\s*)*DecodeContext\b"
-)
-
-IR_DECODE_SORT_PATH = re.compile(
-    r"crates/cadmpeg-ir/src/(?:native/.*|math/.*|validate/.*|eval/.*|"
-    r"document\.rs|hash\.rs|eval\.rs|codec\.rs)"
-)
-DECODE_RECEIVER_BINDING = re.compile(
-    r"\b([A-Za-z_]\w*)\s*:\s*(?:&\s*(?:'[A-Za-z_]\w*\s*)?(?:mut\s+)?)?"
-    r"(?:::\s*)?(?:[A-Za-z_]\w*\s*::\s*)*([A-Za-z_]\w*)\b"
-)
-
-
-def scan_decode_sorts(sources: dict[Path, str]) -> list[Finding]:
-    """Reject slice sorts in functions borrowing a decode context and in decode crate code.
-
-    Function scopes exclude nested function items. Closures keep their enclosing
-    context. Annotated receiver types identify owned and borrowed context fields.
-    """
-    parsed = {}
-    context_fields: dict[tuple[str, str], set[str]] = {}
-    for path, source in sources.items():
-        if not is_production_rs(path):
-            continue
-        code, _ = production_source(source)
-        tokens, pairs, parents = evaluation_tokens(code)
-        words = [token[0] for token in tokens]
-        crate = Path(relative_path(path)).parts[1]
-        parsed[path] = code, tokens, pairs, parents, words, crate
-        for index, word in enumerate(words):
-            if word != "struct" or index + 1 >= len(words):
-                continue
-            opening = index + 2
-            while opening < len(words) and words[opening] not in {"{", ";", "("}:
-                opening += 1
-            if opening not in pairs or words[opening] != "{":
-                continue
-            fields = DECODE_CONTEXT_BINDING.findall(
-                code[tokens[opening].end():tokens[pairs[opening]].start()])
-            context_fields.setdefault((crate, words[index + 1]), set()).update(fields)
-
-    findings = []
-    for path, (code, tokens, pairs, parents, words, crate) in parsed.items():
-        if relative_path(path) in DECODE_SORT_EXEMPT_FILES:
-            continue
-        decode_scope = (bool(DECODE_SORT_CRATE.fullmatch(crate)) or bool(IR_DECODE_SORT_PATH.fullmatch(relative_path(path)))) and not ENCODE_SORT_PATH.fullmatch(relative_path(path))
-        functions = []
-        for index, _, _, owner in evaluation_signatures(tokens, pairs, parents):
-            opening = index + 2
-            if words[opening] == "<":
-                depth = 1
-                opening += 1
-                while opening < len(words) and depth:
-                    depth += (words[opening] == "<") - (words[opening] == ">")
-                    opening += 1
-            body = pairs[opening] + 1
-            while body < len(words) and words[body] not in {"{", ";"}:
-                body = pairs[body] + 1 if words[body] in "([" and body in pairs else body + 1
-            if body not in pairs or words[body] != "{":
-                continue
-            functions.append((index, body, pairs[body], owner))
-        # A nested function does not borrow its enclosing function's locals.
-        contexts = {}
-        for index, body, end, owner in functions:
-            pieces = []
-            cursor = tokens[index].start()
-            for child, _, child_end, _ in functions:
-                if body < child < end:
-                    if tokens[child].start() >= cursor:
-                        pieces.append(code[cursor:tokens[child].start()])
-                        cursor = tokens[child_end].end()
-            pieces.append(code[cursor:tokens[end].end()])
-            scope = "".join(pieces)
-            receivers = {
-                name: context_fields.get((crate, type_name), set())
-                for name, type_name in DECODE_RECEIVER_BINDING.findall(scope)
-            }
-            receivers["self"] = context_fields.get((crate, owner), set())
-            bindings = set(DECODE_CONTEXT_BINDING.findall(scope))
-            has_context = bool(bindings) or any(
-                re.search(r"\b" + re.escape(receiver) + r"\s*\.\s*" + re.escape(field) + r"\b", scope)
-                for receiver, fields in receivers.items() for field in fields
-            )
-            contexts[index] = bindings, receivers, has_context
-        for index, word in enumerate(words):
-            if word not in SLICE_SORT_METHODS or index == 0 or words[index - 1] != ".":
-                continue
-            if evaluation_call_open(words, index) is None:
-                continue
-            enclosing = [scope for scope in functions if scope[1] < index < scope[2]]
-            if not enclosing:
-                continue
-            bindings, receivers, has_context = contexts[max(enclosing, key=lambda scope: scope[0])[0]]
-            if not has_context and not decode_scope:
-                continue
-            # The context operation shares the slice method's unstable name.
-            receiver = words[index - 2] if index >= 2 else ""
-            field_owner = words[index - 4] if index >= 4 and words[index - 3] == "." else ""
-            if receiver in bindings or receiver in receivers.get(field_owner, set()):
-                continue
-            findings.append(Finding(
-                "uncharged_decode_sort", relative_path(path),
-                code.count("\n", 0, tokens[index].start()) + 1,
-                f"Slice .{word} in decode code must use ctx.stable_sort_by or ctx.sort_unstable_by to admit comparison work and scratch"
-                + ("." if has_context else "; pass the decode context to this function."),
-            ))
-    return findings
-
-
 def scan_native_byte_fields(sources: dict[Path, str]) -> list[Finding]:
     """Reject byte arrays and vectors in codec serde wire declarations.
 
@@ -2437,12 +2225,23 @@ def scan_native_byte_fields(sources: dict[Path, str]) -> list[Finding]:
                     chars[at] = " "
         return "".join(chars)
 
+    def impl_targets(code: str, trait: str) -> set[str]:
+        """Names `N` for which `impl ... <trait> for path::N` occurs, as one regex per name would match."""
+        targets = set()
+        for match in re.finditer(r"\b" + trait + r"\s+for\s+((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)", code):
+            head = max(code.rfind(delimiter, 0, match.start()) for delimiter in "{};")
+            if re.search(r"\bimpl\b", code[head + 1:match.start()]):
+                targets.update(match[1].split("::"))
+        return targets
+
     for path, source in sources.items():
         if not is_production_rs(path) or not relative_path(path).startswith("crates/cadmpeg-codec-"):
             continue
         code, _ = production_source(source)
         lines = source.splitlines()
         masked = code.splitlines()
+        serialize_impls = impl_targets(code, "Serialize")
+        deserialize_impls = impl_targets(code, r"Deserialize(?:\s*<[^>]*>)?")
         for kind, name, index, attrs in type_declarations(lines, masked):
             derives = " ".join(attr for attr in attrs if re.search(r"\bderive\s*\(", attr))
             conversions = " ".join(attr for attr in attrs if SERDE_ATTRIBUTE.search(attr))
@@ -2453,11 +2252,9 @@ def scan_native_byte_fields(sources: dict[Path, str]) -> list[Finding]:
                     f"Codec serde conversion for `{name}` must use cadmpeg_ir::native::bytes::NativeBytes for a hexadecimal byte string.",
                 ))
             serialize = (bool(re.search(r"\bSerialize\b", derives))
-                         and not re.search(r"\binto\s*=", conversions)) or bool(re.search(
-                r"\bimpl\b[^{};]*\bSerialize\s+for\s+(?:[A-Za-z_]\w*::)*" + re.escape(name) + r"\b", code))
+                         and not re.search(r"\binto\s*=", conversions)) or name in serialize_impls
             deserialize = (bool(re.search(r"\bDeserialize\b", derives))
-                           and not re.search(r"\b(?:from|try_from)\s*=", conversions)) or bool(re.search(
-                r"\bimpl\b[^{};]*\bDeserialize(?:\s*<[^>]*>)?\s+for\s+(?:[A-Za-z_]\w*::)*" + re.escape(name) + r"\b", code))
+                           and not re.search(r"\b(?:from|try_from)\s*=", conversions)) or name in deserialize_impls
             if not (serialize or deserialize):
                 continue
             offset = sum(len(line) + 1 for line in masked[:index])
@@ -2496,18 +2293,42 @@ def check_source() -> list[Finding]:
         path.resolve(): path.read_text(encoding="utf-8", errors="replace")
         for path in sorted(ROOT.glob("crates/**/*.rs"))
     }
-    findings = scan_placement(sources)
-    for path, source in sources.items():
-        if is_production_rs(path):
-            findings.extend(scan_patterns(path, source))
-    findings.extend(scan_decode_sorts(sources))
-    findings.extend(scan_evaluation_refusals(sources))
-    findings.extend(scan_wire_mirror_docs(sources))
-    findings.extend(scan_native_byte_fields(sources))
-    findings.extend(scan_module_visibility(sources))
-    findings.extend(scan_authoring_paths())
-    findings.extend(scan_script_tests())
+    production = [path for path in sources if is_production_rs(path)]
+    workers = os.cpu_count() or 1
+    tasks = [("patterns", tuple(production[index::workers * 2])) for index in range(workers * 2)]
+    tasks += [(name, ()) for name in SOURCE_SCANS]
+    global _TASK_SOURCES
+    _TASK_SOURCES = sources
+    try:
+        if workers > 1 and "fork" in multiprocessing.get_all_start_methods():
+            with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("fork")) as pool:
+                results = list(pool.map(run_scan_task, tasks))
+        else:
+            results = [run_scan_task(task) for task in tasks]
+    finally:
+        _TASK_SOURCES = {}
+    findings = [finding for result in results for finding in result]
     return sorted(findings, key=lambda item: (item.path, item.line, item.rule))
+
+
+SOURCE_SCANS = {
+    "placement": lambda sources: scan_placement(sources),
+    "evaluation_refusals": lambda sources: scan_evaluation_refusals(sources),
+    "wire_mirror_docs": lambda sources: scan_wire_mirror_docs(sources),
+    "native_byte_fields": lambda sources: scan_native_byte_fields(sources),
+    "module_visibility": lambda sources: scan_module_visibility(sources),
+    "authoring_paths": lambda sources: scan_authoring_paths(),
+    "measurement_dependency": lambda sources: scan_measurement_dependency(),
+    "script_tests": lambda sources: scan_script_tests(),
+}
+_TASK_SOURCES: dict[Path, str] = {}
+
+
+def run_scan_task(task: tuple[str, tuple[Path, ...]]) -> list[Finding]:
+    name, paths = task
+    if name == "patterns":
+        return [finding for path in paths for finding in scan_patterns(path, _TASK_SOURCES[path])]
+    return SOURCE_SCANS[name](_TASK_SOURCES)
 
 
 def main(argv: list[str] | None = None) -> int:

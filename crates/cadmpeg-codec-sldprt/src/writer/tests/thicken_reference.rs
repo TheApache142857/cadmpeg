@@ -58,7 +58,7 @@ fn semantic_writer_round_trips_typed_shell() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -122,7 +122,7 @@ fn semantic_writer_round_trips_typed_thicken() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -196,7 +196,7 @@ fn semantic_writer_round_trips_positional_thicken_dimension() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -295,7 +295,7 @@ fn semantic_writer_round_trips_typed_scale() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -369,7 +369,12 @@ fn semantic_writer_retains_partial_native_scale_construction() {
         </Keywords>"#,
     ));
     let decoded = SldprtCodec
-        .decode(&mut Cursor::new(source), &DecodeOptions::default())
+        .decode(
+            &mut Cursor::new(crate::test_support::container::native_envelope_fixture(
+                &(source),
+            )),
+            &DecodeOptions::default(),
+        )
         .unwrap();
     let mut decoded = EditableDecodeResult::from(decoded);
     assert!(matches!(
@@ -392,7 +397,7 @@ fn semantic_writer_retains_partial_native_scale_construction() {
     for index in 0..2 {
         let mut detached = decoded.ir().clone();
         detached.model.features[index].native_ref = None;
-        let error = crate::test_support::plan_inherited_write(
+        let error = crate::test_support::plan_fixture_write_with_native_envelope(
             &detached,
             decoded.source_fidelity(),
             &mut Vec::new(),
@@ -408,7 +413,7 @@ fn semantic_writer_retains_partial_native_scale_construction() {
         feature.name = Some(format!("Renamed scale {}", index + 1));
     }
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -475,7 +480,7 @@ fn semantic_writer_round_trips_extrusion_with_unresolved_blind_extent() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -515,7 +520,12 @@ fn semantic_writer_round_trips_extrusion_with_unrecognized_end_condition() {
         br#"<Keywords><Extrusion Name="Boss-Extrude1" Type="BossExtrude" id="9" EndCondition="Unrecognized" Direction="0,0,1" Face="face:1" Vertex="vertex:2"><Dimension Name="Depth">4mm</Dimension><Dimension Name="Depth2">6mm</Dimension><Dimension Name="Draft">3deg</Dimension></Extrusion></Keywords>"#,
     ));
     let decoded = SldprtCodec
-        .decode(&mut Cursor::new(source), &DecodeOptions::default())
+        .decode(
+            &mut Cursor::new(crate::test_support::container::native_envelope_fixture(
+                &(source),
+            )),
+            &DecodeOptions::default(),
+        )
         .unwrap();
     let mut decoded = EditableDecodeResult::from(decoded);
     assert!(matches!(
@@ -538,7 +548,7 @@ fn semantic_writer_round_trips_extrusion_with_unrecognized_end_condition() {
     decoded.ir_mut().model.features[0].name = Some("Renamed extrusion".into());
 
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -621,7 +631,7 @@ fn semantic_writer_round_trips_typed_draft() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -702,7 +712,7 @@ fn semantic_writer_round_trips_draft_without_angle_or_outward() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -806,7 +816,7 @@ fn semantic_writer_preserves_absent_feature_selections() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -843,12 +853,17 @@ fn semantic_writer_round_trips_typed_combine() {
         .unwrap();
     let mut decoded = EditableDecodeResult::from(decoded);
     assert!(matches!(
-        decoded.ir().model.features[0].evaluation.definition(), FeatureDefinition::Operation(FeatureOperation::Combine {
+        decoded.ir().model.features[0].evaluation.definition(),
+        FeatureDefinition::Operation(FeatureOperation::Combine {
             operands,
-
             op: cadmpeg_ir::features::BooleanKind::Join,
             keep_tools: false,
-        }) if matches!((operands.target(), operands.tools(),), (BodySelection::Native(target), BodySelection::Native(tools),) if target == "body:1" && tools == "body:2,body:3")));
+        }) if matches!(
+            (operands.target(), operands.tools()),
+            (BodySelection::Native(target), BodySelection::Native(tools))
+                if target == "body:1" && tools == "body:2,body:3"
+        )
+    ));
 
     {
         let mut ir_edit = decoded.ir_mut();
@@ -869,7 +884,7 @@ fn semantic_writer_round_trips_typed_combine() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -883,12 +898,17 @@ fn semantic_writer_round_trips_typed_combine() {
     assert_eq!(feature.properties["Tools"], "body:5,body:6");
     assert_eq!(feature.properties["Operation"], "Intersect");
     assert!(matches!(
-        regenerated.ir().model.features[0].evaluation.definition(), FeatureDefinition::Operation(FeatureOperation::Combine {
+        regenerated.ir().model.features[0].evaluation.definition(),
+        FeatureDefinition::Operation(FeatureOperation::Combine {
             operands,
-
             op: cadmpeg_ir::features::BooleanKind::Intersect,
             keep_tools: false,
-        }) if matches!((operands.target(), operands.tools(),), (BodySelection::Native(target), BodySelection::Native(tools),) if target == "body:4" && tools == "body:5,body:6")));
+        }) if matches!(
+            (operands.target(), operands.tools()),
+            (BodySelection::Native(target), BodySelection::Native(tools))
+                if target == "body:4" && tools == "body:5,body:6"
+        )
+    ));
 }
 
 #[test]
@@ -946,7 +966,7 @@ fn semantic_writer_round_trips_delete_and_keep_body() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -989,7 +1009,12 @@ fn semantic_writer_resolves_sparse_body_delete_keep_operation() {
         br#"<Keywords><Feature Name="Body-Delete/Keep 1" Type="Body-Delete/Keep " id="20"/></Keywords>"#,
     ));
     let decoded = SldprtCodec
-        .decode(&mut Cursor::new(source), &DecodeOptions::default())
+        .decode(
+            &mut Cursor::new(crate::test_support::container::native_envelope_fixture(
+                &(source),
+            )),
+            &DecodeOptions::default(),
+        )
         .unwrap();
     let mut decoded = EditableDecodeResult::from(decoded);
     assert!(matches!(
@@ -1002,7 +1027,7 @@ fn semantic_writer_resolves_sparse_body_delete_keep_operation() {
 
     decoded.ir_mut().model.features[0].name = Some("Retained sparse operation".into());
     let mut sparse_encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut sparse_encoded,
@@ -1037,7 +1062,7 @@ fn semantic_writer_resolves_sparse_body_delete_keep_operation() {
         });
     }
     let mut resolved_encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         sparse.ir(),
         sparse.source_fidelity(),
         &mut resolved_encoded,
@@ -1098,7 +1123,7 @@ fn semantic_writer_round_trips_typed_delete_face() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1134,10 +1159,13 @@ fn semantic_writer_round_trips_typed_replace_face() {
         .unwrap();
     let mut decoded = EditableDecodeResult::from(decoded);
     assert!(matches!(
-        decoded.ir().model.features[0].evaluation.definition(), FeatureDefinition::Operation(FeatureOperation::ReplaceFace {
-            operands,
-
-        }) if matches!((operands.targets(), operands.replacements(),), (FaceSelection::Native(targets), FaceSelection::Native(replacements),) if targets == "face:4,face:5" && replacements == "face:8")));
+    decoded.ir().model.features[0].evaluation.definition(),
+    FeatureDefinition::Operation(FeatureOperation::ReplaceFace { operands })
+        if matches!(
+            (operands.targets(), operands.replacements(),),
+            (FaceSelection::Native(targets), FaceSelection::Native(replacements),)
+                if targets == "face:4,face:5" && replacements == "face:8"
+        )));
 
     {
         let mut ir_edit = decoded.ir_mut();
@@ -1157,7 +1185,7 @@ fn semantic_writer_round_trips_typed_replace_face() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1170,10 +1198,13 @@ fn semantic_writer_round_trips_typed_replace_face() {
     assert_eq!(feature.properties["Faces"], "face:6");
     assert_eq!(feature.properties["ReplacementFaces"], "face:9,face:10");
     assert!(matches!(
-        regenerated.ir().model.features[0].evaluation.definition(), FeatureDefinition::Operation(FeatureOperation::ReplaceFace {
-            operands,
-
-        }) if matches!((operands.targets(), operands.replacements(),), (FaceSelection::Native(targets), FaceSelection::Native(replacements),) if targets == "face:6" && replacements == "face:9,face:10")));
+    regenerated.ir().model.features[0].evaluation.definition(),
+    FeatureDefinition::Operation(FeatureOperation::ReplaceFace { operands })
+        if matches!(
+            (operands.targets(), operands.replacements(),),
+            (FaceSelection::Native(targets), FaceSelection::Native(replacements),)
+                if targets == "face:6" && replacements == "face:9,face:10"
+        )));
 }
 
 #[test]
@@ -1226,7 +1257,9 @@ fn semantic_writer_round_trips_all_move_face_forms() {
                 angle: value,
             },
             ..
-        }) if ( (value.get() - 15f64.to_radians()).abs() < 1.0e-12) && matches!(geometry_1.get(), Point3 { x: 1.0, y: 2.0, z: 3.0 }) && matches!(geometry_2.get(), Vector3 { x: 0.0, y: 0.0, z: 1.0 })
+        }) if ( (value.get() - 15f64.to_radians()).abs() < 1.0e-12)
+        && matches!(geometry_1.get(), Point3 { x: 1.0, y: 2.0, z: 3.0 })
+        && matches!(geometry_2.get(), Vector3 { x: 0.0, y: 0.0, z: 1.0 })
     ));
 
     {
@@ -1273,7 +1306,7 @@ fn semantic_writer_round_trips_all_move_face_forms() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1340,7 +1373,7 @@ fn semantic_writer_round_trips_typed_dome() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::serialize_history_after_refusal(
+    crate::test_support::serialize_history_in_native_envelope_after_refusal(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1376,7 +1409,12 @@ fn semantic_writer_retains_partial_native_dome_construction() {
         br#"<Keywords><Dome Name="Partial dome" Type="Dome" id="25" Faces="face:12" Elliptical="true" Reverse="invalid"><Dimension Name="Height">NaNmm</Dimension></Dome></Keywords>"#,
     ));
     let decoded = SldprtCodec
-        .decode(&mut Cursor::new(source), &DecodeOptions::default())
+        .decode(
+            &mut Cursor::new(crate::test_support::container::native_envelope_fixture(
+                &(source),
+            )),
+            &DecodeOptions::default(),
+        )
         .unwrap();
     let mut decoded = EditableDecodeResult::from(decoded);
     assert!(matches!(
@@ -1391,7 +1429,7 @@ fn semantic_writer_retains_partial_native_dome_construction() {
 
     let mut detached = decoded.ir().clone();
     detached.model.features[0].native_ref = None;
-    let error = crate::test_support::plan_inherited_write(
+    let error = crate::test_support::plan_fixture_write_with_native_envelope(
         &detached,
         decoded.source_fidelity(),
         &mut Vec::new(),
@@ -1401,7 +1439,7 @@ fn semantic_writer_retains_partial_native_dome_construction() {
 
     decoded.ir_mut().model.features[0].name = Some("Renamed dome".into());
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1598,7 +1636,7 @@ fn semantic_writer_round_trips_typed_reference_plane() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1677,7 +1715,7 @@ fn semantic_writer_round_trips_sparse_localized_offset_plane() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -1766,7 +1804,7 @@ fn semantic_writer_round_trips_reference_axis_and_point() {
     }
 
     let mut encoded = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,

@@ -11,87 +11,7 @@ use std::io::Cursor;
 const EPS_PARAMETER_VALUE: f64 = 1.0e-12;
 
 #[test]
-fn counted_sketch_records_refuse_at_caller_limit() {
-    let xml = roxmltree::Document::parse(
-        "<Property><GeometryList count=\"1\"><Geometry/></GeometryList></Property>",
-    )
-    .expect("valid geometry XML");
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::default();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root is within policy");
-    assert!(matches!(super::super::direct_counted_records(
-        &ctx, &xml, "GeometryList", "Geometry", "geometry",
-    ), Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-        if limit.operation == "fcstd counted sketch records"));
-}
-
-#[test]
-fn external_geometry_reference_refuses_at_retained_limit() {
-    let xml = roxmltree::Document::parse("<Geometry ref=\"Part.Face1\"/>")
-        .expect("valid external geometry XML");
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::default();
-    policy.limits.max_retained_bytes = 0;
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root is within policy");
-    assert!(
-        matches!(super::super::external_geometry_metadata(&ctx, xml.root_element(), 3),
-        Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-            if limit.operation == "fcstd external geometry reference")
-    );
-}
-
-#[test]
-fn sketch_carrier_attributes_refuse_at_caller_limit() {
-    let xml = roxmltree::Document::parse("<Line StartX=\"1\"/>").expect("valid sketch carrier XML");
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::default();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root is within policy");
-    assert!(
-        matches!(super::super::sketch_attributes(&ctx, Some(xml.root_element())),
-        Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-            if limit.operation == "fcstd sketch carrier attributes")
-    );
-}
-
-#[test]
-fn constraint_integer_list_refuses_at_caller_limit() {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::default();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root is within policy");
-    assert!(matches!(super::super::split_ints(&ctx, "1 2"),
-        Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-            if limit.operation == "fcstd constraint integer list"));
-}
-
-#[test]
-fn constraint_attribute_refuses_at_retained_limit() {
-    let xml =
-        roxmltree::Document::parse("<Constraint Name=\"width\"/>").expect("valid constraint XML");
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::default();
-    policy.limits.max_retained_bytes = 0;
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root is within policy");
-    assert!(
-        matches!(super::super::nonempty_attr(&ctx, xml.root_element(), "Name"),
-        Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-            if limit.operation == "fcstd constraint attribute")
-    );
-}
-
-#[test]
 fn circular_arc_admits_finite_fields_and_keeps_invalid_native_fallback() {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::default();
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root is within policy");
     let mut attributes = std::collections::BTreeMap::from([
         ("CenterX".to_owned(), "1".to_owned()),
         ("CenterY".to_owned(), "2".to_owned()),
@@ -100,7 +20,7 @@ fn circular_arc_admits_finite_fields_and_keeps_invalid_native_fallback() {
         ("StartAngle".to_owned(), "0.2".to_owned()),
         ("EndAngle".to_owned(), "1.2".to_owned()),
     ]);
-    let arc = super::super::sketch_geometry(&ctx, "ArcOfCircle", &attributes).expect("finite arc");
+    let arc = super::super::sketch_geometry("ArcOfCircle", &attributes).expect("finite arc");
     assert!(
         matches!(arc.definition(), cadmpeg_ir::sketches::SketchGeometryDefinition::Arc {
         center,
@@ -114,27 +34,11 @@ fn circular_arc_admits_finite_fields_and_keeps_invalid_native_fallback() {
     );
 
     attributes.insert("CenterX".to_owned(), "NaN".to_owned());
-    let native =
-        super::super::sketch_geometry(&ctx, "ArcOfCircle", &attributes).expect("native arc");
+    let native = super::super::sketch_geometry("ArcOfCircle", &attributes).expect("native arc");
     assert!(matches!(
         native.definition(),
         cadmpeg_ir::sketches::SketchGeometryDefinition::Native { .. }
     ));
-}
-
-#[test]
-fn native_sketch_geometry_refuses_at_retained_limit() {
-    crate::test_support::assert_retained_refusal_at(
-        &[],
-        "fcstd native sketch geometry kind",
-        |ctx| {
-            super::super::sketch_geometry(
-                ctx,
-                "UnknownGeometry",
-                &std::collections::BTreeMap::default(),
-            )
-        },
-    );
 }
 
 #[test]
@@ -221,59 +125,6 @@ fn rejects_malformed_sketch_record_counts() {
         error,
         cadmpeg_ir::DecodeFailure::Codec(cadmpeg_core::CodecError::Malformed(_))
     ));
-}
-
-#[test]
-fn x64_profile_construction_refuses_exhausted_work_on_decode() {
-    let document = r#"<Document SchemaVersion="4" FileVersion="1">
-<Objects Count="1"><Object type="Sketcher::SketchObject" name="Sketch"/></Objects>
-<ObjectData Count="1"><Object name="Sketch"><Properties Count="1">
-<Property name="Geometry" type="Part::PropertyGeometryList"><GeometryList count="1">
-<Geometry type="Part::GeomLineSegment"><LineSegment StartX="0" StartY="0" EndX="1" EndY="0"/></Geometry>
-</GeometryList></Property>
-</Properties></Object></ObjectData></Document>"#;
-    let bytes = archive(document);
-    FcstdCodec
-        .decode(&mut Cursor::new(&bytes), &DecodeOptions::default())
-        .expect("service profile admits the sketch");
-
-    let mut options = DecodeOptions::default();
-    options.policy.limits.max_work_units = 0;
-    for _ in 0..8192 {
-        let error = FcstdCodec
-            .decode(&mut Cursor::new(&bytes), &options)
-            .expect_err("profile construction must charge work");
-        let cadmpeg_ir::DecodeFailure::Codec(cadmpeg_core::CodecError::ResourceLimit(limit)) =
-            error
-        else {
-            panic!("expected work refusal: {error:?}")
-        };
-        assert_eq!(
-            limit.dimension,
-            cadmpeg_core::decode::ResourceDimension::WorkUnits
-        );
-        let threshold = limit
-            .used
-            .checked_add(limit.additional)
-            .expect("work threshold fits");
-        if limit.operation.starts_with("FCStd profile ") {
-            options.policy.limits.max_work_units = threshold - 1;
-            let exact = FcstdCodec
-                .decode(&mut Cursor::new(&bytes), &options)
-                .expect_err("one below profile work must refuse");
-            assert!(
-                matches!(exact,
-                cadmpeg_ir::DecodeFailure::Codec(cadmpeg_core::CodecError::ResourceLimit(ref found))
-                    if found.dimension == cadmpeg_core::decode::ResourceDimension::WorkUnits
-                        && found.operation == limit.operation
-                        && found.used + found.additional == threshold),
-                "{exact:?}"
-            );
-            return;
-        }
-        options.policy.limits.max_work_units = threshold;
-    }
-    panic!("profile work admission was not reached");
 }
 
 #[test]
@@ -483,6 +334,119 @@ fn rejects_declared_geometry_with_the_wrong_carrier_tag() {
         .expect_err("carrier mismatch");
     assert!(error.to_string().contains("declares Part::GeomLineSegment"));
     assert!(error.to_string().contains("expected <LineSegment>"));
+}
+
+#[test]
+fn sketch_keeps_no_profiles_when_endpoint_matching_spends_the_work_limit() {
+    let document = r#"<Document SchemaVersion="4" FileVersion="1">
+<Objects Count="1"><Object type="Sketcher::SketchObject" name="Sketch" id="1"/></Objects>
+<ObjectData Count="1"><Object name="Sketch"><Properties Count="2">
+<Property name="Geometry" type="Part::PropertyGeometryList"><GeometryList count="3">
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="0" StartY="0" EndX="1" EndY="0"/></Geometry>
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="1" StartY="0" EndX="0" EndY="1"/></Geometry>
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="0" StartY="1" EndX="0" EndY="0"/></Geometry>
+</GeometryList></Property>
+<Property name="Constraints" type="Sketcher::PropertyConstraintList"><ConstraintList count="3">
+<Constrain Type="1" First="0" FirstPos="2" Second="1" SecondPos="1"/>
+<Constrain Type="1" First="1" FirstPos="2" Second="2" SecondPos="1"/>
+<Constrain Type="1" First="2" FirstPos="2" Second="0" SecondPos="1"/>
+</ConstraintList></Property>
+</Properties></Object></ObjectData></Document>"#;
+    let ctx = cadmpeg_test_support::service_decode_context();
+    let xml = crate::container::admit_document(&ctx, document.as_bytes()).expect("document XML");
+    let graph = crate::persistence::parse_document(&xml, crate::persistence::Vocabulary::Objects)
+        .expect("persistence graph");
+    let sketch = &graph.objects[0];
+    let owned = graph
+        .properties
+        .iter()
+        .filter(|property| property.owner == sketch.id().as_str())
+        .collect::<Vec<_>>();
+    let decode = |limit| {
+        let mut losses = Vec::new();
+        let decoded = super::super::parse_sketch(
+            &ctx,
+            sketch,
+            &owned,
+            &cadmpeg_core::decode::WorkBudget::new(limit),
+            &mut losses,
+        )
+        .expect("sketch");
+        (decoded, losses)
+    };
+
+    let (chained, losses) = decode(super::super::MAX_PROFILE_ENDPOINT_CANDIDATES);
+    assert_eq!(chained.sketch.profiles.as_slice().len(), 1);
+    assert!(losses.is_empty());
+
+    let (bounded, losses) = decode(4);
+    assert!(bounded.sketch.profiles.is_empty());
+    assert_eq!(bounded.entities.len(), 3);
+    assert_eq!(losses.len(), 1);
+    assert_eq!(
+        losses[0].code.local_code(),
+        "sketch.profile-matching-bounded"
+    );
+    assert!(losses[0]
+        .message
+        .contains("MAX_PROFILE_ENDPOINT_CANDIDATES"));
+}
+
+#[test]
+fn dense_unconstrained_geometry_does_not_exhaust_profile_matching() {
+    use std::fmt::Write;
+
+    let dense_count = 4096;
+    let mut dense = String::new();
+    for _ in 0..dense_count {
+        dense.push_str(
+            r#"<Geometry type="Part::GeomLineSegment"><LineSegment StartX="1" StartY="1" EndX="2" EndY="1"/></Geometry>"#,
+        );
+    }
+    let mut document = String::from(
+        r#"<Document SchemaVersion="4" FileVersion="1">
+<Objects Count="2"><Object type="Sketcher::SketchObject" name="Dense" id="1"/><Object type="Sketcher::SketchObject" name="Triangle" id="2"/></Objects>
+<ObjectData Count="2">"#,
+    );
+    write!(
+        document,
+        r#"<Object name="Dense"><Properties Count="1">
+<Property name="Geometry" type="Part::PropertyGeometryList"><GeometryList count="{dense_count}">{dense}</GeometryList></Property>
+</Properties></Object>
+<Object name="Triangle"><Properties Count="1">
+<Property name="Geometry" type="Part::PropertyGeometryList"><GeometryList count="3">
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="0" StartY="0" EndX="1" EndY="0"/></Geometry>
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="1" StartY="0" EndX="0" EndY="1"/></Geometry>
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="0" StartY="1" EndX="0" EndY="0"/></Geometry>
+</GeometryList></Property>
+</Properties></Object></ObjectData></Document>"#
+    )
+    .unwrap();
+    let result = FcstdCodec
+        .decode(
+            &mut Cursor::new(archive(&document)),
+            &DecodeOptions::default(),
+        )
+        .expect("two sketches");
+    let sketch = |name: &str| {
+        result
+            .ir()
+            .model
+            .sketches
+            .iter()
+            .find(|sketch| sketch.name.as_deref() == Some(name))
+            .expect("decoded sketch")
+    };
+
+    assert_eq!(sketch("Dense").profiles.len(), dense_count);
+    assert_eq!(sketch("Triangle").profiles.as_slice().len(), 3);
+    let bounded = result
+        .report()
+        .losses
+        .iter()
+        .filter(|loss| loss.code.local_code() == "sketch.profile-matching-bounded")
+        .collect::<Vec<_>>();
+    assert!(bounded.is_empty(), "{bounded:#?}");
 }
 
 #[test]
@@ -898,6 +862,166 @@ pub(crate) fn transfers_bounded_rational_sketch_nurbs() {
 }
 
 #[test]
+fn symmetry_uses_the_third_operand_kind_and_position() {
+    use cadmpeg_ir::sketches::{SketchConstraintDefinitionInput as Constraint, SketchLocus};
+
+    for (name, operands, expected) in [
+        (
+            "root point",
+            r#"First="0" FirstPos="1" Second="2" SecondPos="1" Third="-1" ThirdPos="1""#,
+            "root",
+        ),
+        (
+            "circle center",
+            r#"First="0" FirstPos="1" Second="2" SecondPos="1" Third="5" ThirdPos="3""#,
+            "center",
+        ),
+        (
+            "line midpoint",
+            r#"First="0" FirstPos="1" Second="2" SecondPos="1" Third="1" ThirdPos="3""#,
+            "native",
+        ),
+        (
+            "point entity",
+            r#"First="0" FirstPos="1" Second="2" SecondPos="1" Third="4" ThirdPos="0""#,
+            "point",
+        ),
+        (
+            "whole line",
+            r#"First="0" FirstPos="1" Second="2" SecondPos="1" Third="1" ThirdPos="0""#,
+            "line",
+        ),
+        (
+            "vertical axis",
+            r#"First="0" FirstPos="1" Second="2" SecondPos="1" Third="-2" ThirdPos="0""#,
+            "vertical",
+        ),
+        (
+            "whole circle",
+            r#"First="0" FirstPos="1" Second="2" SecondPos="1" Third="5" ThirdPos="0""#,
+            "native",
+        ),
+        (
+            "root point element lists",
+            r#"ElementIds="0 2 -1" ElementPositions="1 1 1""#,
+            "root",
+        ),
+    ] {
+        let document = format!(
+            r#"<Document SchemaVersion="4" FileVersion="1">
+<Objects Count="1"><Object type="Sketcher::SketchObject" name="Sketch" id="1"/></Objects>
+<ObjectData Count="1"><Object name="Sketch"><Properties Count="2">
+<Property name="Geometry" type="Part::PropertyGeometryList"><GeometryList count="6">
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="-2" StartY="-1" EndX="2" EndY="-1"/></Geometry>
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="2" StartY="-1" EndX="2" EndY="1"/></Geometry>
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="2" StartY="1" EndX="-2" EndY="1"/></Geometry>
+<Geometry type="Part::GeomLineSegment"><LineSegment StartX="-2" StartY="1" EndX="-2" EndY="-1"/></Geometry>
+<Geometry type="Part::GeomPoint"><GeomPoint X="0" Y="0" Z="0"/></Geometry>
+<Geometry type="Part::GeomCircle"><Circle CenterX="0" CenterY="0" Radius="5"/></Geometry>
+</GeometryList></Property>
+<Property name="Constraints" type="Sketcher::PropertyConstraintList"><ConstraintList count="1">
+<Constrain Type="14" {operands}/>
+</ConstraintList></Property>
+</Properties></Object></ObjectData></Document>"#
+        );
+        let decoded = FcstdCodec
+            .decode(
+                &mut Cursor::new(archive(&document)),
+                &DecodeOptions::default(),
+            )
+            .expect(name);
+        let model = &decoded.ir().model;
+        assert_eq!(model.sketch_constraints.len(), 1, "{name}");
+        let definition = model.sketch_constraints[0].definition.kind();
+        match expected {
+            "root" | "center" | "point" => {
+                let Constraint::PointSymmetric {
+                    first,
+                    second,
+                    center,
+                } = definition
+                else {
+                    panic!("{name}: expected point symmetry");
+                };
+                assert_eq!(
+                    *first,
+                    SketchLocus::Start(model.sketch_entities[0].id().clone())
+                );
+                assert_eq!(
+                    *second,
+                    SketchLocus::Start(model.sketch_entities[2].id().clone())
+                );
+                let expected_center = match expected {
+                    "root" => SketchLocus::Entity(
+                        model
+                            .sketch_entities
+                            .iter()
+                            .find(|entity| entity.id().as_str().ends_with(":reference-root-point"))
+                            .expect("root point")
+                            .id()
+                            .clone(),
+                    ),
+                    "center" => SketchLocus::Center(model.sketch_entities[5].id().clone()),
+                    _ => SketchLocus::Entity(model.sketch_entities[4].id().clone()),
+                };
+                assert_eq!(*center, expected_center, "{name}");
+            }
+            "line" | "vertical" => {
+                let Constraint::Symmetric {
+                    first,
+                    second,
+                    axis,
+                } = definition
+                else {
+                    panic!("{name}: expected mirror symmetry");
+                };
+                assert_eq!(
+                    *first,
+                    SketchLocus::Start(model.sketch_entities[0].id().clone())
+                );
+                assert_eq!(
+                    *second,
+                    SketchLocus::Start(model.sketch_entities[2].id().clone())
+                );
+                let expected_axis = if expected == "line" {
+                    model.sketch_entities[1].id()
+                } else {
+                    model
+                        .sketch_entities
+                        .iter()
+                        .find(|entity| entity.id().as_str().ends_with(":reference-vertical-axis"))
+                        .expect("vertical axis")
+                        .id()
+                };
+                assert_eq!(axis, expected_axis, "{name}");
+            }
+            _ => assert!(matches!(definition, Constraint::Native { .. }), "{name}"),
+        }
+        let native_losses = decoded
+            .report()
+            .losses
+            .iter()
+            .filter(|loss| {
+                loss.code
+                    == crate::loss::FreecadLossCode::SketchNativeConstraint
+                        .note("")
+                        .code
+            })
+            .collect::<Vec<_>>();
+        if expected == "native" {
+            assert_eq!(native_losses.len(), 1);
+            assert_eq!(
+                native_losses[0].severity,
+                cadmpeg_ir::report::Severity::Blocking
+            );
+        } else {
+            assert!(native_losses.is_empty(), "{name}");
+            assert_valid_document(decoded.ir());
+        }
+    }
+}
+
+#[test]
 pub(crate) fn neutralizes_symmetric_locus_distance_and_point_on_object_constraints() {
     let document = r#"<Document SchemaVersion="4" FileVersion="1">
 <Objects Count="2"><Object type="Sketcher::SketchObject" name="Sketch" id="1"/><Object type="Part::Feature" name="Source" id="2"/></Objects>
@@ -1288,4 +1412,135 @@ fn unreadable_external_cache_does_not_abort_live_sketch_geometry() {
             .code));
     assert_valid_document(decoded.ir());
     assert!(crate::test_support::validate_native(decoded.ir()).is_empty());
+}
+
+#[test]
+fn external_cache_keys_use_mapped_shadow_without_changing_selector_identity() {
+    for (shadow, selector) in [("shadow", "Edge2"), ("shadowed", ";mapped.Edge2")] {
+        let document = format!(
+            r#"<Document SchemaVersion="4" FileVersion="1"><Objects Count="2"><Object type="Sketcher::SketchObject" name="Sketch"/><Object type="Part::Feature" name="Source"/></Objects><ObjectData Count="2"><Object name="Sketch"><Properties Count="3">
+<Property name="Geometry" type="Part::PropertyGeometryList"><GeometryList count="0"/></Property>
+<Property name="ExternalGeometry" type="App::PropertyLinkSubList"><LinkSubList count="1"><Link obj="Source" sub="Edge2" {shadow}=";mapped.Edge2"/></LinkSubList></Property>
+<Property name="ExternalGeo" type="Part::PropertyGeometryList"><GeometryList count="3">
+<Geometry type="Part::GeomLineSegment" id="-1" ref=""><LineSegment StartX="0" StartY="0" EndX="1" EndY="0"/></Geometry>
+<Geometry type="Part::GeomLineSegment" id="-2" ref=""><LineSegment StartX="0" StartY="0" EndX="0" EndY="1"/></Geometry>
+<Geometry type="Part::GeomPoint" id="1" ref="Source.;mapped"><GeomPoint X="2" Y="3" Z="0"/></Geometry>
+</GeometryList></Property></Properties></Object><Object name="Source"><Properties Count="0"/></Object></ObjectData></Document>"#
+        );
+        let result = FcstdCodec
+            .decode(
+                &mut Cursor::new(archive(&document)),
+                &DecodeOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(result.ir().model.sketch_entities.len(), 1);
+        assert_eq!(
+            result.ir().model.sketch_entities[0].endpoint_refs,
+            [selector]
+        );
+        assert!(!result
+            .report()
+            .losses
+            .iter()
+            .any(|loss| loss.code.local_code() == "sketch.external-reference-unresolved"));
+    }
+}
+
+#[test]
+fn current_external_keys_survive_ambiguous_legacy_aliases_and_export_indices() {
+    for (reference, index_carriers, expected_selector, unresolved) in [
+        ("Source.;A", "", Some(";A.Edge1"), false),
+        ("Source.;B", "", Some(";B.Edge1"), false),
+        ("Source.Edge1", "", None, true),
+        ("Former.Edge9", r#"refIndex="1""#, Some(";B.Edge1"), false),
+        ("Source.;A", r#"refIndex="9""#, None, true),
+        ("Source.;A", r#"refIndex="-1""#, Some(";A.Edge1"), false),
+    ] {
+        let document = format!(
+            r#"<Document SchemaVersion="4" FileVersion="1"><Objects Count="2"><Object type="Sketcher::SketchObject" name="Sketch"/><Object type="Part::Feature" name="Source"/></Objects><ObjectData Count="2"><Object name="Sketch"><Properties Count="3">
+<Property name="Geometry" type="Part::PropertyGeometryList"><GeometryList count="0"/></Property>
+<Property name="ExternalGeometry" type="App::PropertyLinkSubList"><LinkSubList count="2"><Link obj="Source" sub="Edge1" shadowed=";A.Edge1"/><Link obj="Source" sub="Edge1" shadowed=";B.Edge1"/></LinkSubList></Property>
+<Property name="ExternalGeo" type="Part::PropertyGeometryList"><GeometryList count="3">
+<Geometry type="Part::GeomLineSegment" id="-1" ref=""><LineSegment StartX="0" StartY="0" EndX="1" EndY="0"/></Geometry>
+<Geometry type="Part::GeomLineSegment" id="-2" ref=""><LineSegment StartX="0" StartY="0" EndX="0" EndY="1"/></Geometry>
+<Geometry type="Part::GeomPoint" id="1" ref="{reference}" {index_carriers}><GeomPoint X="2" Y="3" Z="0"/></Geometry>
+</GeometryList></Property></Properties></Object><Object name="Source"><Properties Count="0"/></Object></ObjectData></Document>"#
+        );
+        let result = FcstdCodec
+            .decode(
+                &mut Cursor::new(archive(&document)),
+                &DecodeOptions::default(),
+            )
+            .unwrap();
+        let point = result
+            .ir()
+            .model
+            .sketch_entities
+            .iter()
+            .find(|entity| {
+                matches!(
+                    entity.geometry.definition(),
+                    cadmpeg_ir::sketches::SketchGeometryDefinition::Point { .. }
+                )
+            })
+            .expect("cached point retained");
+        assert_eq!(
+            point.endpoint_refs,
+            expected_selector.into_iter().collect::<Vec<_>>(),
+            "{reference} {index_carriers}"
+        );
+        assert_eq!(
+            result
+                .report()
+                .losses
+                .iter()
+                .any(|loss| loss.code.local_code() == "sketch.external-reference-unresolved"),
+            unresolved
+        );
+        assert!(!result
+            .report()
+            .losses
+            .iter()
+            .any(|loss| loss.code.local_code() == "sketch.external-cache-unresolved"));
+    }
+}
+
+#[test]
+fn external_geometry_extension_refindex_is_authoritative_and_mirrors_must_agree() {
+    for (geometry_index, extension_index, valid) in [("1", "1", true), ("0", "1", false)] {
+        let document = format!(
+            r#"<Document SchemaVersion="4" FileVersion="1"><Objects Count="2"><Object type="Sketcher::SketchObject" name="Sketch"/><Object type="Part::Feature" name="Source"/></Objects><ObjectData Count="2"><Object name="Sketch"><Properties Count="3">
+<Property name="Geometry" type="Part::PropertyGeometryList"><GeometryList count="0"/></Property>
+<Property name="ExternalGeometry" type="App::PropertyLinkSubList"><LinkSubList count="2"><Link obj="Source" sub="Edge1"/><Link obj="Source" sub="Edge2"/></LinkSubList></Property>
+<Property name="ExternalGeo" type="Part::PropertyGeometryList"><GeometryList count="3">
+<Geometry type="Part::GeomLineSegment" id="-1" ref=""><LineSegment StartX="0" StartY="0" EndX="1" EndY="0"/></Geometry>
+<Geometry type="Part::GeomLineSegment" id="-2" ref=""><LineSegment StartX="0" StartY="0" EndX="0" EndY="1"/></Geometry>
+<Geometry type="Part::GeomPoint" id="1" ref="Previous.Edge1" refIndex="{geometry_index}"><GeoExtensions count="1"><GeoExtension type="Sketcher::ExternalGeometryExtension" Ref="Previous.Edge1" RefIndex="{extension_index}" Flags="0"/></GeoExtensions><GeomPoint X="2" Y="3" Z="0"/></Geometry>
+</GeometryList></Property></Properties></Object><Object name="Source"><Properties Count="0"/></Object></ObjectData></Document>"#
+        );
+        let result = FcstdCodec
+            .decode(
+                &mut Cursor::new(archive(&document)),
+                &DecodeOptions::default(),
+            )
+            .unwrap();
+        let point = result.ir().model.sketch_entities.iter().find(|entity| {
+            matches!(
+                entity.geometry.definition(),
+                cadmpeg_ir::sketches::SketchGeometryDefinition::Point { .. }
+            )
+        });
+        assert_eq!(point.is_some(), valid);
+        if let Some(point) = point {
+            assert_eq!(point.endpoint_refs, ["Edge2"]);
+        }
+        assert_eq!(
+            result
+                .report()
+                .losses
+                .iter()
+                .any(|loss| loss.code.local_code() == "sketch.external-cache-unresolved"),
+            !valid
+        );
+    }
 }

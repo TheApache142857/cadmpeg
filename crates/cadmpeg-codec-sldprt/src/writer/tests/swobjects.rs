@@ -38,7 +38,7 @@ fn semantic_writer_replays_unchanged_swobjects_payload() {
         .remove(cadmpeg_ir::hash::DOCUMENT_LOCAL_DIGEST_ATTRIBUTE);
 
     let mut encoded = Vec::new();
-    let path = crate::test_support::plan_inherited_write(
+    let path = crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut encoded,
@@ -87,7 +87,7 @@ fn semantic_writer_rejects_edits_to_retained_swobjects_semantics() {
 }
 
 #[test]
-fn encoder_writes_source_less_ir() {
+fn encoder_writes_authored_with_retained_native_envelope_ir() {
     let mut ir = cadmpeg_ir::examples::unit_cube().expect("unit cube fixture is admitted");
     ir.model.bodies[0].name = None;
     ir.model.faces.iter_mut().for_each(|face| face.name = None);
@@ -97,18 +97,35 @@ fn encoder_writes_source_less_ir() {
         .for_each(|edge| edge.set_param_range(None));
 
     let mut encoded = Vec::new();
-    let report = SldprtCodec
-        .plan(EncodeInput::new(&ir, None), TargetRequest::Inherit)
-        .and_then(|plan| plan.write_to(&mut encoded))
-        .unwrap();
-    // No retained source content reached the writer, so it authored every byte.
+    let report = crate::test_support::plan_fixture_with_native_envelope(
+        EncodeInput::new(&ir, None),
+        TargetRequest::Inherit,
+    )
+    .and_then(|plan| plan.write_to(&mut encoded))
+    .unwrap();
+    // Geometry is authored in the explicit retained envelope.
     assert!(matches!(
         report.write_path(),
-        cadmpeg_ir::report::export::WritePath::Synthesized { .. }
+        cadmpeg_ir::report::export::WritePath::Patched { .. }
     ));
     let scan = crate::test_support::container::scan(&encoded);
-    assert_eq!(scan.blocks.len(), 1);
-    assert_eq!(scan.directory.len(), 1);
+    assert_eq!(scan.blocks.len(), 2);
+    assert_eq!(scan.directory.len(), 2);
+    let names: std::collections::BTreeSet<_> = scan
+        .blocks
+        .iter()
+        .map(|block| block.section.name().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from(["Contents/Config-0-Partition", "Contents/Keywords-0"])
+    );
+    let keywords = scan
+        .blocks
+        .iter()
+        .find(|block| block.section.name() == Some("Contents/Keywords-0"))
+        .unwrap();
+    assert_eq!(keywords.payload, b"<Keywords></Keywords>");
     let decoded = SldprtCodec
         .decode(&mut Cursor::new(encoded), &DecodeOptions::default())
         .unwrap();
@@ -145,10 +162,12 @@ fn semantic_writer_emits_face_records_deterministically() {
     let mut expected = None;
     for _ in 0..4 {
         let mut encoded = Vec::new();
-        SldprtCodec
-            .plan(EncodeInput::new(&ir, None), TargetRequest::Inherit)
-            .and_then(|plan| plan.write_to(&mut encoded))
-            .unwrap();
+        crate::test_support::plan_fixture_with_native_envelope(
+            EncodeInput::new(&ir, None),
+            TargetRequest::Inherit,
+        )
+        .and_then(|plan| plan.write_to(&mut encoded))
+        .unwrap();
         if let Some(expected) = &expected {
             assert_eq!(expected, &encoded);
         } else {
@@ -175,7 +194,6 @@ fn encoder_rejects_source_less_unresolved_extrusion_profile() {
         source_tag: None,
         source_text: None,
         source_content: cadmpeg_ir::features::FeatureContent::default(),
-
         evaluation: cadmpeg_ir::features::FeatureEvaluation::from_definition(
             FeatureDefinition::Operation(FeatureOperation::Extrude {
                 profile: ProfileRef::Planar(PlanarProfileRef::Unresolved(
@@ -212,7 +230,7 @@ fn encoder_rejects_source_less_unresolved_extrusion_profile() {
 }
 
 #[test]
-fn encoder_writes_source_less_line_sketches() {
+fn encoder_writes_authored_with_retained_native_envelope_line_sketches() {
     use cadmpeg_ir::math::{Point2, Point3, Vector3};
     use cadmpeg_ir::sketches::{
         Sketch, SketchConstraint, SketchConstraintDefinitionInput, SketchConstraintId,
@@ -362,7 +380,6 @@ fn encoder_writes_source_less_line_sketches() {
         source_tag: None,
         source_text: None,
         source_content: cadmpeg_ir::features::FeatureContent::default(),
-
         evaluation: cadmpeg_ir::features::FeatureEvaluation::from_definition(
             FeatureDefinition::Operation(FeatureOperation::Sketch {
                 sketch: cadmpeg_ir::features::SketchFeatureBinding::Planar(Some(sketch_id.clone())),
@@ -405,9 +422,7 @@ fn encoder_writes_source_less_line_sketches() {
                 cadmpeg_ir::features::SweepSection::Profile(profile.clone()),
                 Vec::new(),
             ),
-
             path: Some(path.clone()),
-
             orientation: None,
             transition: None,
             transformation: None,
@@ -462,7 +477,6 @@ fn encoder_writes_source_less_line_sketches() {
             source_tag: None,
             source_text: None,
             source_content: cadmpeg_ir::features::FeatureContent::default(),
-
             evaluation: cadmpeg_ir::features::FeatureEvaluation::from_definition(definition),
             native_ref: None,
         });
@@ -479,7 +493,6 @@ fn encoder_writes_source_less_line_sketches() {
         source_tag: None,
         source_text: None,
         source_content: cadmpeg_ir::features::FeatureContent::default(),
-
         evaluation: cadmpeg_ir::features::FeatureEvaluation::from_definition(
             FeatureDefinition::Operation(FeatureOperation::Extrude {
                 profile: ProfileRef::Planar(PlanarProfileRef::Sketch(sketch_id)),
@@ -510,18 +523,16 @@ fn encoder_writes_source_less_line_sketches() {
         native_ref: None,
     });
     ir.model
-        .set_feature_regeneration_parent(
-            &cadmpeg_test_support::service_decode_context(),
-            &(extrude_feature_id),
-            &(sketch_feature_id),
-        )
+        .set_feature_regeneration_parent(&(extrude_feature_id), &(sketch_feature_id))
         .unwrap();
 
     let mut encoded = Vec::new();
-    SldprtCodec
-        .plan(EncodeInput::new(&ir, None), TargetRequest::Inherit)
-        .and_then(|plan| plan.write_to(&mut encoded))
-        .unwrap();
+    crate::test_support::plan_fixture_with_native_envelope(
+        EncodeInput::new(&ir, None),
+        TargetRequest::Inherit,
+    )
+    .and_then(|plan| plan.write_to(&mut encoded))
+    .unwrap();
     let scan = crate::test_support::container::scan(&encoded);
     assert!(scan.blocks.iter().any(|block| {
         block
@@ -713,7 +724,7 @@ fn encoder_writes_source_less_line_sketches() {
 }
 
 #[test]
-fn encoder_writes_source_less_spatial_point_and_line_sketches() {
+fn encoder_writes_authored_with_retained_native_envelope_spatial_point_and_line_sketches() {
     use cadmpeg_ir::features::{Feature, FeatureDefinition, FeatureId, FeatureOperation};
     use cadmpeg_ir::math::Point3;
     use cadmpeg_ir::sketches::{
@@ -784,7 +795,6 @@ fn encoder_writes_source_less_spatial_point_and_line_sketches() {
         source_tag: None,
         source_text: None,
         source_content: cadmpeg_ir::features::FeatureContent::default(),
-
         evaluation: cadmpeg_ir::features::FeatureEvaluation::from_definition(
             FeatureDefinition::Operation(FeatureOperation::SpatialSketch {
                 sketch: Some(sketch_id),
@@ -794,10 +804,12 @@ fn encoder_writes_source_less_spatial_point_and_line_sketches() {
     });
 
     let mut encoded = Vec::new();
-    SldprtCodec
-        .plan(EncodeInput::new(&ir, None), TargetRequest::Inherit)
-        .and_then(|plan| plan.write_to(&mut encoded))
-        .unwrap();
+    crate::test_support::plan_fixture_with_native_envelope(
+        EncodeInput::new(&ir, None),
+        TargetRequest::Inherit,
+    )
+    .and_then(|plan| plan.write_to(&mut encoded))
+    .unwrap();
     let regenerated = SldprtCodec
         .decode(&mut Cursor::new(encoded), &DecodeOptions::default())
         .unwrap();
@@ -987,13 +999,7 @@ fn patched_retained_metadata(
         values,
     });
     let mut annotations = cadmpeg_ir::annotations::Annotations::default();
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::service();
-    let context_bytes = payload.clone();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&context_bytes, &arena, &policy)?;
     crate::annotations::note(
-        &ctx,
         &mut annotations,
         id,
         &cadmpeg_ir::stream_name!("SWObjects"),
@@ -1002,7 +1008,7 @@ fn patched_retained_metadata(
         cadmpeg_ir::Exactness::ByteExact,
     )?;
     let mut sections = vec![("SWObjects".to_owned(), payload)];
-    crate::writer::patch_retained_swobjects_metadata(&ctx, &ir, &annotations, &mut sections, 1.0)?;
+    crate::writer::patch_retained_swobjects_metadata(&ir, &annotations, &mut sections, 1.0)?;
     Ok(sections.remove(0).1)
 }
 

@@ -33,21 +33,17 @@ fn trimmed_concentric_arcs_validate_as_offsets() {
     let disjoint_result = arc(5.0, std::f64::consts::PI, 3.0 * std::f64::consts::FRAC_PI_2);
 
     assert!(sketch_curve_offset_matches(
-        &cadmpeg_test_support::service_decode_context(),
         &source,
         &trimmed_result,
         -3.0,
-        TEST_LINEAR_TOLERANCE,
-    )
-    .expect("offset walk is admitted"));
+        TEST_LINEAR_TOLERANCE
+    ));
     assert!(!sketch_curve_offset_matches(
-        &cadmpeg_test_support::service_decode_context(),
         &source,
         &disjoint_result,
         -3.0,
-        TEST_LINEAR_TOLERANCE,
-    )
-    .expect("offset walk is admitted"));
+        TEST_LINEAR_TOLERANCE
+    ));
 }
 
 #[test]
@@ -68,29 +64,23 @@ fn full_concentric_circles_validate_as_offsets() {
     .unwrap();
 
     assert!(sketch_curve_offset_matches(
-        &cadmpeg_test_support::service_decode_context(),
         &source,
         &result,
         1.5,
-        TEST_LINEAR_TOLERANCE,
-    )
-    .expect("offset walk is admitted"));
+        TEST_LINEAR_TOLERANCE
+    ));
     assert!(sketch_curve_offset_matches(
-        &cadmpeg_test_support::service_decode_context(),
         &result,
         &source,
         -1.5,
-        TEST_LINEAR_TOLERANCE,
-    )
-    .expect("offset walk is admitted"));
+        TEST_LINEAR_TOLERANCE
+    ));
     assert!(!sketch_curve_offset_matches(
-        &cadmpeg_test_support::service_decode_context(),
         &source,
         &displaced,
         1.5,
-        TEST_LINEAR_TOLERANCE,
-    )
-    .expect("offset walk is admitted"));
+        TEST_LINEAR_TOLERANCE
+    ));
 }
 
 #[test]
@@ -116,29 +106,23 @@ fn mixed_full_circle_arc_validate_as_offsets() {
     .unwrap();
 
     assert!(sketch_curve_offset_matches(
-        &cadmpeg_test_support::service_decode_context(),
         &circle,
         &arc,
         1.5,
-        TEST_LINEAR_TOLERANCE,
-    )
-    .expect("offset walk is admitted"));
+        TEST_LINEAR_TOLERANCE
+    ));
     assert!(sketch_curve_offset_matches(
-        &cadmpeg_test_support::service_decode_context(),
         &arc,
         &circle,
         -1.5,
-        TEST_LINEAR_TOLERANCE,
-    )
-    .expect("offset walk is admitted"));
+        TEST_LINEAR_TOLERANCE
+    ));
     assert!(!sketch_curve_offset_matches(
-        &cadmpeg_test_support::service_decode_context(),
         &circle,
         &displaced,
         1.5,
-        TEST_LINEAR_TOLERANCE,
-    )
-    .expect("offset walk is admitted"));
+        TEST_LINEAR_TOLERANCE
+    ));
 }
 
 #[test]
@@ -177,7 +161,6 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
             sketch.clone(),
             SketchGeometry::nurbs(
                 crate::geometry::pcurve::PcurveNurbs::from_lanes(
-                    &cadmpeg_test_support::service_decode_context(),
                     2,
                     vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
                     vec![
@@ -188,7 +171,6 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
                     None,
                     false,
                 )
-                .expect("fixture pcurve construction admission")
                 .unwrap(),
             ),
         ),
@@ -197,7 +179,6 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
             sketch.clone(),
             SketchGeometry::nurbs(
                 crate::geometry::pcurve::PcurveNurbs::from_lanes(
-                    &cadmpeg_test_support::service_decode_context(),
                     3,
                     vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
                     vec![
@@ -209,7 +190,6 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
                     None,
                     false,
                 )
-                .expect("fixture pcurve construction admission")
                 .unwrap(),
             ),
         ),
@@ -241,8 +221,7 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
         metadata: None,
         native_ref: None,
     });
-    ir.finalize(&cadmpeg_test_support::service_decode_context())
-        .expect("fixture ordering is admitted");
+    ir.finalize();
     let source_ordinal = ir
         .model
         .sketch_entities
@@ -264,7 +243,7 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
         })
     };
     assert!(!offset_mismatch(
-        &validate_neutral(&ir, Vec::new()).expect("resource allocation did not fail")
+        &validate_neutral(&ir, Vec::new()).expect("validate the neutral model")
     ));
 
     edit::replace(
@@ -277,21 +256,17 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
                 let SketchGeometryDefinition::Nurbs { curve } = definition else {
                     unreachable!("test result is a NURBS")
                 };
-                curve
-                    .reverse_parameterization(&cadmpeg_test_support::service_decode_context())
-                    .expect("signed reversal admission");
+                curve.reverse_parameterization();
             };
             definition.try_into()
         },
     )
     .unwrap();
     let reversed_distance = crate::eval::fitted_nurbs_offset_frame_distance(
-        &cadmpeg_test_support::service_decode_context(),
         &ir.model.sketch_entities[source_ordinal].geometry,
         &ir.model.sketch_entities[result_ordinal].geometry,
         ir.tolerances.linear.get(),
     )
-    .expect("offset walk is admitted")
     .expect("reversed fitted offset frame")
     .get();
     assert!(
@@ -299,7 +274,7 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
         "reversed fitted offset distance {reversed_distance}"
     );
     assert!(!offset_mismatch(
-        &validate_neutral(&ir, Vec::new()).expect("resource allocation did not fail")
+        &validate_neutral(&ir, Vec::new()).expect("validate the neutral model")
     ));
     edit::replace(
         &mut ir.model.sketch_entities[result_ordinal].geometry,
@@ -311,23 +286,17 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
                 let SketchGeometryDefinition::Nurbs { curve } = definition else {
                     unreachable!("test result is a NURBS")
                 };
-                curve
-                    .reverse_parameterization(&cadmpeg_test_support::service_decode_context())
-                    .expect("signed reversal admission");
+                curve.reverse_parameterization();
                 let last = curve.pole_rows().count() - 1;
                 curve
-                    .try_map_control_points(
-                        |pole_index, point| {
-                            let point = point.get();
-                            crate::units::FinitePoint2::new(crate::math::Point2::new(
-                                point.u + if pole_index == last { 0.01 } else { 0.0 },
-                                point.v,
-                            ))
-                            .ok_or(())
-                        },
-                        &cadmpeg_test_support::service_decode_context(),
-                    )
-                    .expect("pole edit admission")
+                    .try_map_control_points(|pole_index, point| {
+                        let point = point.get();
+                        crate::units::FinitePoint2::new(crate::math::Point2::new(
+                            point.u + if pole_index == last { 0.01 } else { 0.0 },
+                            point.v,
+                        ))
+                        .ok_or(())
+                    })
                     .unwrap();
             };
             definition.try_into()
@@ -335,7 +304,7 @@ fn fitted_nurbs_offsets_validate_from_clamped_endpoint_frames() {
     )
     .unwrap();
     assert!(offset_mismatch(
-        &validate_neutral(&ir, Vec::new()).expect("resource allocation did not fail")
+        &validate_neutral(&ir, Vec::new()).expect("validate the neutral model")
     ));
 }
 
@@ -433,9 +402,8 @@ fn sketch_profiles_and_constraints_enforce_local_connectivity() {
         metadata: None,
         native_ref: None,
     });
-    ir.finalize(&cadmpeg_test_support::service_decode_context())
-        .expect("fixture ordering is admitted");
-    let report = validate_neutral(&ir, Vec::new()).expect("resource allocation did not fail");
+    ir.finalize();
+    let report = validate_neutral(&ir, Vec::new()).expect("validate the neutral model");
     assert!(report.findings.iter().any(|finding| {
         finding.entity.as_deref() == Some(first_sketch.as_str())
             && finding.message.contains("disconnected consecutive")
@@ -465,7 +433,7 @@ fn sketch_profiles_and_constraints_enforce_local_connectivity() {
         definition.try_into()
     })
     .unwrap();
-    let report = validate_neutral(&ir, Vec::new()).expect("resource allocation did not fail");
+    let report = validate_neutral(&ir, Vec::new()).expect("validate the neutral model");
     assert!(!report.findings.iter().any(|finding| {
         finding.entity.as_deref() == Some(first_sketch.as_str())
             && finding.message.contains("disconnected consecutive")
@@ -634,10 +602,9 @@ fn midpoint_and_fixed_angle_constraints_refuse_an_entity_of_another_kind() {
             native_ref: None,
         });
     }
-    ir.finalize(&cadmpeg_test_support::service_decode_context())
-        .expect("fixture ordering is admitted");
+    ir.finalize();
 
-    let report = validate_neutral(&ir, Vec::new()).expect("resource allocation did not fail");
+    let report = validate_neutral(&ir, Vec::new()).expect("validate the neutral model");
     for (name, _, refusal) in cases {
         let id = format!("synthetic:test:constraint#{name}");
         let kind_findings = report
@@ -660,6 +627,145 @@ fn midpoint_and_fixed_angle_constraints_refuse_an_entity_of_another_kind() {
                 assert_eq!(kind_findings[0].message, message, "{name}");
             }
             None => assert!(kind_findings.is_empty(), "{name}: {kind_findings:?}"),
+        }
+    }
+}
+
+#[test]
+fn point_symmetry_loci_must_match_their_entities() {
+    use crate::sketches::{
+        Sketch, SketchConstraint, SketchConstraintDefinition, SketchConstraintDefinitionInput,
+        SketchConstraintId, SketchEntity, SketchEntityId, SketchId, SketchLocus,
+    };
+
+    let mut ir = unit_cube().expect("valid unit cube fixture");
+    let sketch = SketchId::mint("synthetic:test:sketch#point-symmetry").unwrap();
+    ir.model.sketches.push(Sketch {
+        id: sketch.clone(),
+        name: None,
+        configuration: None,
+        visible: None,
+        placement: crate::sketches::SketchPlacement::try_resolved(
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        profiles: crate::sketches::SketchProfiles::try_from(Vec::new()).unwrap(),
+        native_ref: None,
+    });
+    let entity =
+        |name: &str| SketchEntityId::mint(format!("synthetic:test:entity#{name}")).unwrap();
+    for (name, definition) in [
+        (
+            "point",
+            SketchGeometryDefinition::Point {
+                position: Point2::new(0.0, 0.0),
+            },
+        ),
+        (
+            "first",
+            SketchGeometryDefinition::Line {
+                start: Point2::new(-3.0, -1.0),
+                end: Point2::new(-1.0, -1.0),
+            },
+        ),
+        (
+            "second",
+            SketchGeometryDefinition::Line {
+                start: Point2::new(3.0, 1.0),
+                end: Point2::new(1.0, 1.0),
+            },
+        ),
+        (
+            "circle",
+            SketchGeometryDefinition::Circle {
+                center: Point2::new(0.0, 0.0),
+                radius: Length::new(5.0).unwrap(),
+            },
+        ),
+    ] {
+        ir.model.sketch_entities.push(SketchEntity::new(
+            entity(name),
+            sketch.clone(),
+            SketchGeometry::try_from(definition).unwrap(),
+        ));
+    }
+    let symmetry =
+        |first: SketchLocus, center: SketchLocus| SketchConstraintDefinitionInput::PointSymmetric {
+            first,
+            second: SketchLocus::Start(entity("second")),
+            center,
+        };
+    let cases = [
+        (
+            "point-center",
+            symmetry(
+                SketchLocus::Start(entity("first")),
+                SketchLocus::Entity(entity("point")),
+            ),
+            false,
+        ),
+        (
+            "circle-center",
+            symmetry(
+                SketchLocus::Start(entity("first")),
+                SketchLocus::Center(entity("circle")),
+            ),
+            false,
+        ),
+        (
+            "line-center",
+            symmetry(
+                SketchLocus::Start(entity("first")),
+                SketchLocus::Center(entity("first")),
+            ),
+            true,
+        ),
+        (
+            "circle-start",
+            symmetry(
+                SketchLocus::Start(entity("circle")),
+                SketchLocus::Entity(entity("point")),
+            ),
+            true,
+        ),
+    ];
+    for (name, definition, _) in &cases {
+        ir.model.sketch_constraints.push(SketchConstraint {
+            id: SketchConstraintId::mint(format!("synthetic:test:constraint#{name}")).unwrap(),
+            sketch: sketch.clone(),
+            definition: SketchConstraintDefinition::try_from(definition.clone()).unwrap(),
+            name: None,
+            driving: None,
+            active: None,
+            virtual_space: None,
+            visible: None,
+            orientation: None,
+            label_distance: None,
+            label_position: None,
+            metadata: None,
+            native_ref: None,
+        });
+    }
+    ir.finalize();
+
+    let report = validate_neutral(&ir, Vec::new()).expect("validate the neutral model");
+    for (name, _, refused) in cases {
+        let id = format!("synthetic:test:constraint#{name}");
+        let findings = report
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding.entity.as_deref() == Some(id.as_str())
+                    && finding.message == "sketch constraint locus is incompatible with its entity"
+            })
+            .collect::<Vec<_>>();
+        if refused {
+            assert_eq!(findings.len(), 1, "{name}: {findings:?}");
+            assert_eq!(findings[0].check, Check::GeometricConsistency, "{name}");
+        } else {
+            assert!(findings.is_empty(), "{name}: {findings:?}");
         }
     }
 }
@@ -709,7 +815,7 @@ fn sketch_constraint_native_ref_must_resolve() {
         });
 
     assert!(validate_neutral(&ir, Vec::new())
-        .expect("resource allocation did not fail")
+        .expect("validate the neutral model")
         .findings
         .iter()
         .any(|finding| {
@@ -718,7 +824,7 @@ fn sketch_constraint_native_ref_must_resolve() {
                 && finding.message.contains("native:missing-relation#0")
         }));
     assert!(validate_neutral(&ir, Vec::new())
-        .expect("resource allocation did not fail")
+        .expect("validate the neutral model")
         .findings
         .iter()
         .any(|finding| {
@@ -837,7 +943,7 @@ fn sketch_feature_ownership_and_order_are_validated() {
         });
     }
     let findings = validate_neutral(&ir, Vec::new())
-        .expect("resource allocation did not fail")
+        .expect("validate the neutral model")
         .findings;
     assert!(findings.iter().any(|finding| finding
         .message
@@ -908,15 +1014,7 @@ fn sketch_profile_subselections_are_bounds_checked() {
     ir.model.features.push(feature(
         "invalid-profile-index",
         1,
-        ProfileRef::Planar(
-            PlanarProfileRef::sketch_profiles(
-                sketch_id.clone(),
-                vec![0],
-                &cadmpeg_test_support::service_decode_context(),
-            )
-            .expect("profile membership admission")
-            .unwrap(),
-        ),
+        ProfileRef::Planar(PlanarProfileRef::sketch_profiles(sketch_id.clone(), vec![0]).unwrap()),
     ));
     ir.model.features.push(feature(
         "invalid-region",
@@ -924,13 +1022,7 @@ fn sketch_profile_subselections_are_bounds_checked() {
         ProfileRef::Planar(
             PlanarProfileRef::sketch_regions(
                 sketch_id.clone(),
-                vec![SketchProfileRegion::loops(
-                    0,
-                    Vec::new(),
-                    &cadmpeg_test_support::service_decode_context(),
-                )
-                .expect("fixture loop-region admission")
-                .unwrap()],
+                vec![SketchProfileRegion::loops(0, Vec::new()).unwrap()],
             )
             .unwrap(),
         ),
@@ -940,18 +1032,12 @@ fn sketch_profile_subselections_are_bounds_checked() {
         "repeated-profile-entity",
         3,
         ProfileRef::Planar(
-            PlanarProfileRef::sketch_entities(
-                sketch_id.clone(),
-                vec![selected_entity],
-                &cadmpeg_test_support::service_decode_context(),
-            )
-            .expect("profile membership admission")
-            .unwrap(),
+            PlanarProfileRef::sketch_entities(sketch_id.clone(), vec![selected_entity]).unwrap(),
         ),
     ));
 
     let findings = validate_neutral(&ir, Vec::new())
-        .expect("resource allocation did not fail")
+        .expect("validate the neutral model")
         .findings;
     assert!(findings.iter().any(|finding| {
         finding.message == "sketch profile indices are empty, repeated, or out of range"
@@ -1002,7 +1088,7 @@ fn spatial_sketch_feature_owns_spatial_geometry() {
     });
 
     assert!(validate_neutral(&ir, Vec::new())
-        .expect("resource allocation did not fail")
+        .expect("validate the neutral model")
         .findings
         .is_empty());
     let mut duplicate = ir.model.features.last().expect("spatial owner").clone();
@@ -1011,7 +1097,7 @@ fn spatial_sketch_feature_owns_spatial_geometry() {
     duplicate.ordinal = 1;
     ir.model.features.push(duplicate);
     assert!(validate_neutral(&ir, Vec::new())
-        .expect("resource allocation did not fail")
+        .expect("validate the neutral model")
         .findings
         .iter()
         .any(|finding| finding.message.contains("has multiple owning features")));
@@ -1079,12 +1165,12 @@ fn spatial_distance_validation_rejects_overflowed_squared_norms() {
             .unwrap(),
             native_ref: None,
         });
-    let report = validate_neutral(&ir, vec![]).expect("resource allocation did not fail");
+    let report = validate_neutral(&ir, vec![]).expect("validate the neutral model");
     assert!(report.findings.iter().any(|finding| finding
         .message
         .contains("spatial point distance requires two points")));
     ir.model.parameters[0].value = Some(ParameterValue::Length(Length::new(1e200).unwrap()));
-    let report = validate_neutral(&ir, vec![]).expect("resource allocation did not fail");
+    let report = validate_neutral(&ir, vec![]).expect("validate the neutral model");
     assert!(!report.findings.iter().any(|finding| finding
         .message
         .contains("spatial point distance requires two points")));
@@ -1124,14 +1210,12 @@ mod admission;
 fn spatial_sketch_endpoint_helper_preserves_session_depth_refusal() {
     use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
     let curve = crate::geometry::nurbs::NurbsCurve::from_lanes(
-        &cadmpeg_test_support::service_decode_context(),
         1,
         vec![0.0, 0.0, 1.0, 1.0],
         vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
         None,
         false,
     )
-    .expect("constructor admission")
     .expect("valid curve");
     let geometry = crate::sketches::SpatialSketchGeometry::try_from(
         crate::sketches::SpatialSketchGeometryDefinition::Nurbs {
@@ -1158,12 +1242,97 @@ fn spatial_sketch_endpoint_helper_preserves_session_depth_refusal() {
     assert_eq!(limit, original);
     assert_eq!(limit.dimension, ResourceDimension::RecursionDepth);
     assert_eq!((limit.limit, limit.used, limit.additional), (0, 0, 1));
-    assert_eq!(
-        ctx.charge_work_limit(0, "observe endpoint refusal"),
-        Err(limit)
-    );
+    assert_eq!(ctx.resource_refusal(), Some(limit));
     assert_eq!(
         super::spatial_oriented_endpoints(&ctx, &geometry, true),
         Err(limit)
     );
+}
+
+#[test]
+fn diameter_constraints_check_the_bound_circular_radius() {
+    use crate::features::{DesignParameter, DimensionDisplay, ParameterId, ParameterValue};
+    use crate::sketches::{
+        Sketch, SketchConstraint, SketchConstraintDefinition, SketchConstraintDefinitionInput,
+        SketchConstraintId, SketchEntity, SketchEntityId, SketchId,
+    };
+    let mut ir = CadIr::empty();
+    let sketch = SketchId::mint("test:model:sketch#diameter").unwrap();
+    ir.model.sketches.push(Sketch {
+        id: sketch.clone(),
+        name: None,
+        configuration: None,
+        visible: None,
+        placement: crate::sketches::SketchPlacement::try_resolved(
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        profiles: crate::sketches::SketchProfiles::default(),
+        native_ref: None,
+    });
+    let entity = SketchEntityId::mint("test:model:circle#diameter").unwrap();
+    ir.model.sketch_entities.push(SketchEntity::new(
+        entity.clone(),
+        sketch.clone(),
+        SketchGeometry::try_from(SketchGeometryDefinition::Circle {
+            center: Point2::new(0.0, 0.0),
+            radius: Length::new(7.0).unwrap(),
+        })
+        .unwrap(),
+    ));
+    let parameter = ParameterId::mint("test:model:parameter#diameter").unwrap();
+    ir.model.parameters.push(DesignParameter {
+        id: parameter.clone(),
+        owner: None,
+        ordinal: 0,
+        name: "diameter".into(),
+        expression: String::new(),
+        display: Some(DimensionDisplay::Diameter),
+        value: None,
+        dependencies: crate::features::DistinctMembers::default(),
+        properties: std::collections::BTreeMap::default(),
+        pmi: None,
+        native_ref: None,
+    });
+    let id = SketchConstraintId::mint("test:model:constraint#diameter").unwrap();
+    ir.model.sketch_constraints.push(SketchConstraint {
+        id: id.clone(),
+        sketch,
+        definition: SketchConstraintDefinition::try_from(
+            SketchConstraintDefinitionInput::Diameter { entity, parameter },
+        )
+        .unwrap(),
+        name: None,
+        driving: None,
+        active: None,
+        virtual_space: None,
+        visible: None,
+        orientation: None,
+        label_distance: None,
+        label_position: None,
+        metadata: None,
+        native_ref: None,
+    });
+    ir.finalize();
+    for (value, active, rejects) in [
+        (14.0, None, false),
+        (7.0, None, true),
+        (14.0 + TEST_LINEAR_TOLERANCE, None, false),
+        (7.0, Some(false), false),
+    ] {
+        ir.model.parameters[0].value = Some(ParameterValue::Length(Length::new(value).unwrap()));
+        ir.model.sketch_constraints[0].active = active;
+        let report = validate_neutral(&ir, Vec::new()).unwrap();
+        assert_eq!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.check == Check::GeometricConsistency
+                    && finding.entity.as_deref() == Some(id.as_str())
+                    && finding.message.contains("twice the circular radius")),
+            rejects
+        );
+    }
 }

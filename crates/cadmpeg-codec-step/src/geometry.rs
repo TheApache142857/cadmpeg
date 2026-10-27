@@ -7,6 +7,7 @@
 //! rational geometry.
 
 use cadmpeg_ir::geometry::{
+    analytic::ConeSurface,
     nurbs::{NurbsCurve, NurbsSurface},
     pcurve::PcurveGeometry,
     CurveGeometry, SolvedCurveGeometry, SolvedSurfaceGeometry,
@@ -208,8 +209,8 @@ fn transformation_operator_2d(e: &mut Emitter, transform: Transform2) -> Option<
         return None;
     }
     Some(e.emit(
-        "CARTESIAN_TRANSFORMATION_OPERATOR_2D",
-        &format!("'',{x},{y},{origin},{}", e.real(scale)),
+        e.operator_2d_entity(),
+        &format!("'','','',{x},{y},{origin},{}", e.real(scale)),
     ))
 }
 
@@ -320,6 +321,9 @@ pub(crate) fn pcurve(e: &mut Emitter, geometry: &PcurveGeometry) -> Option<Ref> 
         }
         PcurveGeometry::Transformed(placed) => {
             let transform = placed.transform();
+            if let Some(placed) = bake::placed_pcurve(*transform, placed.basis()) {
+                return pcurve(e, &placed);
+            }
             if !similarity_transform_2d(transform) {
                 return None;
             }
@@ -359,12 +363,22 @@ pub(crate) fn pcurve(e: &mut Emitter, geometry: &PcurveGeometry) -> Option<Ref> 
     })
 }
 
+/// Whether [`pcurve`] writes `geometry` without a `CURVE_REPLICA`: it is not
+/// placed, or its placement is baked into its basis.
+pub(crate) fn pcurve_placement_bakes(geometry: &PcurveGeometry) -> bool {
+    !matches!(geometry, PcurveGeometry::Transformed(_))
+        || bake::placed_pcurve(Transform2::identity(), geometry).is_some()
+}
+
 /// Emit a pcurve in the reversed parameter chart of a negative-angle cone.
 /// The half-turn maps each `(u, v)` to `(-u, -v)` without changing the curve's
 /// own parameter or sense.
 pub(crate) fn pcurve_on_reversed_cone(e: &mut Emitter, geometry: &PcurveGeometry) -> Option<Ref> {
+    let reversal = bake::half_turn()?;
+    if let Some(placed) = bake::placed_pcurve(reversal, geometry) {
+        return pcurve(e, &placed);
+    }
     let basis = pcurve(e, geometry)?;
-    let reversal = Transform2::affine([[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])?;
     let operator = transformation_operator_2d(e, reversal)?;
     Some(e.emit("CURVE_REPLICA", &format!("'',{basis},{operator}")))
 }
@@ -420,7 +434,7 @@ pub(crate) fn transformation_operator(e: &mut Emitter, transform: Transform) -> 
     let z = direction(e, z);
     e.emit(
         "CARTESIAN_TRANSFORMATION_OPERATOR_3D",
-        &format!("'',{x},{y},{origin},{},{z}", e.real(scale)),
+        &format!("'','','',{x},{y},{origin},{},{z}", e.real(scale)),
     )
 }
 
@@ -435,8 +449,19 @@ pub(crate) fn emitted_basis(g: &SolvedSurfaceGeometry) -> &SolvedSurfaceGeometry
 }
 
 /// Emit an analytic or NURBS surface carrier.
+///
+/// A placed carrier is written in its own placed record when
+/// [`bake::placed_surface`] can place it, and otherwise as `SURFACE_REPLICA`
+/// records over its basis.
 pub(crate) fn surface(e: &mut Emitter, g: &SolvedSurfaceGeometry) -> Option<Ref> {
     let (placements, basis) = placed_surface(g);
+    if !placements.is_empty() {
+        if let Some(placed) =
+            bake::chain(&placements).and_then(|transform| bake::placed_surface(transform, basis))
+        {
+            return basis_surface(e, &placed);
+        }
+    }
     let mut reference = basis_surface(e, basis)?;
     // The chain is emitted from the basis outwards, so each `SURFACE_REPLICA`
     // references the record written for the placement inside it.
@@ -467,6 +492,9 @@ fn basis_surface(e: &mut Emitter, g: &SolvedSurfaceGeometry) -> Option<Ref> {
                 "CYLINDRICAL_SURFACE",
                 &format!("'',{pl},{}", e.real(radius)),
             )
+        }
+        SolvedSurfaceGeometry::Cone(cone_surface) if cone_surface.half_angle().get() == 0.0 => {
+            zero_angle_cone(e, cone_surface)?
         }
         // ISO 10303-42 `conical_surface` holds `semi_angle` in `(0, pi/2)`.
         // Reversing the axis and angle maps a negative-angle cone exactly under
@@ -526,9 +554,54 @@ fn basis_surface(e: &mut Emitter, g: &SolvedSurfaceGeometry) -> Option<Ref> {
     })
 }
 
+/// Emit a cone of semi-angle 0, which `conical_surface` cannot hold.
+///
+/// The cone is a cylinder over its origin section, in the same `(u, v)` chart:
+/// a circular section is a `CYLINDRICAL_SURFACE`, and an elliptical one the
+/// `SURFACE_OF_LINEAR_EXTRUSION` of its `ELLIPSE` along the unit axis vector.
+/// A zero section radius is a line, which no surface record holds.
+fn zero_angle_cone(e: &mut Emitter, cone: &ConeSurface) -> Option<Ref> {
+    let origin = cone.origin().get();
+    let axis = *cone.frame().axis();
+    let ref_direction = *cone.frame().reference();
+    let radius = cone.radius().get();
+    let minor_radius = radius * cone.ratio().get();
+    if radius <= 0.0 || minor_radius <= 0.0 {
+        return None;
+    }
+    let pl = placement(e, origin, axis, ref_direction);
+    if cone.ratio().get() == 1.0 {
+        return Some(e.emit(
+            "CYLINDRICAL_SURFACE",
+            &format!("'',{pl},{}", e.real(radius)),
+        ));
+    }
+    let section = e.emit(
+        "ELLIPSE",
+        &format!("'',{pl},{},{}", e.real(radius), e.real(minor_radius)),
+    );
+    let extrusion = direction(e, axis.into());
+    let vector = e.emit("VECTOR", &format!("'',{extrusion},{}", e.real(1.0)));
+    Some(e.emit(
+        "SURFACE_OF_LINEAR_EXTRUSION",
+        &format!("'',{section},{vector}"),
+    ))
+}
+
 /// Emit an analytic or NURBS 3D curve carrier.
+///
+/// A placed carrier is written in its own placed record when
+/// [`bake::placed_curve`] can place it, and otherwise as `CURVE_REPLICA`
+/// records over its basis.
 pub(crate) fn curve(e: &mut Emitter, g: &SolvedCurveGeometry) -> Option<Ref> {
     let (placements, basis) = placed_curve(g);
+    if !placements.is_empty() {
+        if let Some(placed) =
+            bake::chain(&placements).and_then(|transform| bake::placed_curve(transform, basis))
+        {
+            return basis_curve(e, &placed);
+        }
+    }
     let mut reference = basis_curve(e, basis)?;
     // The chain is emitted from the basis outwards, so each `CURVE_REPLICA`
     // references the record written for the placement inside it.
@@ -751,5 +824,8 @@ fn nurbs_surface(e: &mut Emitter, n: &NurbsSurface) -> Option<Ref> {
     })
 }
 
+mod bake;
+#[cfg(test)]
+mod replica_tests;
 #[cfg(test)]
 mod support_tests;

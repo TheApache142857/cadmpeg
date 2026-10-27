@@ -22,6 +22,7 @@ use super::direct_face::{
     DesignDirectFaceOperation, DesignDraftOperation, DesignMoveOperation,
     DesignOffsetFacesOperation, DesignShellOperation, DesignThickenOperation,
 };
+use super::emboss::DesignEmbossConstruction;
 use super::extrude::{DesignExtrudeOperation, DesignExtrudePrologue};
 use super::fixed_parameters::{
     DesignFixedChamferParameters, DesignFixedExtrudeParameters, DesignFixedFilletParameters,
@@ -42,7 +43,8 @@ use super::sheet_metal::{
 };
 use super::surface_ops::{
     DesignRuledSurfaceOperation, DesignSurfaceExtendOperation, DesignSurfaceOffsetOperation,
-    DesignSurfacePatchBoundary, DesignSurfaceStitchOperation,
+    DesignSurfacePatchBoundary, DesignSurfacePatchNormalState, DesignSurfacePatchScope,
+    DesignSurfaceStitchOperation,
 };
 use super::thread::DesignThreadConstruction;
 use super::work_geometry::{
@@ -54,6 +56,12 @@ use crate::records::references::DesignClassTag;
 use crate::records::sketch_placement::SketchPlacementMatrix;
 use crate::records::topology::sketch_profile::DesignSketchProfileOperand;
 use serde::{Deserialize, Serialize};
+
+cadmpeg_core::named_optional_field!(
+    deserialize_occurrence_transfer,
+    super::occurrence_transfer::DesignOccurrenceTransfer,
+    "occurrence_transfer"
+);
 
 cadmpeg_core::named_optional_field!(
     deserialize_assembly_alignment,
@@ -244,6 +252,11 @@ cadmpeg_core::named_optional_field!(
     "sweep_profile"
 );
 cadmpeg_core::named_optional_field!(
+    deserialize_emboss_construction,
+    DesignEmbossConstruction,
+    "emboss_construction"
+);
+cadmpeg_core::named_optional_field!(
     deserialize_thread_construction,
     DesignThreadConstruction,
     "thread_construction"
@@ -335,6 +348,21 @@ impl<T> ScopePayloadCompleteness for Vec<T> {
     }
 }
 
+impl ScopePayloadCompleteness for DesignSurfacePatchScope {
+    fn is_uninterpreted(&self) -> bool {
+        matches!(
+            self.normal,
+            Some(DesignSurfacePatchNormalState::Unsupported)
+        )
+    }
+}
+
+cadmpeg_core::named_optional_field!(
+    deserialize_surface_patch_normal,
+    DesignSurfacePatchNormalState,
+    "surface_patch_normal"
+);
+
 macro_rules! design_feature_kinds {
     (data { $($variant:ident => $lit:literal : $payload:ty),+ $(,)? }
      fixed { $($fixed:ident => $fixed_lit:literal : $fixed_payload:ty),+ $(,)? }
@@ -406,7 +434,6 @@ macro_rules! design_feature_kinds {
         impl cadmpeg_ir::schema::rewrite::typed::RewriteIdentities for DesignScopePayload {
             fn visit_identity_references(&self, ctx: &cadmpeg_core::decode::DecodeContext<'_>, visitor: &mut dyn FnMut(&str) -> Result<(), cadmpeg_core::CodecError>) -> Result<(), cadmpeg_core::CodecError> {
                 let _depth = ctx.enter_nested("walk native typed references")?;
-                ctx.charge_work(1, "walk native typed references")?;
                 match self {
                     $(Self::$variant(value) => value.visit_identity_references(ctx, visitor),)+
                     $(Self::$fixed(value) => value.visit_identity_references(ctx, visitor),)+
@@ -421,7 +448,6 @@ macro_rules! design_feature_kinds {
                 map: &mut cadmpeg_ir::schema::rewrite::typed::IdentityMap<'_, F>,
             ) -> Result<Self, cadmpeg_core::CodecError> {
                 let _depth = ctx.enter_nested("rewrite native scope payload")?;
-                ctx.charge_work(1, "rewrite native scope payload")?;
                 match self {
                     $(Self::$variant(value) => Ok(Self::$variant(value.rewrite_identities(ctx, map)?)),)+
                     $(Self::$fixed(value) => Ok(Self::$fixed(value.rewrite_identities(ctx, map)?)),)+
@@ -442,6 +468,9 @@ macro_rules! design_feature_kinds {
         impl DesignScopePayload {
             /// The source envelope is decoded, but its optional family-specific data is not.
             pub(crate) fn is_uninterpreted(&self) -> bool {
+                if matches!(self, Self::Emboss(_)) {
+                    return true;
+                }
                 match self {
                     $(Self::$variant(value) => ScopePayloadCompleteness::is_uninterpreted(value),)+
                     $(Self::$fixed(value) => ScopePayloadCompleteness::is_uninterpreted(value),)+
@@ -537,13 +566,14 @@ design_feature_kinds! {
         SpirePrimitive => "SpirePrimitive": Option<DesignCoilScope>,
         CoilPrimitive => "CoilPrimitive": Option<DesignCoilScope>,
         Sweep => "Sweep": Option<DesignSweepScope>,
-        SurfacePatch => "SurfacePatch": Vec<DesignSurfacePatchBoundary>,
+        SurfacePatch => "SurfacePatch": DesignSurfacePatchScope,
         SurfaceExtend => "SurfaceExtend": Option<DesignSurfaceExtendOperation>,
         SurfaceOffset => "SurfaceOffset": Option<DesignSurfaceOffsetOperation>,
         Hole => "Hole": Option<DesignHoleConstruction>,
         Scale => "Scale": Option<DesignScaleOperation>,
         Massstab => "Maßstab": Option<DesignScaleOperation>,
         Thread => "Thread": Option<DesignThreadConstruction>,
+        Emboss => "Emboss": Option<DesignEmbossConstruction>,
         EdgeFlange => "EdgeFlange": Option<DesignEdgeFlangeOperation>,
         Hem => "Hem": Option<DesignHemOperation>,
         BaseFlange => "BaseFlange": Option<DesignBaseFlangeScope>,
@@ -657,6 +687,8 @@ pub(crate) struct DesignParameterScope {
     reference_count_offset: u64,
     /// Ordered indexed-record references carried by the scope.
     reference_members: ReferenceRun<u32>,
+    /// Component ownership and placement recorded by paste operations.
+    pub(crate) occurrence_transfer: Option<super::occurrence_transfer::DesignOccurrenceTransfer>,
     /// Family-specific construction records.
     payload: DesignScopePayload,
     /// Reference members whose records open a construction-operand group the
@@ -713,6 +745,12 @@ pub(crate) struct DesignParameterScopeDraft {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[cfg_attr(test, derive(Serialize))]
 struct DesignParameterScopeSerde {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_occurrence_transfer"
+    )]
+    occurrence_transfer: Option<super::occurrence_transfer::DesignOccurrenceTransfer>,
     /// Globally unique deterministic identifier for this native record.
     id: String,
     /// Byte offset of the primary indexed record header.
@@ -835,6 +873,13 @@ struct DesignParameterScopeSerde {
     /// scope reference order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     surface_patch_boundaries: Vec<DesignSurfacePatchBoundary>,
+    /// Versioned whole-surface normal state.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_surface_patch_normal"
+    )]
+    surface_patch_normal: Option<DesignSurfacePatchNormalState>,
     /// Exact edge, parameter, and settings records carried by an `EdgeFlange` scope.
     #[serde(
         default,
@@ -883,6 +928,13 @@ struct DesignParameterScopeSerde {
         deserialize_with = "deserialize_thread_construction"
     )]
     thread_construction: Option<DesignThreadConstruction>,
+    /// Emboss scalar owners, selection groups, and retained control words.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_emboss_construction"
+    )]
+    emboss_construction: Option<DesignEmbossConstruction>,
     /// Exact signed-angle construction carried by a `Draft` scope.
     #[serde(
         default,
@@ -1496,8 +1548,8 @@ impl TryFrom<DesignParameterScopeSerde> for DesignParameterScope {
         if wire.ruled_surface_operation.is_some() {
             present.push("ruled_surface_operation");
         }
-        if !wire.surface_patch_boundaries.is_empty() {
-            present.push("surface_patch_boundaries");
+        if !wire.surface_patch_boundaries.is_empty() || wire.surface_patch_normal.is_some() {
+            present.push("surface_patch");
         }
         if wire.edge_flange_operation.is_some() {
             present.push("edge_flange_operation");
@@ -1513,6 +1565,9 @@ impl TryFrom<DesignParameterScopeSerde> for DesignParameterScope {
         }
         if wire.combine_operation.is_some() {
             present.push("combine_operation");
+        }
+        if wire.emboss_construction.is_some() {
+            present.push("emboss_construction");
         }
         if wire.thread_construction.is_some() {
             present.push("thread_construction");
@@ -1742,7 +1797,10 @@ impl TryFrom<DesignParameterScopeSerde> for DesignParameterScope {
                 }
             }),
             DesignFeatureKind::SurfacePatch => {
-                DesignScopePayload::SurfacePatch(std::mem::take(&mut wire.surface_patch_boundaries))
+                DesignScopePayload::SurfacePatch(DesignSurfacePatchScope {
+                    boundaries: std::mem::take(&mut wire.surface_patch_boundaries),
+                    normal: wire.surface_patch_normal.take(),
+                })
             }
             DesignFeatureKind::SurfaceExtend => {
                 DesignScopePayload::SurfaceExtend(wire.surface_extend_operation.take())
@@ -1762,6 +1820,9 @@ impl TryFrom<DesignParameterScopeSerde> for DesignParameterScope {
             DesignFeatureKind::Scale => DesignScopePayload::Scale(wire.scale_operation.take()),
             DesignFeatureKind::Massstab => {
                 DesignScopePayload::Massstab(wire.scale_operation.take())
+            }
+            DesignFeatureKind::Emboss => {
+                DesignScopePayload::Emboss(wire.emboss_construction.take())
             }
             DesignFeatureKind::Thread => {
                 DesignScopePayload::Thread(wire.thread_construction.take())
@@ -1877,11 +1938,13 @@ impl TryFrom<DesignParameterScopeSerde> for DesignParameterScope {
             || wire.surface_offset_operation.is_some()
             || wire.ruled_surface_operation.is_some()
             || !wire.surface_patch_boundaries.is_empty()
+            || wire.surface_patch_normal.is_some()
             || wire.edge_flange_operation.is_some()
             || wire.hem_operation.is_some()
             || wire.fixed_fillet_parameters.is_some()
             || wire.fixed_chamfer_parameters.is_some()
             || wire.combine_operation.is_some()
+            || wire.emboss_construction.is_some()
             || wire.thread_construction.is_some()
             || wire.draft_operation.is_some()
             || wire.circular_pattern_construction.is_some()
@@ -1909,7 +1972,8 @@ impl TryFrom<DesignParameterScopeSerde> for DesignParameterScope {
                 "history_state_id_offset disagrees with kind_offset".into(),
             ));
         }
-        Self::try_new(DesignParameterScopeDraft {
+        let occurrence_transfer = wire.occurrence_transfer.take();
+        let mut admitted = Self::try_new(DesignParameterScopeDraft {
             id: wire.id,
             byte_offset: wire.byte_offset,
             class_tag: wire
@@ -1940,7 +2004,17 @@ impl TryFrom<DesignParameterScopeSerde> for DesignParameterScope {
                 .try_into()
                 .map_err(DesignParameterScopePayloadError)?,
             paired_byte_offset: wire.paired_byte_offset,
-        })
+        })?;
+        if occurrence_transfer
+            .as_ref()
+            .is_some_and(|value| !value.valid_for_scope(&admitted))
+        {
+            return Err(DesignParameterScopePayloadError(
+                "occurrence_transfer disagrees with scope".into(),
+            ));
+        }
+        admitted.occurrence_transfer = occurrence_transfer;
+        Ok(admitted)
     }
 }
 
@@ -1951,6 +2025,7 @@ impl From<DesignParameterScope> for DesignParameterScopeSerde {
         let history_state_id_offset = scope.history_state_id_offset();
         let (reference_members, reference_member_offsets) = scope.reference_members.into_wire();
         let mut wire = DesignParameterScopeSerde {
+            occurrence_transfer: scope.occurrence_transfer,
             id: scope.id,
             byte_offset: scope.byte_offset,
             class_tag: scope.class_tag.into(),
@@ -1979,6 +2054,7 @@ impl From<DesignParameterScope> for DesignParameterScopeSerde {
             ruled_surface_operation: None,
             base_flange: None,
             surface_patch_boundaries: Vec::new(),
+            surface_patch_normal: None,
             edge_flange_operation: None,
             hem_operation: None,
             fixed_fillet_parameters: None,
@@ -1986,6 +2062,7 @@ impl From<DesignParameterScope> for DesignParameterScopeSerde {
             path_feature: None,
             combine_operation: None,
             thread_construction: None,
+            emboss_construction: None,
             draft_operation: None,
             circular_pattern_construction: None,
             rectangular_pattern_construction: None,
@@ -2075,7 +2152,10 @@ impl From<DesignParameterScope> for DesignParameterScopeSerde {
             DesignScopePayload::SurfaceExtend(value) => wire.surface_extend_operation = value,
             DesignScopePayload::SurfaceOffset(value) => wire.surface_offset_operation = value,
             DesignScopePayload::SurfaceRuled(value) => wire.ruled_surface_operation = Some(value),
-            DesignScopePayload::SurfacePatch(value) => wire.surface_patch_boundaries = value,
+            DesignScopePayload::SurfacePatch(value) => {
+                wire.surface_patch_boundaries = value.boundaries;
+                wire.surface_patch_normal = value.normal;
+            }
             DesignScopePayload::EdgeFlange(value) => wire.edge_flange_operation = value,
             DesignScopePayload::Hem(value) => wire.hem_operation = value,
             DesignScopePayload::Fillet(value)
@@ -2087,6 +2167,7 @@ impl From<DesignParameterScope> for DesignParameterScopeSerde {
             }
             DesignScopePayload::Combine(value) => wire.combine_operation = value,
             DesignScopePayload::Thread(value) => wire.thread_construction = value,
+            DesignScopePayload::Emboss(value) => wire.emboss_construction = value,
             DesignScopePayload::Draft(value) => wire.draft_operation = value,
             DesignScopePayload::CPattern(value)
             | DesignScopePayload::CircularPattern(value)
@@ -2143,6 +2224,26 @@ impl From<DesignParameterScope> for DesignParameterScopeSerde {
     }
 }
 
+/// Reference-table entry width of a scope draft: 11 for plain references or
+/// 51 for typed references. The last entry's target is followed by the rest
+/// of its reference, the u32 history-state identity, and the kind length.
+fn reference_table_stride(draft: &DesignParameterScopeDraft) -> Option<usize> {
+    let last = draft.reference_members.offsets().next_back()?;
+    let count = u64_from_index(draft.reference_members.len());
+    [11, crate::bytes::TYPED_LOCAL_REFERENCE_LEN]
+        .into_iter()
+        .find(|stride| {
+            let stride = u64_from_index(*stride);
+            last.checked_add(stride + 7) == Some(draft.kind_offset)
+                && draft
+                    .reference_count_offset
+                    .checked_add(5)
+                    .zip(count.checked_sub(1).and_then(|n| n.checked_mul(stride)))
+                    .and_then(|(first, span)| first.checked_add(span))
+                    == Some(*last)
+        })
+}
+
 impl DesignParameterScope {
     pub(crate) fn try_new(
         draft: DesignParameterScopeDraft,
@@ -2151,6 +2252,19 @@ impl DesignParameterScope {
             DesignParameterScopePayloadError(format!("invalid parameter scope {field}"))
         };
         let kind = draft.payload.kind_name();
+        if let DesignScopePayload::SurfacePatch(DesignSurfacePatchScope {
+            normal: Some(DesignSurfacePatchNormalState::Explicit { reversed }),
+            ..
+        }) = &draft.payload
+        {
+            let relative =
+                u64_from_index(crate::layout::surface_patch_v7_normal_flip_prefix::NORMAL_FLIP);
+            if draft.byte_offset.checked_add(relative) != Some(reversed.offset)
+                || reversed.offset >= draft.paired_byte_offset
+            {
+                return Err(fail("surface_patch_normal"));
+            }
+        }
         if draft.frame_length <= 89
             || draft.byte_offset.checked_add(draft.frame_length) != Some(draft.paired_byte_offset)
         {
@@ -2170,24 +2284,49 @@ impl DesignParameterScope {
             .checked_sub(draft.feature_ordinal_offset)
             .and_then(|length| usize::try_from(length).ok())
             .ok_or_else(|| fail("feature_ordinal_offset"))?;
-        if !crate::design::decode::scopes::parameter_scope::parameter_scope_tail_length_is_valid(
-            kind, tail,
-        ) {
+        // The reference-table stride shows the reference spelling: 11-byte
+        // plain references or 51-byte typed references.
+        // A table that fits neither width falls through to the plain checks.
+        let stride = reference_table_stride(&draft).unwrap_or(11);
+        let typed = stride == crate::bytes::TYPED_LOCAL_REFERENCE_LEN
+            || (draft.reference_members.is_empty()
+                && kind == "As-built"
+                && tail == crate::layout::typed_reference_parameter_scope_tail::LEN);
+        let typed_canvas =
+            typed && kind == "Canvas" && tail == crate::layout::canvas_scope_typed_tail::LEN;
+        let tail_valid = if typed_canvas {
+            true
+        } else if typed {
+            tail == crate::layout::typed_reference_parameter_scope_tail::LEN
+        } else {
+            crate::design::decode::scopes::parameter_scope::parameter_scope_tail_length_is_valid(
+                kind, tail,
+            )
+        };
+        if !tail_valid {
             return Err(fail("feature_ordinal_offset/kind"));
         }
         match draft.previous_history_state_id_offset {
             None if draft.previous_history_state_id.is_none() => {}
             Some(offset) => {
-                let relative =
+                let relative = if typed_canvas {
+                    None
+                } else if typed {
+                    Some(crate::layout::typed_reference_parameter_scope_tail::PREVIOUS_HISTORY_STATE_ID)
+                } else {
                     crate::design::decode::scopes::parameter_scope::parameter_scope_previous_history_offset(
-                        kind, tail,
+                        kind, tail, draft.reference_members.is_empty(),
                     )
-                    .ok_or_else(|| fail("previous_history_state_id_offset"))?;
+                }
+                .ok_or_else(|| fail("previous_history_state_id_offset"))?;
+                // A scope that commits no state of its own can still record
+                // the state it follows.
                 if draft
                     .feature_ordinal_offset
                     .checked_add(u64_from_index(relative))
                     != Some(offset)
-                    || draft.history_state_id.is_some() != draft.previous_history_state_id.is_some()
+                    || (draft.history_state_id.is_some()
+                        && draft.previous_history_state_id.is_none())
                 {
                     return Err(fail("previous_history_state_id_offset/history_state_id/previous_history_state_id"));
                 }
@@ -2198,9 +2337,23 @@ impl DesignParameterScope {
                 ))
             }
         }
+        let empty_table_at = (kind == "As-built")
+            .then(|| {
+                crate::design::assembly::RigidGroupLayout::new(
+                    draft.frame_length,
+                    u64_from_index(tail),
+                )
+            })
+            .flatten()
+            .and_then(|layout| {
+                draft
+                    .byte_offset
+                    .checked_add(u64_from_index(layout.empty_table))
+            });
         if !(draft.byte_offset < draft.reference_count_offset
             && draft.reference_count_offset < draft.kind_offset)
-            || draft.reference_members.is_empty()
+            || (draft.reference_members.is_empty()
+                && empty_table_at != Some(draft.reference_count_offset))
         {
             return Err(fail("reference_count_offset/reference_members"));
         }
@@ -2216,16 +2369,17 @@ impl DesignParameterScope {
                 return Err(fail("reference_member_offsets"));
             }
             expected = expected
-                .checked_add(11)
+                .checked_add(u64_from_index(stride))
                 .ok_or_else(|| fail("reference_member_offsets"))?;
         }
+        // An empty table is its count, then the history state and the kind's
+        // length prefix.
+        let table_end = match draft.reference_members.offsets().next_back() {
+            Some(offset) => offset.checked_add(u64_from_index(stride) + 7),
+            None => draft.reference_count_offset.checked_add(12),
+        };
         if draft.reference_members.offsets().count() != draft.reference_members.len()
-            || draft
-                .reference_members
-                .offsets()
-                .next_back()
-                .and_then(|offset| offset.checked_add(18))
-                != Some(draft.kind_offset)
+            || table_end != Some(draft.kind_offset)
         {
             return Err(fail("reference_member_offsets/kind_offset"));
         }
@@ -2234,7 +2388,7 @@ impl DesignParameterScope {
                 return Err(fail("Pipe prefix offsets"));
             }
         }
-        Ok(Self {
+        let scope = Self {
             #[cfg(test)]
             clone_probe: ScopeCloneProbe,
             id: draft.id,
@@ -2251,11 +2405,19 @@ impl DesignParameterScope {
             previous_history_state_id_offset: draft.previous_history_state_id_offset,
             reference_count_offset: draft.reference_count_offset,
             reference_members: draft.reference_members,
+            occurrence_transfer: None,
             payload: draft.payload,
             unclosed_construction_operand_groups: draft.unclosed_construction_operand_groups,
             paired_class_tag: draft.paired_class_tag,
             paired_byte_offset: draft.paired_byte_offset,
-        })
+        };
+        if scope
+            .emboss_construction()
+            .is_some_and(|construction| !construction.links_match(&scope))
+        {
+            return Err(fail("emboss_construction"));
+        }
+        Ok(scope)
     }
 
     #[cfg(test)]
@@ -2512,6 +2674,13 @@ impl DesignParameterScope {
         }
     }
 
+    pub(crate) fn emboss_construction(&self) -> Option<&DesignEmbossConstruction> {
+        match &self.payload {
+            DesignScopePayload::Emboss(value) => value.as_ref(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn thread_construction(&self) -> Option<&DesignThreadConstruction> {
         match &self.payload {
             DesignScopePayload::Thread(value) => value.as_ref(),
@@ -2684,9 +2853,16 @@ impl DesignParameterScope {
         }
     }
 
+    pub(crate) fn surface_patch_normal(&self) -> Option<DesignSurfacePatchNormalState> {
+        match &self.payload {
+            DesignScopePayload::SurfacePatch(value) => value.normal,
+            _ => None,
+        }
+    }
+
     pub(crate) fn surface_patch_boundaries(&self) -> &[DesignSurfacePatchBoundary] {
         match &self.payload {
-            DesignScopePayload::SurfacePatch(value) => value,
+            DesignScopePayload::SurfacePatch(value) => &value.boundaries,
             _ => &[],
         }
     }

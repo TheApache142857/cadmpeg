@@ -27,6 +27,10 @@ const NAMESPACE: LossNamespace<'static> = cadmpeg_ir::loss_namespace!("fcstd");
 pub(crate) enum FreecadLossCode {
     /// A bounded archive payload cannot be opened; its stored bytes remain retained.
     ArchiveEntryUnreadable,
+    /// A mesh use has no complete neutral placement path.
+    MeshPlacementNotTransferred,
+    /// Mesh occurrence expansion reached its input-scaled local work cap.
+    MeshPlacementBounded,
     /// A property payload cannot enter the admitted persistence graph.
     PersistencePayloadUnresolved,
     /// An optional file reference has no readable archive payload.
@@ -45,6 +49,8 @@ pub(crate) enum FreecadLossCode {
     SketchExternalCacheUnresolved,
     /// Sketch constraint retains a native relation kind without neutral semantics.
     SketchNativeConstraint,
+    /// Sketch profiles are not chained because endpoint matching reached its work cap.
+    SketchProfileMatchingBounded,
     /// Topology color values were retained because their count did not match mapped topology.
     AppearanceTopologyColorCountMismatch,
     /// A primitive style size could not enter the neutral appearance.
@@ -61,6 +67,10 @@ pub(crate) enum FreecadLossCode {
     ElementMapMetadataUnresolved,
     /// A parameter-space curve could not enter neutral geometry.
     PcurveNotTransferred,
+    /// Equal-matrix pcurves have no admitted matching native location chain.
+    PcurveLocationAmbiguous,
+    /// Native topology remains retained when location identity expansion reaches its local cap.
+    TopologyLocationIdentityBounded,
     /// Producer version metadata used an alias or conflicting declarations.
     ProgramVersionNoncanonical,
     /// Persistence version metadata used a lowercase alias.
@@ -76,6 +86,8 @@ impl FreecadLossCode {
     #[cfg(test)]
     const ALL: &'static [FreecadLossCode] = &[
         Self::ArchiveEntryUnreadable,
+        Self::MeshPlacementNotTransferred,
+        Self::MeshPlacementBounded,
         Self::PersistencePayloadUnresolved,
         Self::PersistenceSideEntryUnresolved,
         Self::PersistenceCountNoncanonical,
@@ -85,6 +97,7 @@ impl FreecadLossCode {
         Self::SketchNativeConstraint,
         Self::SketchExternalReferenceUnresolved,
         Self::SketchExternalCacheUnresolved,
+        Self::SketchProfileMatchingBounded,
         Self::AppearanceTopologyColorCountMismatch,
         Self::AppearancePrimitiveSizeNotTransferred,
         Self::SourceDialectUnverified,
@@ -93,6 +106,8 @@ impl FreecadLossCode {
         Self::SourceGuiMetadataUnresolved,
         Self::ElementMapMetadataUnresolved,
         Self::PcurveNotTransferred,
+        Self::PcurveLocationAmbiguous,
+        Self::TopologyLocationIdentityBounded,
         Self::ProgramVersionNoncanonical,
         Self::FileVersionNoncanonical,
         Self::FileVersionUnverified,
@@ -104,6 +119,8 @@ impl FreecadLossCode {
     const fn code(self) -> &'static str {
         match self {
             Self::ArchiveEntryUnreadable => "source.archive-entry-unreadable",
+            Self::MeshPlacementNotTransferred => "geometry.mesh-placement-not-transferred",
+            Self::MeshPlacementBounded => "geometry.mesh-placement-bounded",
             Self::PersistencePayloadUnresolved => "metadata.persistence-payload-unresolved",
             Self::PersistenceSideEntryUnresolved => "metadata.persistence-side-entry-unresolved",
             Self::PersistenceCountNoncanonical => "metadata.persistence-count-noncanonical",
@@ -113,6 +130,7 @@ impl FreecadLossCode {
             Self::SketchNativeConstraint => "sketch.native-constraint",
             Self::SketchExternalReferenceUnresolved => "sketch.external-reference-unresolved",
             Self::SketchExternalCacheUnresolved => "sketch.external-cache-unresolved",
+            Self::SketchProfileMatchingBounded => "sketch.profile-matching-bounded",
             Self::AppearanceTopologyColorCountMismatch => {
                 "appearance.topology-color-count-mismatch"
             }
@@ -125,6 +143,8 @@ impl FreecadLossCode {
             Self::SourceGuiMetadataUnresolved => "source.gui-metadata-unresolved",
             Self::ElementMapMetadataUnresolved => "element-map.metadata-unresolved",
             Self::PcurveNotTransferred => "pcurve.not-transferred",
+            Self::PcurveLocationAmbiguous => "pcurve.location-ambiguous",
+            Self::TopologyLocationIdentityBounded => "topology.location-identity-bounded",
             Self::ProgramVersionNoncanonical => "metadata.program-version-noncanonical",
             Self::FileVersionNoncanonical => "metadata.file-version-noncanonical",
             Self::FileVersionUnverified => "metadata.file-version-unverified",
@@ -136,12 +156,17 @@ impl FreecadLossCode {
     #[must_use]
     const fn severity(self) -> Severity {
         match self {
-            Self::FeatureCyclicHistory
+            Self::MeshPlacementNotTransferred
+            | Self::MeshPlacementBounded
+            | Self::FeatureCyclicHistory
             | Self::FeatureNativeKindRetained
             | Self::SketchNativeGeometry
-            | Self::SketchNativeConstraint => Severity::Blocking,
+            | Self::SketchNativeConstraint
+            | Self::PcurveLocationAmbiguous
+            | Self::TopologyLocationIdentityBounded => Severity::Blocking,
             Self::SketchExternalCacheUnresolved
             | Self::SketchExternalReferenceUnresolved
+            | Self::SketchProfileMatchingBounded
             | Self::ArchiveEntryUnreadable
             | Self::PersistencePayloadUnresolved
             | Self::PersistenceSideEntryUnresolved
@@ -163,6 +188,9 @@ impl FreecadLossCode {
 
     const fn shared_taxonomy(self) -> LossTaxonomy {
         match self {
+            Self::MeshPlacementNotTransferred | Self::MeshPlacementBounded => {
+                LossTaxonomy::GeometryNotTransferred
+            }
             Self::ArchiveEntryUnreadable
             | Self::PersistencePayloadUnresolved
             | Self::PersistenceSideEntryUnresolved => LossTaxonomy::RecordNotTyped,
@@ -173,10 +201,13 @@ impl FreecadLossCode {
             | Self::SketchExternalReferenceUnresolved
             | Self::SketchNativeGeometry
             | Self::SketchNativeConstraint
+            | Self::SketchProfileMatchingBounded
             | Self::SourceGuiPropertyKeyBlank
             | Self::SourceGuiMetadataUnresolved
             | Self::ElementMapMetadataUnresolved
-            | Self::PcurveNotTransferred => LossTaxonomy::RecordNotTyped,
+            | Self::PcurveNotTransferred
+            | Self::PcurveLocationAmbiguous
+            | Self::TopologyLocationIdentityBounded => LossTaxonomy::RecordNotTyped,
             Self::AppearanceTopologyColorCountMismatch
             | Self::AppearancePrimitiveSizeNotTransferred => LossTaxonomy::MaterialNotTransferred,
             Self::PersistenceCountNoncanonical
@@ -225,6 +256,8 @@ mod tests {
             codes,
             [
                 "source.archive-entry-unreadable",
+                "geometry.mesh-placement-not-transferred",
+                "geometry.mesh-placement-bounded",
                 "metadata.persistence-payload-unresolved",
                 "metadata.persistence-side-entry-unresolved",
                 "metadata.persistence-count-noncanonical",
@@ -234,6 +267,7 @@ mod tests {
                 "sketch.native-constraint",
                 "sketch.external-reference-unresolved",
                 "sketch.external-cache-unresolved",
+                "sketch.profile-matching-bounded",
                 "appearance.topology-color-count-mismatch",
                 "appearance.primitive-size-not-transferred",
                 "source.dialect-unverified",
@@ -242,6 +276,8 @@ mod tests {
                 "source.gui-metadata-unresolved",
                 "element-map.metadata-unresolved",
                 "pcurve.not-transferred",
+                "pcurve.location-ambiguous",
+                "topology.location-identity-bounded",
                 "metadata.program-version-noncanonical",
                 "metadata.file-version-noncanonical",
                 "metadata.file-version-unverified",

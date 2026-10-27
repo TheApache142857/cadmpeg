@@ -48,7 +48,7 @@ fn disconnected_source_shell_is_partitioned_into_connected_ir_shells() {
         .contains("2 disconnected face components"));
     assert!(source_loss.provenance.is_some());
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -139,8 +139,8 @@ fn brep_with_voids_keeps_outer_first_and_void_order_independent_of_the_set() {
     assert_eq!(reordered.ir().model.regions[0].shells, region.shells);
 
     for document in [decoded.ir(), reordered.ir()] {
-        let validation = cadmpeg_ir::validate_neutral(document, Vec::new())
-            .expect("resource allocation did not fail");
+        let validation =
+            cadmpeg_ir::validate_neutral(document, Vec::new()).expect("validate the neutral model");
         assert!(validation.is_ok(), "{:#?}", validation.findings);
     }
 }
@@ -188,7 +188,7 @@ fn shared_source_face_gets_one_owner_scoped_face_per_shell() {
         .all(|face| face.color.is_some()));
     assert_eq!(decoded.ir().model.presentation_layers[0].items.len(), 2);
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -215,7 +215,7 @@ fn brep_with_voids_scopes_edges_and_vertices_per_shell_after_shared_shell_use() 
         .iter()
         .any(|loss| loss.message.contains("root #70 rejected")));
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -245,7 +245,7 @@ fn first_brep_with_voids_scopes_all_shell_carriers() {
         .iter()
         .all(|loss| !loss.message.contains("root #31 rejected")));
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -385,7 +385,7 @@ fn complex_oriented_open_shell_preserves_shell_sense() {
         cadmpeg_ir::topology::Sense::Reversed
     );
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -512,7 +512,7 @@ fn shared_edge_references_are_scoped_by_independent_roots_not_record_order() {
     assert!(vertex_ids.contains("step:data:vertex#6-root-33-shell-30"));
     assert!(
         cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 
@@ -607,7 +607,7 @@ fn reused_shell_in_a_distinct_root_gets_a_new_owner_scope() {
         2
     );
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -653,7 +653,7 @@ fn distinct_roots_with_shared_topology_get_owner_scopes() {
         .iter()
         .all(|loss| !loss.message.contains("conflicts with decoded topology")));
     let validation = cadmpeg_ir::validate_neutral(decoded.ir(), decoded.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -677,7 +677,7 @@ fn missing_vertex_carrier_salvages_complete_sheet_member_but_rejects_solid() {
         .contains("VERTEX_POINT #6 has unresolved point carrier #3")));
     assert!(
         cadmpeg_ir::validate_neutral(sheet.ir(), sheet.report().losses.clone())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 
@@ -697,7 +697,7 @@ fn missing_vertex_carrier_salvages_complete_sheet_member_but_rejects_solid() {
     }));
     assert!(
         cadmpeg_ir::validate_neutral(solid.ir(), solid.report().losses.clone())
-            .expect("resource allocation did not fail")
+            .expect("validate the neutral model")
             .is_ok()
     );
 }
@@ -772,7 +772,7 @@ fn advanced_brep_representation_reuses_its_committed_solid_body() {
         .iter()
         .any(|record| record.id.as_str().contains("advanced_brep_representation")));
     let validation = cadmpeg_ir::validate_neutral(result.ir(), result.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
 }
 
@@ -829,6 +829,170 @@ fn advanced_brep_mapped_representation_reuses_its_committed_solid_body() {
             .contains("ADVANCED_BREP_REPRESENTATION instance(s) as named opaque STEP records")
     }));
     let validation = cadmpeg_ir::validate_neutral(result.ir(), result.report().losses.clone())
-        .expect("resource allocation did not fail");
+        .expect("validate the neutral model");
     assert!(validation.is_ok(), "{:#?}", validation.findings);
+}
+
+/// The start vertex position of each coedge of an edge loop, in ring order
+/// with the coedge sense applied.
+fn loop_starts(ir: &CadIr, loop_id: &cadmpeg_ir::ids::LoopId) -> Vec<[f64; 3]> {
+    use cadmpeg_ir::topology::Sense;
+
+    let model = &ir.model;
+    let face_loop = model
+        .loops
+        .iter()
+        .find(|face_loop| &face_loop.id == loop_id)
+        .expect("loop carrier");
+    let mut starts = Vec::new();
+    for coedge_id in face_loop.coedges() {
+        let coedge = model
+            .coedges
+            .iter()
+            .find(|coedge| &coedge.id == coedge_id)
+            .expect("coedge carrier");
+        let edge = model
+            .edges
+            .iter()
+            .find(|edge| edge.id == coedge.edge)
+            .expect("edge carrier");
+        let vertex_id = match coedge.sense {
+            Sense::Forward => &edge.start,
+            Sense::Reversed => &edge.end,
+        };
+        let vertex = model
+            .vertices
+            .iter()
+            .find(|vertex| &vertex.id == vertex_id)
+            .expect("vertex carrier");
+        let point = model
+            .points
+            .iter()
+            .find(|point| point.id == vertex.point)
+            .expect("point carrier")
+            .position()
+            .get();
+        starts.push([point.x, point.y, point.z]);
+    }
+    starts
+}
+
+/// The vector area `1/2 Σ p_i × p_(i+1)` of a closed polygon. For a planar
+/// polygon it is the enclosed area times the normal about which the polygon
+/// runs counterclockwise.
+fn vector_area(starts: &[[f64; 3]]) -> [f64; 3] {
+    let mut area = [0.0; 3];
+    for (index, p) in starts.iter().enumerate() {
+        let q = starts[(index + 1) % starts.len()];
+        area[0] += 0.5 * (p[1] * q[2] - p[2] * q[1]);
+        area[1] += 0.5 * (p[2] * q[0] - p[0] * q[2]);
+        area[2] += 0.5 * (p[0] * q[1] - p[1] * q[0]);
+    }
+    area
+}
+
+/// The oriented normal of a planar face: the plane axis, negated for a
+/// reversed face.
+fn oriented_plane_normal(ir: &CadIr, face: &cadmpeg_ir::topology::Face) -> [f64; 3] {
+    use cadmpeg_ir::geometry::SolvedSurfaceGeometry;
+
+    let surface = ir
+        .model
+        .surfaces
+        .iter()
+        .find(|surface| surface.id == face.surface)
+        .expect("surface carrier");
+    let Some(SolvedSurfaceGeometry::Plane(plane)) = surface.geometry.solved() else {
+        panic!("box face is planar");
+    };
+    let axis = plane.frame().axis().as_raw();
+    let sign = match face.sense {
+        cadmpeg_ir::topology::Sense::Forward => 1.0,
+        cadmpeg_ir::topology::Sense::Reversed => -1.0,
+    };
+    [sign * axis.x, sign * axis.y, sign * axis.z]
+}
+
+/// Decodes one solid whose outer shell is `shell` wrapped in `wrappers`
+/// `ORIENTED_CLOSED_SHELL(.F.)` records, over the box `min..max`.
+fn decode_wrapped_box(
+    face_use: crate::test_support::box_brep::BoxFaceUse,
+    wrappers: usize,
+    min: [f64; 3],
+    max: [f64; 3],
+) -> cadmpeg_ir::codec::DecodeResult {
+    use std::fmt::Write as _;
+
+    use crate::test_support::box_brep::{box_shell, solid_representation};
+
+    let shell = box_shell(10, min, max, face_use);
+    let mut records = shell.records;
+    let mut outer = shell.shell;
+    let mut next = shell.next;
+    for _ in 0..wrappers {
+        writeln!(records, "#{next}=ORIENTED_CLOSED_SHELL('',*,#{outer},.F.);")
+            .expect("write to a String");
+        outer = next;
+        next += 1;
+    }
+    writeln!(records, "#{next}=MANIFOLD_SOLID_BREP('',#{outer});").expect("write to a String");
+    records.push_str(&solid_representation(1, next));
+    crate::test_support::exchange::decode_inline(&records)
+}
+
+/// Each face of the `2 x 3 x 4` box at the origin, after every orientation
+/// in the chain from the shell occurrence to the base face is composed, has
+/// a sense and a loop that both state the outward normal: the loop vector
+/// area equals the face area times that normal.
+#[test]
+fn reversed_closed_shell_reverses_face_sense_and_loop_traversal() {
+    use crate::test_support::box_brep::BoxFaceUse;
+
+    /// Allowance of a vector area component built from exact box coordinates.
+    const EPS_VECTOR_AREA: f64 = 1e-12;
+
+    let (min, max) = ([0.0, 0.0, 0.0], [2.0, 3.0, 4.0]);
+    for (face_use, wrappers) in [
+        (BoxFaceUse::Outward, 0),
+        (BoxFaceUse::InwardFlags, 1),
+        (BoxFaceUse::InwardOrientedFace, 1),
+        (BoxFaceUse::Outward, 2),
+        (BoxFaceUse::InwardOrientedFace, 3),
+    ] {
+        let decoded = decode_wrapped_box(face_use, wrappers, min, max);
+        let ir = decoded.ir();
+        assert_eq!(ir.model.bodies.len(), 1);
+        assert_eq!(ir.model.faces.len(), 6);
+        for (index, face) in ir.model.faces.iter().enumerate() {
+            let normal = oriented_plane_normal(ir, face);
+            let axis = normal
+                .iter()
+                .position(|component| component.abs() == 1.0)
+                .expect("axis-aligned normal");
+            let outward = if normal[axis] > 0.0 {
+                max[axis]
+            } else {
+                min[axis]
+            };
+            let face_loops = face.loops.to_vec();
+            let [loop_id] = face_loops.as_slice() else {
+                panic!("box face has one loop");
+            };
+            let starts = loop_starts(ir, loop_id);
+            assert!(
+                starts.iter().all(|start| start[axis] == outward),
+                "the oriented normal of face {index} ({wrappers} reversed shells) points out of the box"
+            );
+            let extent = |axis: usize| max[axis] - min[axis];
+            let area = extent((axis + 1) % 3) * extent((axis + 2) % 3);
+            let vector_area = vector_area(&starts);
+            for component in 0..3 {
+                assert!(
+                    (vector_area[component] - area * normal[component]).abs() <= EPS_VECTOR_AREA,
+                    "face {index} ({wrappers} reversed shells): loop vector area component \
+                     {component} differs from area times the oriented normal"
+                );
+            }
+        }
+    }
 }

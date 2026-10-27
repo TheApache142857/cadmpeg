@@ -1191,6 +1191,14 @@ cross-section radius at axial distance `v` is `radius + v tan(semi_angle)`,
 and `(abs(semi_angle), -axis)` holds the same locus under the parameter change
 `(u, v) -> (-u, -v)`, which moves the chart that pcurves are written against.
 
+CADIR export decision: a zero half-angle cone is the cylinder over its
+cross-section, which `WR2` keeps out of `CONICAL_SURFACE`. The writer emits a
+circular section as `CYLINDRICAL_SURFACE` and an elliptical section as a
+`SURFACE_OF_LINEAR_EXTRUSION` of an `ELLIPSE` on the cone's placement, swept by
+a unit `VECTOR` along the axis. Both keep the cone's `(u, v)` chart. A zero
+half-angle cone whose section has a zero semi-axis, and a cone whose half-angle
+magnitude is at least `pi/2`, are refused before any byte is written.
+
 A NURBS `closed` or `periodic` field uses the STEP LOGICAL domain.
 TRUE and FALSE encode the property state. UNKNOWN is a valid LOGICAL value.
 A `POLYLINE` with `n` points is the degree-one NURBS with those points as
@@ -1228,6 +1236,20 @@ invalid surface carrier is omitted and reports
 `geometry.carrier-not-written`; strict export rejects that loss before writing
 the header. This is a CADIR export-admission rule for malformed neutral input;
 it does not assign a STEP meaning to a missing pole.
+
+The AP203 edition 2, AP214, and AP242 simple-instance parameter sequence for
+`CARTESIAN_TRANSFORMATION_OPERATOR_2D` is `representation_item.name`,
+`functionally_defined_transformation.name`,
+`functionally_defined_transformation.description`, `axis1`, `axis2`,
+`local_origin`, and `scale`. The first two attributes are labels; description
+is optional text. `CARTESIAN_TRANSFORMATION_OPERATOR_3D` adds `axis3` after
+`scale`. The simple instances therefore have seven and eight parameters,
+respectively. The two inherited name attributes occupy separate positions.
+AP203 edition 1 has no `CARTESIAN_TRANSFORMATION_OPERATOR_2D` subtype. Its
+non-abstract `CARTESIAN_TRANSFORMATION_OPERATOR` carries the same seven
+parameters and supplies a two-dimensional replica transform when its origin
+and axes are two-dimensional. Its inherited transformation description is
+required text; an empty string is valid.
 
 `CARTESIAN_TRANSFORMATION_OPERATOR_3D` stores a required local origin and
 optional axis1, axis2, axis3, and scale attributes. Its transformation matrix
@@ -1269,8 +1291,9 @@ and the canonical parameter is `v = u`. If `R1 < R2`, `major_direction` is
 `p[2] = axis × p[1]`, `minor_radius` is `R1`, and the canonical parameter is
 `v = u - π/2`. Numeric `TRIMMED_CURVE` selectors apply this phase after
 angular-unit conversion. Cartesian selectors invert the canonical carrier and
-therefore apply no phase. Curve replicas, nested trims, and spatial offsets
-inherit the phase; the source STEP record is unchanged.
+therefore apply no phase. Curve replicas and spatial offsets inherit the
+phase; the source STEP record is unchanged. A trimmed ellipse runs on its local
+parameter, so a trim nested on it applies no phase.
 
 ISO 10303-42 defines `TRIMMED_CURVE` as a selected portion of an unchanged
 basis curve. Trim selects are parameter values, Cartesian points, or both.
@@ -1282,7 +1305,8 @@ and `s = t1 - t` for a FALSE sense. On a cyclic basis, the forward directed
 branch increases the second select by one period when it is below the first;
 the reversed directed branch increases the first select by one period when it
 is below the second. The domain is `0..abs(t2-t1)` after that branch
-adjustment. The stored sense maps local parameters in the increasing or
+adjustment. A `TRIMMED_CURVE` whose basis is a `TRIMMED_CURVE` states its
+parameter selects on the local parameter `s` of that basis. The stored sense maps local parameters in the increasing or
 decreasing parent direction. A
 `CURVE_REPLICA` retains the complete parent relation, including a trim, and
 inherits the parent's parameter range and parameterization; its transformation
@@ -1324,6 +1348,15 @@ model-space location and dimensions while preserving the parent parameter
 domain. Deferred surface dependencies resolve by graph fixpoint, including
 forward and nested replicas. Its native entity is emitted again when those
 values are available.
+
+CADIR export decision: the writer applies a carrier's placement chain to the
+carrier itself when the placed carrier keeps the parameterization of the
+replica: an analytic curve or surface under a proper rigid motion, and a NURBS
+carrier, a polyline or a point under any placement the writer admits. In
+parameter space, a line or NURBS pcurve is placed under any affine map and a
+conic pcurve under a proper rigid motion. Every other placement is written as
+a `CURVE_REPLICA` or `SURFACE_REPLICA` over the written basis. The half-turn
+of a reversed cone chart is a proper rigid motion and follows the same rule.
 
 ISO 10303-42 defines each surface as `σ(u,v)` with independent parameters. For
 `SURFACE_OF_LINEAR_EXTRUSION`, if the directrix is `λ(u)` and the extrusion axis
@@ -1391,6 +1424,24 @@ creates an occurrence-specific edge whose endpoints follow the composed curve
 direction. The edge occurrence carries the wireframe use. A committed body
 graph has complete ownership and valid referenced indices. Recoverable
 non-manifold incidence remains attached and is reported.
+
+ISO 10303-42 derives the `cfs_faces` of an `ORIENTED_OPEN_SHELL` or an
+`ORIENTED_CLOSED_SHELL` as `conditional_reverse(orientation,
+shell_element.cfs_faces)`. With `orientation = FALSE`, each face of the base
+shell is used through `face_reversed`, the `ORIENTED_FACE` of that face with
+the opposite orientation. An `ORIENTED_FACE` derives its
+`bounds` as `conditional_reverse(orientation, face_element.bounds)`, so a
+reversed face also reverses every face bound, and a reversed face bound
+reverses the loop traversal. A reversed face use therefore reverses the
+oriented normal and the traversal of every bound together. Oriented-shell and
+oriented-face orientations compose by exclusive or over the chain from the
+shell occurrence to the base face.
+
+CADIR decision: the decoder applies the composed face reversal to the face
+`sense` and to the traversal of every loop of the face. The loop winding and
+the face `sense` then state the same oriented normal. A void of a
+`BREP_WITH_VOIDS` is an `ORIENTED_CLOSED_SHELL` with `orientation = FALSE`, so
+the CADIR void faces are the reverse of the base closed-shell faces.
 
 Connected face sets join through common edges or common vertices. Edge-based
 and shell-based wireframe models preserve their connected edge and vertex
@@ -1510,6 +1561,16 @@ the outer-boundary semantics and states that no more than one boundary of a
 face may have this type. Section §5.5.19 defines `FACE.bounds` as
 `SET[1:?] OF FACE_BOUND`; its WR2 permits at most one `FACE_OUTER_BOUND`, and
 the outer role is optional. Other face bounds are not outer bounds.
+
+Section §5.5.19 defines the face domain as an oriented, connected, finite
+2-manifold, and the topological normal `n` such that each bound runs
+counterclockwise around the face when `n` points up: the face interior lies
+to the left of every oriented bound. Section §5.5.20 states in
+`FACE_SURFACE.same_sense` whether the surface normal agrees with `n`. A
+face with no `FACE_OUTER_BOUND` follows the same rule, and a single
+`FACE_BOUND` is not an outer bound. On an unbounded surface such as a
+`PLANE`, the region to the left of one bound that runs clockwise about `n` is
+not finite, so that bound set is not a face.
 
 Section §5.5.17 defines the inherited `FACE_BOUND` attributes `bound` and
 `orientation`. Section §5.5.18 declares `FACE_OUTER_BOUND` as a subtype with
@@ -1688,7 +1749,18 @@ the deterministic projection for reproducible output, while layer membership,
 view identity, visibility, and all other consumers treat the sequence as a
 set of assigned items.
 Product shape binds through `PRODUCT_DEFINITION_SHAPE` and
-`SHAPE_DEFINITION_REPRESENTATION`. Every body-producing representation,
+`SHAPE_DEFINITION_REPRESENTATION`.
+CADIR decision: a body absent from every product definition's body list belongs
+to the model in model coordinates. Its shape items occur once in a body
+representation linked to the root product's shape representation by
+`SHAPE_REPRESENTATION_RELATIONSHIP`, without an occurrence transformation.
+Solid items without body placements use
+`ADVANCED_BREP_SHAPE_REPRESENTATION`; other items use `SHAPE_REPRESENTATION`
+and retain their body placements. Claimed bodies retain their product ownership
+and occurrence structure. One local root product owns the unclaimed bodies;
+a sole product definition is the root when the occurrence list is empty.
+Without a unique local root, a separate model product owns these bodies.
+Every body-producing representation,
 including `ADVANCED_BREP_REPRESENTATION` and
 `GEOMETRICALLY_BOUNDED_SURFACE_SHAPE_REPRESENTATION`, uses the same
 source-root-to-body map. An `ADVANCED_BREP_REPRESENTATION` is typed when its

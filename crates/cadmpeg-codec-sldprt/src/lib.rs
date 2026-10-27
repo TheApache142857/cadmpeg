@@ -8,7 +8,7 @@
 //! blocks and records provenance so supported edits can retain native data.
 //!
 //! <!-- generated: capability sldprt -->
-//! Support: L1 ([ladder](https://github.com/cadmpeg/cadmpeg/blob/main/docs/format-support.md#solidworks-sldprt)).
+//! Support: L3 ([ladder](https://github.com/cadmpeg/cadmpeg/blob/main/docs/format-support.md#solidworks-sldprt)).
 //! <!-- /generated: capability sldprt -->
 //!
 //! # Decode
@@ -35,7 +35,8 @@
 //! Decode reports can accompany a usable model. Untyped support carriers become
 //! opaque geometry linked to retained bytes, while their resolvable topology
 //! remains in the IR. No usable geometry yields metadata with diagnostics.
-//! Set [`DecodeOptions::container_only`] to omit geometry decoding explicitly.
+//! Set [`DecodeOptions::depth`] to [`DecodeDepth::Container`] to omit geometry
+//! decoding explicitly.
 //! Semantic Parasolid graph errors propagate as decode errors.
 //!
 //! [`Codec::inspect`] inventories the outer blocks, section directory, cache
@@ -96,11 +97,14 @@
 //!
 //! [`Codec::inspect`]: cadmpeg_ir::Codec::inspect
 //! [`CodecError::NotImplemented`]: cadmpeg_core::CodecError::NotImplemented
-//! [`DecodeOptions::container_only`]: cadmpeg_ir::DecodeOptions::container_only
+//! [`DecodeOptions::depth`]: cadmpeg_ir::DecodeOptions::depth
+//! [`DecodeDepth::Container`]: cadmpeg_core::decode::DecodeDepth::Container
 
 mod annotations;
 mod appearance;
+mod archive;
 mod brep;
+mod carchive;
 mod classification;
 mod container;
 mod decode;
@@ -125,7 +129,7 @@ mod writer;
 mod writer_patch;
 mod writer_transform;
 
-use cadmpeg_core::decode::{DecodeContext, View};
+use cadmpeg_core::decode::{DecodeContext, DecodeDepth, View};
 use cadmpeg_core::dialect::DialectId;
 use cadmpeg_core::CodecError;
 use cadmpeg_ir::ContainerSummary;
@@ -133,8 +137,8 @@ use std::io::Write;
 
 use cadmpeg_ir::codec::write::{
     target::{Catalog, ResolvedWrite},
-    ArenaCoverage, ArenaDispositions, Consumption, EncodeInput, EncoderBackend, ExportBody,
-    PatchConsumption, WritePath,
+    ArenaCoverage, ArenaDispositions, Consumption, DepthNeed, EncodeInput, EncoderBackend,
+    ExportBody, PatchConsumption, WritePath,
 };
 use cadmpeg_ir::codec::{CodecBackend, Confidence, Decoded, FormatId};
 use cadmpeg_ir::document::CadIr;
@@ -161,7 +165,6 @@ pub struct SldprtCodec;
 /// source-fidelity sidecar throughout export.
 struct SourceRecord<'a> {
     id: UnknownId,
-    sha256: String,
     data: Option<&'a [u8]>,
 }
 
@@ -243,8 +246,11 @@ impl SldprtCodec {
         fidelity: SemanticFidelity,
         writer: &mut dyn Write,
     ) -> Result<Written, CodecError> {
-        let writer::SemanticOutput { dialect, coverage } =
-            writer::write_semantic_with_records(ir, annotations, records, writer)?;
+        let writer::SemanticOutput {
+            dialect,
+            coverage,
+            omitted_envelope_bytes,
+        } = writer::write_semantic_with_records(ir, annotations, records, writer)?;
         let native = ir
             .native
             .namespace("sldprt")
@@ -277,6 +283,7 @@ impl SldprtCodec {
             dialect,
             fidelity,
             coverage,
+            omitted_envelope_bytes,
         })
     }
 }
@@ -354,6 +361,7 @@ enum Written {
         dialect: DialectId,
         fidelity: SemanticFidelity,
         coverage: ArenaDispositions,
+        omitted_envelope_bytes: usize,
     },
 }
 
@@ -406,10 +414,6 @@ impl CodecBackend for SldprtCodec {
         prefix: cadmpeg_core::decode::View<'_>,
     ) -> Result<Confidence, cadmpeg_core::CodecError> {
         let prefix = prefix.window();
-        ctx.charge_work(
-            cadmpeg_core::decode::u64_from_index(prefix.len()),
-            "detect input",
-        )?;
         if container::looks_like_sldprt(ctx, prefix)? {
             Ok(Confidence::High)
         } else {
@@ -423,15 +427,9 @@ impl CodecBackend for SldprtCodec {
         root: View<'_>,
     ) -> Result<ContainerSummary, CodecError> {
         let scan = container::scan(ctx, root)?;
-        let classification = dialect::classify_layers(ctx, &scan)?;
-        let mut summary = container::summarize(
-            ctx,
-            &scan,
-            classification
-                .layers()
-                .try_clone_for_decode(ctx, "copy dialect layers")?,
-        )?;
-        classification.append_losses(ctx, &mut summary.losses)?;
+        let classification = dialect::classify_layers(&scan)?;
+        let mut summary = container::summarize(&scan, classification.layers().clone());
+        classification.append_losses(&mut summary.losses);
         Ok(summary)
     }
 
@@ -442,6 +440,9 @@ impl CodecBackend for SldprtCodec {
 
 impl EncoderBackend for SldprtCodec {
     const FORMAT: FormatId = <Self as CodecBackend>::FORMAT;
+    /// Patches the retained source, so the design records it rewrites must be
+    /// present.
+    const NEEDS: DepthNeed = DepthNeed::AtLeast(DecodeDepth::Full);
     type Target = Catalog;
     const TARGET: Catalog = Catalog::new(dialect::TARGETS, Some(0));
 
@@ -471,7 +472,6 @@ fn source_records<'a>(
                 })?;
             Ok(SourceRecord {
                 id: reference.id,
-                sha256: retained.sha256(),
                 data: retained.data(),
             })
         })
@@ -479,7 +479,6 @@ fn source_records<'a>(
     if let Some(source) = source_fidelity.retained_record(SOURCE_IMAGE_ID) {
         records.push(SourceRecord {
             id: source_image_id(),
-            sha256: source.sha256(),
             data: source.data(),
         });
     }

@@ -62,7 +62,13 @@ fn loaded_cadir_compares_native_metadata_with_its_rebound_sidecar() {
         restored.origin,
         crate::application::document::LoadOrigin::Restored { .. }
     ));
-    let report = validate_loaded(&catalog, &restored, &DecodePolicy::service()).unwrap();
+    let report = validate_loaded(
+        &catalog,
+        &restored,
+        &DecodePolicy::service(),
+        super::super::WorkProfile::Service,
+    )
+    .unwrap();
     assert!(report.is_ok(), "{report:?}");
     assert!(report
         .findings
@@ -87,7 +93,13 @@ fn loaded_cadir_compares_native_metadata_with_its_rebound_sidecar() {
         .set_arena(&ctx, "parasolid_deltas_schemas", &schemas)
         .unwrap();
     write_pair(&path, &edited, original_report, fidelity);
-    let report = validate_loaded(&catalog, &load(), &policy).unwrap();
+    let report = validate_loaded(
+        &catalog,
+        &load(),
+        &policy,
+        super::super::WorkProfile::Service,
+    )
+    .unwrap();
     assert!(
         report
             .findings
@@ -101,7 +113,13 @@ fn loaded_cadir_compares_native_metadata_with_its_rebound_sidecar() {
     std::fs::remove_file(decode_sidecar_path(&path).unwrap()).unwrap();
     let without_sidecar = load();
     assert!(without_sidecar.fidelity().is_none());
-    let report = validate_loaded(&catalog, &without_sidecar, &policy).unwrap();
+    let report = validate_loaded(
+        &catalog,
+        &without_sidecar,
+        &policy,
+        super::super::WorkProfile::Service,
+    )
+    .unwrap();
     let native = report
         .findings
         .iter()

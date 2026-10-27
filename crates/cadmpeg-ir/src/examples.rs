@@ -43,7 +43,7 @@ pub enum ExampleError {
     Geometry(&'static str),
     /// A loop ring violated its structural contract.
     #[error(transparent)]
-    LoopRing(#[from] crate::topology::LoopRingAdmissionError),
+    LoopRing(#[from] crate::topology::LoopRingError),
     /// A shell had no admitted members.
     #[error(transparent)]
     Shell(#[from] crate::features::BodySelectionError),
@@ -74,12 +74,6 @@ type FaceDef = (
 
 /// A `10 mm` axis-aligned cube spanning the origin to `(10, 10, 10)`.
 pub fn unit_cube() -> Result<CadIr, ExampleError> {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
-        &[],
-        &arena,
-        &cadmpeg_core::decode::DecodePolicy::default(),
-    )?;
     let s = 10.0_f64;
 
     let corners = [
@@ -111,45 +105,47 @@ pub fn unit_cube() -> Result<CadIr, ExampleError> {
 
     // Each face: name, outward normal, surface origin, and its loop as an
     // ordered ring of (edge_index, forward) pairs. `forward` means the coedge
-    // traverses the edge in the edge's own start→end direction. Every edge
-    // appears exactly twice across all faces, once in each direction, so the
-    // two coedges of an edge always have opposite sense.
+    // traverses the edge in the edge's own start→end direction. Each ring runs
+    // counterclockwise about the outward normal, as every outer loop does about
+    // its face's oriented normal. Every edge appears exactly twice across all
+    // faces, once in each direction, so the two coedges of an edge always have
+    // opposite sense.
     let face_defs: [FaceDef; 6] = [
         (
             crate::identity_key!("bottom"),
             (0.0, 0.0, -1.0),
             (0.0, 0.0, 0.0),
-            [(0, true), (1, true), (2, true), (3, true)],
+            [(0, false), (3, false), (2, false), (1, false)],
         ),
         (
             crate::identity_key!("top"),
             (0.0, 0.0, 1.0),
             (0.0, 0.0, s),
-            [(7, false), (6, false), (5, false), (4, false)],
+            [(7, true), (4, true), (5, true), (6, true)],
         ),
         (
             crate::identity_key!("front"),
             (0.0, -1.0, 0.0),
             (0.0, 0.0, 0.0),
-            [(0, false), (8, true), (4, true), (9, false)],
+            [(0, true), (9, true), (4, false), (8, false)],
         ),
         (
             crate::identity_key!("right"),
             (1.0, 0.0, 0.0),
             (s, 0.0, 0.0),
-            [(1, false), (9, true), (5, true), (10, false)],
+            [(1, true), (10, true), (5, false), (9, false)],
         ),
         (
             crate::identity_key!("back"),
             (0.0, 1.0, 0.0),
             (0.0, s, 0.0),
-            [(2, false), (10, true), (6, true), (11, false)],
+            [(2, true), (11, true), (6, false), (10, false)],
         ),
         (
             crate::identity_key!("left"),
             (-1.0, 0.0, 0.0),
             (0.0, 0.0, 0.0),
-            [(3, false), (11, true), (7, true), (8, false)],
+            [(3, true), (8, true), (7, false), (11, false)],
         ),
     ];
 
@@ -244,11 +240,10 @@ pub fn unit_cube() -> Result<CadIr, ExampleError> {
         ir.model.loops.push(Loop {
             id: loop_id.clone(),
             face: cube_id!(FaceId, "face", name.clone()),
-            boundary: crate::topology::LoopBoundary::Ring(
-                crate::topology::LoopRing::new(&ctx, coedge_ids.clone(), Vec::new())
-                    .map_err(crate::topology::LoopRingAdmissionError::from)?
-                    .map_err(crate::topology::LoopRingAdmissionError::from)?,
-            ),
+            boundary: crate::topology::LoopBoundary::Ring(crate::topology::LoopRing::new(
+                coedge_ids.clone(),
+                Vec::new(),
+            )?),
         });
         ir.model.faces.push(Face {
             id: cube_id!(FaceId, "face", name.clone()),
@@ -305,19 +300,13 @@ pub fn unit_cube() -> Result<CadIr, ExampleError> {
         visible: None,
     });
 
-    ir.finalize(&ctx)?;
+    ir.finalize();
 
     Ok(ir)
 }
 
 /// A canonical fixture covering directed `SubD` and a Sum procedural surface.
 pub fn directed_subd_sum() -> Result<CadIr, ExampleError> {
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
-        &[],
-        &arena,
-        &cadmpeg_core::decode::DecodePolicy::default(),
-    )?;
     let mut ir = CadIr::empty();
     ir.model.curves = vec![
         Curve {
@@ -404,39 +393,25 @@ pub fn directed_subd_sum() -> Result<CadIr, ExampleError> {
                     SubdEdgeTag::Crease,
                     None,
                     [0.125, 0.875],
-                    &ctx,
-                )?
+                )
                 .map_err(|_| {
                     crate::geometry::ProceduralGeometryError::Payload(
                         "invalid directed SubD example edge",
                     )
                 })?,
-                SubdEdge::new(
-                    [1, 2],
-                    [0.0, 0.5],
-                    SubdEdgeTag::SmoothX,
-                    None,
-                    [0.25, 0.75],
-                    &ctx,
-                )?
-                .map_err(|_| {
-                    crate::geometry::ProceduralGeometryError::Payload(
-                        "invalid directed SubD example edge",
-                    )
-                })?,
-                SubdEdge::new(
-                    [2, 0],
-                    [1.0, 0.0],
-                    SubdEdgeTag::Smooth,
-                    None,
-                    [0.5, 0.5],
-                    &ctx,
-                )?
-                .map_err(|_| {
-                    crate::geometry::ProceduralGeometryError::Payload(
-                        "invalid directed SubD example edge",
-                    )
-                })?,
+                SubdEdge::new([1, 2], [0.0, 0.5], SubdEdgeTag::SmoothX, None, [0.25, 0.75])
+                    .map_err(|_| {
+                        crate::geometry::ProceduralGeometryError::Payload(
+                            "invalid directed SubD example edge",
+                        )
+                    })?,
+                SubdEdge::new([2, 0], [1.0, 0.0], SubdEdgeTag::Smooth, None, [0.5, 0.5]).map_err(
+                    |_| {
+                        crate::geometry::ProceduralGeometryError::Payload(
+                            "invalid directed SubD example edge",
+                        )
+                    },
+                )?,
             ],
             vec![SubdFace::new(vec![
                 SubdEdgeUse {
@@ -458,13 +433,12 @@ pub fn directed_subd_sum() -> Result<CadIr, ExampleError> {
                 )
             })?],
             Vec::new(),
-            &ctx,
-        )?
+        )
         .map_err(|_| {
             crate::geometry::ProceduralGeometryError::Payload("invalid directed SubD example cage")
         })?,
     });
-    ir.finalize(&ctx)?;
+    ir.finalize();
     Ok(ir)
 }
 

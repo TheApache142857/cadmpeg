@@ -155,6 +155,8 @@ pub(crate) enum CreoLossCode {
     FeatureRecognizedIncomplete,
     /// History feature definitions retain only source-native semantics.
     FeatureNativeSemantics,
+    /// Same-ID operation candidates disagree and have no current-state selector.
+    FeatureStateSelectionUnresolved,
     /// Typed history features retain an explicitly unresolved construction.
     FeatureConstructionUnresolved,
     /// Declared section segment rows did not decode.
@@ -179,6 +181,8 @@ pub(crate) enum CreoLossCode {
     SectionSolverVariableMissing,
     /// Section dimensions retain source-native value tokens.
     SectionDimensionValueUnresolved,
+    /// A native radius cannot form a finite neutral diameter value.
+    SectionDiameterValueUnresolved,
     /// Referenced configuration driver tables retain unresolved traversal.
     ConfigurationDriverUnresolved,
     /// Active curve-equation records with prohibited constructs were not evaluated.
@@ -189,6 +193,15 @@ pub(crate) enum CreoLossCode {
     CurveExpressionSolveControlUnresolved,
     /// Prohibited datum-curve constructs across active curve-equation records.
     CurveExpressionKindProhibited,
+    /// Plane-support lane search stopped at its local variant or visit cap.
+    PlaneSupportVariantsCapped,
+    /// A section distance component had more sign branches than the local cap.
+    SectionSignBranchesCapped,
+    /// Curve-equation relation values were dropped at a local string-text cap.
+    CurveExpressionTextCapped,
+    /// TOC headers past the input length in visited header and row bytes
+    /// were not read.
+    TocScanCapped,
 }
 }
 
@@ -252,6 +265,7 @@ impl CreoLossCode {
             Self::FeatureConstructionIncomplete => "feature.construction-incomplete",
             Self::FeatureRecognizedIncomplete => "feature.recognized-incomplete",
             Self::FeatureNativeSemantics => "feature.native-semantics",
+            Self::FeatureStateSelectionUnresolved => "feature.state-selection-unresolved",
             Self::FeatureConstructionUnresolved => "feature.construction-unresolved",
             Self::SectionSegmentMissing => "section.segment-missing",
             Self::SectionRelationMissing => "section.relation-missing",
@@ -264,6 +278,7 @@ impl CreoLossCode {
             Self::SectionDimensionGuessUnresolved => "section.dimension-guess-unresolved",
             Self::SectionSolverVariableMissing => "section.solver-variable-missing",
             Self::SectionDimensionValueUnresolved => "section.dimension-value-unresolved",
+            Self::SectionDiameterValueUnresolved => "section.diameter-value-unresolved",
             Self::ConfigurationDriverUnresolved => "configuration.driver-unresolved",
             Self::CurveExpressionProhibited => "curve-expression.prohibited",
             Self::CurveExpressionSolveUnresolved => "curve-expression.solve-unresolved",
@@ -271,6 +286,10 @@ impl CreoLossCode {
                 "curve-expression.solve-control-unresolved"
             }
             Self::CurveExpressionKindProhibited => "curve-expression.kind-prohibited",
+            Self::PlaneSupportVariantsCapped => "geometry.plane-support-variants-capped",
+            Self::SectionSignBranchesCapped => "section.sign-branches-capped",
+            Self::CurveExpressionTextCapped => "curve-expression.text-capped",
+            Self::TocScanCapped => "container.toc-scan-capped",
         }
     }
 
@@ -333,6 +352,7 @@ impl CreoLossCode {
             | Self::FeatureConstructionIncomplete
             | Self::FeatureRecognizedIncomplete
             | Self::FeatureNativeSemantics
+            | Self::FeatureStateSelectionUnresolved
             | Self::FeatureConstructionUnresolved
             | Self::SectionSegmentMissing
             | Self::SectionRelationMissing
@@ -345,11 +365,16 @@ impl CreoLossCode {
             | Self::SectionDimensionGuessUnresolved
             | Self::SectionSolverVariableMissing
             | Self::SectionDimensionValueUnresolved
+            | Self::SectionDiameterValueUnresolved
             | Self::ConfigurationDriverUnresolved
             | Self::CurveExpressionProhibited
             | Self::CurveExpressionSolveUnresolved
             | Self::CurveExpressionSolveControlUnresolved
-            | Self::CurveExpressionKindProhibited => Severity::Warning,
+            | Self::CurveExpressionKindProhibited
+            | Self::PlaneSupportVariantsCapped
+            | Self::SectionSignBranchesCapped
+            | Self::CurveExpressionTextCapped
+            | Self::TocScanCapped => Severity::Warning,
         }
     }
 
@@ -379,6 +404,7 @@ impl CreoLossCode {
             | Self::CarrierTorusParameterRetention => LossTaxonomy::CarrierSummary,
             Self::LegacyRealValueUnresolved
             | Self::CompressedSectionUnexpanded
+            | Self::TocScanCapped
             | Self::LegacyIntegerValueUnresolved
             | Self::LegacyContinuationFormUndefined
             | Self::LegacyUnsignedValueUnresolved
@@ -401,7 +427,8 @@ impl CreoLossCode {
             | Self::VisibGeomCurveAmbiguous
             | Self::SectionSegmentGeometryUnresolved
             | Self::SectionSplineUnresolved
-            | Self::SurfacePrototypeFieldRetained => LossTaxonomy::GeometryNotTransferred,
+            | Self::SurfacePrototypeFieldRetained
+            | Self::PlaneSupportVariantsCapped => LossTaxonomy::GeometryNotTransferred,
             Self::TopologyIncompleteComponents
             | Self::TopologyVertexIdentifierUnstatable
             | Self::ExtrusionBodyRejected => LossTaxonomy::TopologyNotTransferred,
@@ -411,6 +438,7 @@ impl CreoLossCode {
             | Self::FeatureConstructionIncomplete
             | Self::FeatureRecognizedIncomplete
             | Self::FeatureNativeSemantics
+            | Self::FeatureStateSelectionUnresolved
             | Self::FeatureConstructionUnresolved
             | Self::SectionSegmentMissing
             | Self::SectionRelationMissing
@@ -423,11 +451,14 @@ impl CreoLossCode {
             | Self::SectionDimensionGuessUnresolved
             | Self::SectionSolverVariableMissing
             | Self::SectionDimensionValueUnresolved
+            | Self::SectionDiameterValueUnresolved
             | Self::ConfigurationDriverUnresolved
             | Self::CurveExpressionProhibited
             | Self::CurveExpressionSolveUnresolved
             | Self::CurveExpressionSolveControlUnresolved
-            | Self::CurveExpressionKindProhibited => LossTaxonomy::FeatureHistoryRetained,
+            | Self::CurveExpressionKindProhibited
+            | Self::SectionSignBranchesCapped
+            | Self::CurveExpressionTextCapped => LossTaxonomy::FeatureHistoryRetained,
         }
     }
 
@@ -523,6 +554,7 @@ mod tests {
                 "feature.construction-incomplete",
                 "feature.recognized-incomplete",
                 "feature.native-semantics",
+                "feature.state-selection-unresolved",
                 "feature.construction-unresolved",
                 "section.segment-missing",
                 "section.relation-missing",
@@ -535,11 +567,16 @@ mod tests {
                 "section.dimension-guess-unresolved",
                 "section.solver-variable-missing",
                 "section.dimension-value-unresolved",
+                "section.diameter-value-unresolved",
                 "configuration.driver-unresolved",
                 "curve-expression.prohibited",
                 "curve-expression.solve-unresolved",
                 "curve-expression.solve-control-unresolved",
                 "curve-expression.kind-prohibited",
+                "geometry.plane-support-variants-capped",
+                "section.sign-branches-capped",
+                "curve-expression.text-capped",
+                "container.toc-scan-capped",
             ]
         );
     }

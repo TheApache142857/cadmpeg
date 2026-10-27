@@ -4,164 +4,240 @@
 use super::point_data::exact_point_data_construction;
 use super::shared_frames::{exact_fixed_scalar, extrude_operation_at, marked_record_reference};
 use crate::container::ContainerScan;
-use crate::design::decode::meta::{design_primary_frames, metadata_for_bulk_stream, DesignPrimaryFrame};
-use crate::design::decode::sketch::{native_scope_charged, IndexedRecordOffsets};
+use crate::design::decode::meta::{
+    design_primary_frames, metadata_for_bulk_stream, DesignPrimaryFrame,
+};
+use crate::design::decode::sketch::IndexedRecordOffsets;
 use crate::ids::design_segment;
-use crate::layout::{compact_pipe_operation_prefix as compact, legacy_pipe_operation_prefix as legacy};
-use crate::native::F3dNative;
-use crate::records::feature::path_features::{DesignPipeConstruction, DesignPipePointSelection};
+use crate::layout::fixed_pipe_operation_prefix as compact;
+use crate::layout::legacy_pipe_operation_prefix as legacy;
+use crate::records::decal::DesignRecordHeader;
+use crate::records::entity_header::SegmentType;
 use crate::records::feature::path_features::pipe::{self, PipeIndex};
-use crate::records::feature::scope::{DesignFeatureKind, DesignParameterScope, DesignScopePayloadMut};
+use crate::records::feature::path_features::{DesignPipeConstruction, DesignPipePointSelection};
+use crate::records::feature::scope::{
+    DesignFeatureKind, DesignParameterScope, DesignScopePayloadMut,
+};
+use crate::records::parameters::DesignParameterOwner;
+use crate::records::topology::construction::DesignConstructionOperandGroup;
 use cadmpeg_core::container::ContainerRole;
-use cadmpeg_core::decode::{u64_from_index, DecodeContext, View};
+use cadmpeg_core::decode::u64_from_index;
 use cadmpeg_core::CodecError;
 use std::collections::HashMap;
 
-pub(crate) fn bind_constructions(ctx: &DecodeContext<'_>, scan: &ContainerScan<'_>, native: &mut F3dNative) -> Result<(), CodecError> {
-    if !native.design_parameter_scopes.iter().any(|scope| scope.kind() == DesignFeatureKind::Pipe) { return Ok(()) }
-    let mut scratch = ctx.reserve_scoped(0, "F3D Pipe binding scratch")?;
-    let bindings = scratch.with_storage(|| {
-        let index = PipeIndex::new(ctx, native)?;
-        let mut bindings = Vec::new();
-        for entry in scan.entries.iter().filter(|entry| scan.is_design_stream(entry, ContainerRole::Bulkstream)) {
-            let stream = native_scope_charged(ctx, &entry.name)?;
-            let Some(meta) = metadata_for_bulk_stream(ctx, scan, &entry.name)? else { continue };
-            let bytes = scan.entry_bytes(&entry.name)?;
-            let frames = match design_primary_frames(ctx, bytes, &meta) {
-                Ok(frames) => frames,
-                Err(error @ CodecError::ResourceLimit(_)) => return Err(error),
-                Err(_) => continue,
-            };
-            let mut types = HashMap::new();
-            for data in &meta.types {
-                for entity in data.entities.values() {
-                    ctx.reserve_map(&mut types, 1, "index F3D Pipe source type")?;
-                    match types.entry(*entity) {
-                        std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(Some(data)); }
-                        std::collections::hash_map::Entry::Occupied(mut entry) => { entry.insert(None); }
-                    }
-                }
-            }
-            let mut indexed = HashMap::new();
-            for frame in &frames {
-                if types.get(&frame.entity_id).and_then(|data| *data).is_none_or(|data| !std::ptr::eq(data, frame.design_type)) { continue }
-                ctx.reserve_map(&mut indexed, 1, "index F3D Pipe source frame")?;
-                match indexed.entry(frame.entity_id) {
-                    std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(Some(frame)); }
-                    std::collections::hash_map::Entry::Occupied(mut entry) => { entry.insert(None); }
-                }
-            }
-            let records = IndexedRecordOffsets::build(ctx, bytes)?;
-            for (ordinal, scope) in native.design_parameter_scopes.iter().enumerate().filter(|(_, scope)| {
-                scope.kind() == DesignFeatureKind::Pipe && crate::ids::native_stream(&scope.id) == Some(stream.as_str())
-            }) {
-                if let Some(construction) = read_construction(ctx, bytes, scope, &indexed, &records, &index)? {
-                    ctx.push_vec(&mut bindings, (ordinal, construction), "retain F3D Pipe binding")?;
-                }
+/// Native records a Pipe binding joins.
+pub(crate) struct PipeSources<'a> {
+    pub(crate) types: &'a [SegmentType],
+    pub(crate) headers: &'a [DesignRecordHeader],
+    pub(crate) owners: &'a [DesignParameterOwner],
+    pub(crate) groups: &'a [DesignConstructionOperandGroup],
+}
+
+/// Bind every Pipe scope whose source framing and complete native relation
+/// are exact. Other Pipe scopes keep no construction.
+pub(crate) fn bind_constructions(
+    scan: &ContainerScan,
+    sources: &PipeSources<'_>,
+    scopes: &mut [DesignParameterScope],
+) -> Result<(), CodecError> {
+    if !scopes
+        .iter()
+        .any(|scope| scope.kind() == DesignFeatureKind::Pipe)
+    {
+        return Ok(());
+    }
+    let index = PipeIndex::new(
+        sources.types,
+        sources.headers,
+        sources.owners,
+        sources.groups,
+    );
+    let mut bindings = Vec::new();
+    for entry in scan
+        .entries
+        .iter()
+        .filter(|entry| scan.is_design_stream(entry, ContainerRole::Bulkstream))
+    {
+        let stream = crate::ids::native_scope(&entry.name);
+        let Some(meta) = metadata_for_bulk_stream(scan, &entry.name)? else {
+            continue;
+        };
+        let bytes = scan.entry_bytes(&entry.name)?;
+        let Ok(frames) = design_primary_frames(bytes, &meta) else {
+            continue;
+        };
+        // A record repeated in the primary index has no unique frame.
+        let mut indexed = HashMap::new();
+        for frame in &frames {
+            indexed
+                .entry(frame.entity_id)
+                .and_modify(|slot| *slot = None)
+                .or_insert(Some(frame));
+        }
+        let records = IndexedRecordOffsets::build(bytes);
+        for (ordinal, scope) in scopes.iter().enumerate().filter(|(_, scope)| {
+            scope.kind() == DesignFeatureKind::Pipe
+                && crate::ids::native_stream(&scope.id) == Some(stream.as_str())
+        }) {
+            if let Some(construction) = read_construction(bytes, scope, &indexed, &records, &index)
+            {
+                bindings.push((ordinal, construction));
             }
         }
-        Ok::<_, CodecError>(bindings)
-    })?;
+    }
     for (ordinal, construction) in bindings {
-        if let Some(selection) = &construction.point_selection {
-            let capacity = match selection.point_data.rule.form() {
-                crate::records::feature::work_geometry::DesignWorkPointRuleForm::Native { inputs, .. } => inputs.capacity(),
-                _ => 0,
-            };
-            ctx.charge_retained(
-                u64_from_index(capacity).checked_mul(u64_from_index(std::mem::size_of::<crate::records::feature::work_geometry::DesignWorkPointInput>()))
-                    .ok_or_else(|| ctx.refuse_codec_limit("retain F3D Pipe point inputs", 0, 1))?,
-                "retain F3D Pipe point inputs",
-            )?;
+        if let DesignScopePayloadMut::Pipe(slot) = scopes[ordinal].payload_mut() {
+            *slot = Some(construction);
         }
-        if let DesignScopePayloadMut::Pipe(slot) = native.design_parameter_scopes[ordinal].payload_mut() { *slot = Some(construction); }
     }
     Ok(())
 }
 
-fn read_prefix(bytes: &[u8], scope: &DesignParameterScope) -> Option<DesignPipeConstruction> {
-    let start = usize::try_from(scope.byte_offset()).ok()?;
-    let table = usize::try_from(scope.reference_count_offset()).ok()?;
-    let prefix = bytes.get(start..table)?;
-    if prefix.get(compact::ZERO_RUN_8..compact::LEADING_PRESENCE) != Some(&[0; 8]) { return None }
-    let (hollow, operation, raw) = match prefix.get(compact::LEADING_PRESENCE..=compact::PROPERTY_PRESENCE)? {
-        [0, 0] => (compact::IS_HOLLOW, compact::OPERATION, compact::POST_OPERATION_BYTES),
-        [0, 1] if View::u32_le_at(prefix, legacy::PROPERTY_COUNT) == Some(0) => (legacy::IS_HOLLOW, legacy::OPERATION, legacy::POST_OPERATION_BYTES),
+/// Read the compact or legacy operation prefix of a Pipe scope starting at
+/// `start`. `bytes` ends at the scope's reference table.
+fn exact_pipe_prefix(bytes: &[u8], start: usize) -> Option<DesignPipeConstruction> {
+    let frame = bytes.get(start..)?;
+    let (hollow_at, operation_at, opaque_at) =
+        if frame.get(compact::ZERO_RUN_10..compact::IS_HOLLOW) == Some(&[0; 10]) {
+            (
+                compact::IS_HOLLOW,
+                compact::OPERATION,
+                compact::OPAQUE_POST_OPERATION,
+            )
+        } else if frame.get(legacy::ZERO_RUN_9..legacy::PREFIX_MARKER) == Some(&[0; 9])
+            && frame.get(legacy::PREFIX_MARKER) == Some(&legacy::PREFIX_MARKER_VALUE)
+            && frame.get(legacy::ZERO_RUN_4..legacy::IS_HOLLOW) == Some(&[0; 4])
+        {
+            (
+                legacy::IS_HOLLOW,
+                legacy::OPERATION,
+                legacy::OPAQUE_POST_OPERATION,
+            )
+        } else {
+            return None;
+        };
+    let is_hollow = match *frame.get(hollow_at)? {
+        0 => false,
+        1 => true,
         _ => return None,
     };
-    let is_hollow = match prefix.get(hollow)? { 0 => false, 1 => true, _ => return None };
+    let at = |offset: usize| u64::try_from(start.checked_add(offset)?).ok();
+    let opaque: [u8; 2] = frame
+        .get(opaque_at..opaque_at.checked_add(2)?)?
+        .try_into()
+        .ok()?;
     Some(DesignPipeConstruction {
-        operation: extrude_operation_at(prefix, operation)?,
-        operation_offset: scope.byte_offset().checked_add(u64_from_index(operation))?,
+        operation: extrude_operation_at(frame, operation_at)?,
+        operation_offset: at(operation_at)?,
         is_hollow,
-        is_hollow_offset: scope.byte_offset().checked_add(u64_from_index(hollow))?,
-        post_operation_bytes: prefix.get(raw..raw.checked_add(2)?)?.try_into().ok()?,
-        post_operation_offset: scope.byte_offset().checked_add(u64_from_index(raw))?,
-        record_indexes: [0; 4], point_selection: None,
+        is_hollow_offset: at(hollow_at)?,
+        opaque_post_operation: opaque.into(),
+        opaque_post_operation_offset: at(opaque_at)?,
+        record_indexes: [0; 4],
+        point_selection: None,
     })
 }
 
 fn read_construction(
-    ctx: &DecodeContext<'_>, bytes: &[u8], scope: &DesignParameterScope,
-    frames: &HashMap<u64, Option<&DesignPrimaryFrame<'_>>>, records: &IndexedRecordOffsets,
+    bytes: &[u8],
+    scope: &DesignParameterScope,
+    frames: &HashMap<u64, Option<&DesignPrimaryFrame<'_>>>,
+    records: &IndexedRecordOffsets,
     index: &PipeIndex<'_>,
-) -> Result<Option<DesignPipeConstruction>, CodecError> {
-    let frame = |id: u32| frames.get(&u64::from(id)).and_then(|frame| *frame);
-    let Some(own) = frame(scope.record_index) else { return Ok(None) };
-    if !pipe::is_pipe(own.design_type) || u64_from_index(own.start) != scope.byte_offset()
-        || u64_from_index(own.member_end) != scope.paired_byte_offset() || own.class_tag != scope.class_tag {
-        return Ok(None);
+) -> Option<DesignPipeConstruction> {
+    let frame = |id: u32| frames.get(&u64::from(id)).copied().flatten();
+    let own = frame(scope.record_index)?;
+    if !pipe::is_pipe(own.design_type)
+        || u64_from_index(own.start) != scope.byte_offset()
+        || u64_from_index(own.member_end) != scope.paired_byte_offset()
+        || own.class_tag != scope.class_tag
+    {
+        return None;
     }
-    let Some(segment) = design_segment(&scope.id) else { return Ok(None) };
-    let Some(mut construction) = read_prefix(bytes, scope) else { return Ok(None) };
+    let segment = design_segment(&scope.id)?;
+    let start = usize::try_from(scope.byte_offset()).ok()?;
+    let table = usize::try_from(scope.reference_count_offset()).ok()?;
+    let mut construction = exact_pipe_prefix(bytes.get(..table)?, start)?;
     let mut lanes = 0_usize;
     let mut point = None;
     for id in scope.reference_members().values().copied() {
-        ctx.charge_work(1, "bind F3D Pipe source reference")?;
-        let Some(selected) = frame(id) else { return Ok(None) };
+        let selected = frame(id)?;
         if pipe::is_scalar(selected.design_type) {
-            let Some(scalar) = exact_fixed_scalar(bytes, records, id) else { return Ok(None) };
-            let Some(owner) = index.owner(segment, id) else { return Ok(None) };
-            if lanes >= 4 || scalar.ordinal != u8::try_from(lanes).map_err(|_| ctx.refuse_codec_limit("F3D Pipe lane ordinal", 0, 1))?
+            let scalar = exact_fixed_scalar(bytes, records, id)?;
+            let owner = index.owner(segment, id)?;
+            if lanes >= 4
+                || usize::from(scalar.ordinal) != lanes
                 || scalar.owner_record_index != Some(scope.record_index)
-                || scalar.start != u64_from_index(selected.start) || scalar.end != u64_from_index(selected.member_end)
-                || scalar.value.get().to_bits() != owner.evaluated_value().get().to_bits() || scalar.value_offset != owner.evaluated_value_offset()
-                || owner.byte_offset() != scalar.start || owner.byte_offset().checked_add(owner.frame_length()) != Some(scalar.end)
-                || owner.class_tag() != &selected.class_tag || owner.local_ordinal() != u32::from(scalar.ordinal)
-                || owner.scope_record_index() != scope.record_index { return Ok(None) }
+                || scalar.start != u64_from_index(selected.start)
+                || scalar.end != u64_from_index(selected.member_end)
+                || scalar.value.get().to_bits() != owner.evaluated_value().get().to_bits()
+                || scalar.value_offset != owner.evaluated_value_offset()
+                || owner.byte_offset() != scalar.start
+                || owner.byte_offset().checked_add(owner.frame_length()) != Some(scalar.end)
+                || owner.class_tag() != &selected.class_tag
+                || owner.local_ordinal() != u32::from(scalar.ordinal)
+                || owner.scope_record_index() != scope.record_index
+            {
+                return None;
+            }
             construction.record_indexes[lanes] = id;
             lanes += 1;
-        } else if pipe::is_point(selected.design_type) {
-            if point.replace((id, selected)).is_some() { return Ok(None) }
+        } else if pipe::is_point(selected.design_type) && point.replace((id, selected)).is_some() {
+            return None;
         }
     }
-    if lanes != 4 { return Ok(None) }
+    if lanes != 4 {
+        return None;
+    }
     for group in index.groups(segment, scope.record_index) {
-        let Some(selected) = frame(group.record_index) else { return Ok(None) };
-        if u64_from_index(selected.start) != group.byte_offset || u64_from_index(selected.member_end) != group.paired_byte_offset
-            || selected.class_tag != group.class_tag { return Ok(None) }
+        let selected = frame(group.record_index)?;
+        if u64_from_index(selected.start) != group.byte_offset
+            || u64_from_index(selected.member_end) != group.paired_byte_offset
+            || selected.class_tag != group.class_tag
+        {
+            return None;
+        }
     }
     if let Some((id, selected)) = point {
-        let mut types = HashMap::new();
-        ctx.reserve_map(&mut types, 1, "index F3D Pipe point type")?;
-        types.insert(u64::from(id), (selected.design_type.type_guid.as_str(), selected.design_type.version));
-        let Some(point_data) = exact_point_data_construction(ctx, bytes, records, std::iter::once(&id), &types)? else { return Ok(None) };
+        let types = HashMap::from([(
+            u64::from(id),
+            (
+                selected.design_type.type_guid.as_str(),
+                selected.design_type.version,
+            ),
+        )]);
+        let point_data =
+            exact_point_data_construction(bytes, records, std::iter::once(&id), &types)?;
         if point_data.point_record_byte_offset != u64_from_index(selected.start)
-            || !records.frames(id).any(|(start, end)| start == selected.start && end == selected.member_end) { return Ok(None) }
+            || !records
+                .frames(id)
+                .any(|(start, end)| start == selected.start && end == selected.member_end)
+        {
+            return None;
+        }
+        // Exactly one marked reference between the prefix and the reference
+        // table names the point-data record.
+        let after_prefix = usize::try_from(construction.opaque_post_operation_offset)
+            .ok()?
+            .checked_add(2)?;
         let mut prefix_reference_offset = None;
-        let start = usize::try_from(construction.post_operation_offset).ok().and_then(|start| start.checked_add(2));
-        let end = usize::try_from(scope.reference_count_offset()).ok();
-        let (Some(start), Some(end)) = (start, end) else { return Ok(None) };
-        for at in start..end {
-            ctx.charge_work(1, "find F3D Pipe point prefix reference")?;
-            if at.checked_add(11).is_some_and(|after| after <= end) && marked_record_reference(bytes, at) == Some(id) {
-                if prefix_reference_offset.replace(u64_from_index(at + 1)).is_some() { return Ok(None) }
+        for at in after_prefix..table {
+            if at.checked_add(11).is_some_and(|after| after <= table)
+                && marked_record_reference(bytes, at) == Some(id)
+                && prefix_reference_offset
+                    .replace(u64_from_index(at + 1))
+                    .is_some()
+            {
+                return None;
             }
         }
-        let Some(prefix_reference_offset) = prefix_reference_offset else { return Ok(None) };
-        construction.point_selection = Some(DesignPipePointSelection { prefix_reference_offset, point_data });
+        construction.point_selection = Some(DesignPipePointSelection {
+            prefix_reference_offset: prefix_reference_offset?,
+            point_data,
+        });
     }
-    Ok(index.check_relation(ctx, scope, &construction)?.map(|_| construction))
+    index.check_relation(scope, &construction)?;
+    Some(construction)
 }
 
 #[cfg(test)]

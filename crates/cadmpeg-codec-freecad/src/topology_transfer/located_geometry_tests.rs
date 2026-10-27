@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{Builder, Tables};
+use super::{ArenaPositions, Builder, Tables};
 use crate::brep::{ShapePayload, ShapePayloadRecord, TextTShapes};
 use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
 use cadmpeg_ir::document::CadIr;
@@ -35,11 +35,13 @@ fn located_surfaces_copy_only_their_own_construction_and_reuse_placements() {
     let arena = DecodeArena::new();
     let policy = DecodePolicy::service();
     let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
+    let mut positions = ArenaPositions::default();
     let mut builder = Builder::new(
         &ctx,
         &payload,
         tables,
         cadmpeg_core::text::NonBlankString::new("synthetic").unwrap(),
+        &mut positions,
     )
     .unwrap();
     let mut ir = CadIr::empty();
@@ -61,7 +63,6 @@ fn located_surfaces_copy_only_their_own_construction_and_reuse_placements() {
     }
     ir.model
         .add_procedural_surface(
-            &ctx,
             &base,
             ProceduralSurface::new(
                 ProceduralSurfaceId::mint("fcstd:model:surface#synthetic:construction").unwrap(),
@@ -72,7 +73,6 @@ fn located_surfaces_copy_only_their_own_construction_and_reuse_placements() {
                 None,
             ),
         )
-        .unwrap()
         .unwrap();
     let transform = Transform::affine([
         [1.0, 0.0, 0.0, 5.0],
@@ -83,16 +83,16 @@ fn located_surfaces_copy_only_their_own_construction_and_reuse_placements() {
 
     assert_eq!(
         builder
-            .located_surface(&mut ir, 1, Transform::identity())
+            .located_surface(&mut ir, 1, 0, Transform::identity())
             .unwrap(),
         base
     );
-    let located_solved = builder.located_surface(&mut ir, 2, transform).unwrap();
+    let located_solved = builder.located_surface(&mut ir, 2, 0, transform).unwrap();
     assert_eq!(ir.model.procedural_surfaces.len(), 1);
-    let located = builder.located_surface(&mut ir, 1, transform).unwrap();
+    let located = builder.located_surface(&mut ir, 1, 0, transform).unwrap();
     assert_eq!(ir.model.procedural_surfaces.len(), 2);
     assert_eq!(
-        builder.located_surface(&mut ir, 1, transform).unwrap(),
+        builder.located_surface(&mut ir, 1, 0, transform).unwrap(),
         located
     );
     assert_eq!(ir.model.surfaces.len(), 4);

@@ -5,12 +5,10 @@ use super::hole::DesignHoleConstruction;
 use super::work_geometry::DesignWorkPointConstruction;
 use crate::records::dimensions::DesignRecipeReference;
 use crate::records::identity::Located;
-use crate::records::mesh::DesignRelaxedGuidText;
+use crate::records::mesh::{DesignOccurrenceKey, DesignRelaxedGuidText};
 use crate::records::recipes::ConstructionRecipeKind;
 use crate::records::references::DesignClassTag;
 use crate::records::sketch_placement::SketchPlacementMatrix;
-use cadmpeg_core::decode::DecodeContext;
-use cadmpeg_core::CodecError;
 use cadmpeg_ir::scalar::FiniteReal;
 use serde::ser::{SerializeSeq, SerializeStruct};
 use serde::{Deserialize, Serialize};
@@ -296,6 +294,29 @@ pub(crate) struct DesignAssemblyAlignment {
     pub(crate) owners: Vec<Located<u32>>,
     /// Datum, legacy solved-carrier, or qualified-operand form.
     pub(crate) form: Option<DesignAssemblyAlignmentForm>,
+    /// How the two operand frames mate, when the scope stores it.
+    pub(crate) frame_sense: Option<DesignJointFrameSense>,
+    pub(crate) additional_owner_run: Option<DesignAssemblyOwnerRun>,
+    /// Members of a rigid group after the two in `form`, in scope order.
+    pub(crate) additional_members: Vec<DesignQualifiedAssemblyOperand>,
+}
+
+/// Counted owner references before a placement-ordered scope's locator run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DesignAssemblyOwnerRun {
+    pub(crate) count: Located<u32>,
+    pub(crate) references: Vec<Located<u32>>,
+}
+
+/// How a joint's two operand frames mate: with their z axes opposed or
+/// aligned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DesignJointFrameSense {
+    /// `z₁ = −z₀`.
+    Opposed,
+    /// `z₁ = z₀`.
+    Aligned,
 }
 
 /// One assembly operand frame and its source qualifier.
@@ -369,7 +390,28 @@ impl DesignAssemblyAlignment {
             offset,
             owners,
             form,
+            frame_sense: None,
+            additional_owner_run: None,
+            additional_members: Vec::new(),
         })
+    }
+    /// This alignment with the rigid-group members after its first two.
+    pub(crate) fn with_additional_members(
+        mut self,
+        members: Vec<DesignQualifiedAssemblyOperand>,
+    ) -> Result<Self, String> {
+        if !members.is_empty()
+            && !matches!(self.form, Some(DesignAssemblyAlignmentForm::Qualified(_)))
+        {
+            return Err("additional rigid-group members require qualified operands".into());
+        }
+        self.additional_members = members;
+        Ok(self)
+    }
+    /// This alignment with the mate sense its scope stores.
+    pub(crate) fn with_frame_sense(mut self, sense: Option<DesignJointFrameSense>) -> Self {
+        self.frame_sense = sense;
+        self
     }
     pub(crate) fn angle(&self) -> f64 {
         self.angle.get()
@@ -499,7 +541,35 @@ struct DesignAssemblyAlignmentSerde {
         deserialize_with = "deserialize_joint_origin_scope_record_index"
     )]
     joint_origin_scope_record_index: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_frame_sense"
+    )]
+    frame_sense: Option<DesignJointFrameSense>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_additional_owner_run"
+    )]
+    additional_owner_run: Option<DesignAssemblyOwnerRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    additional_operand_frames: Vec<DesignAssemblyOperandFrame>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    additional_operand_qualifiers: Vec<DesignAssemblyOperandQualifier>,
 }
+
+cadmpeg_core::named_optional_field!(
+    deserialize_additional_owner_run,
+    DesignAssemblyOwnerRun,
+    "additional_owner_run"
+);
+
+cadmpeg_core::named_optional_field!(
+    deserialize_frame_sense,
+    DesignJointFrameSense,
+    "frame_sense"
+);
 
 impl TryFrom<DesignAssemblyAlignmentSerde> for DesignAssemblyAlignment {
     type Error = String;
@@ -548,13 +618,29 @@ impl TryFrom<DesignAssemblyAlignmentSerde> for DesignAssemblyAlignment {
             (None, None, None, None, None, None) => None,
             _ => return Err("assembly alignment operand_frames, legacy_operand_carriers, solved_frame, operand_qualifiers, limits, and joint_origin_scope_record_index disagree with one form".into()),
         };
-        Self::try_new(wire.angle, wire.offset, owners, form)
+        if wire.additional_operand_frames.len() != wire.additional_operand_qualifiers.len() {
+            return Err(
+                "additional_operand_frames and additional_operand_qualifiers must have equal lengths"
+                    .into(),
+            );
+        }
+        let additional_members = wire
+            .additional_operand_frames
+            .into_iter()
+            .zip(wire.additional_operand_qualifiers)
+            .map(|(frame, qualifier)| DesignQualifiedAssemblyOperand { frame, qualifier })
+            .collect();
+        let mut alignment = Self::try_new(wire.angle, wire.offset, owners, form)?
+            .with_frame_sense(wire.frame_sense)
+            .with_additional_members(additional_members)?;
+        alignment.additional_owner_run = wire.additional_owner_run;
+        Ok(alignment)
     }
 }
 
 impl Serialize for DesignAssemblyAlignment {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut record = serializer.serialize_struct("DesignAssemblyAlignmentSerde", 10)?;
+        let mut record = serializer.serialize_struct("DesignAssemblyAlignmentSerde", 14)?;
         record.serialize_field("angle", &self.angle.get())?;
         record.serialize_field("offset", &self.offset.map(FiniteReal::get))?;
         record.serialize_field("owner_record_indices", &OwnerRecordIndices(&self.owners))?;
@@ -633,6 +719,26 @@ impl Serialize for DesignAssemblyAlignment {
                 record.serialize_field("operand_frames", &frames)?;
                 record.serialize_field("operand_qualifiers", &qualifiers)?;
             }
+        }
+        if let Some(run) = &self.additional_owner_run {
+            record.serialize_field("additional_owner_run", run)?;
+        }
+        if let Some(sense) = &self.frame_sense {
+            record.serialize_field("frame_sense", sense)?;
+        }
+        if !self.additional_members.is_empty() {
+            let frames = self
+                .additional_members
+                .iter()
+                .map(|member| &member.frame)
+                .collect::<Vec<_>>();
+            let qualifiers = self
+                .additional_members
+                .iter()
+                .map(|member| &member.qualifier)
+                .collect::<Vec<_>>();
+            record.serialize_field("additional_operand_frames", &frames)?;
+            record.serialize_field("additional_operand_qualifiers", &qualifiers)?;
         }
         record.end()
     }
@@ -1180,6 +1286,10 @@ pub(crate) struct DesignAssemblyOperandPathLink {
     pub(crate) path_reference_offset: u64,
 }
 
+/// Type GUID of the identity-qualified counted occurrence-path record. A path
+/// record of this type reads in that form whatever its dynamic class tag.
+pub(crate) const TYPED_OCCURRENCE_PATH_TYPE_GUID: &str = "96CBEA21-17E0-4BCB-BA77-04EA87B47934";
+
 /// Counted occurrence path qualifying one assembly operand construction.
 #[derive(Debug, PartialEq, Deserialize)]
 #[serde(try_from = "DesignAssemblyOperandPathWire")]
@@ -1187,11 +1297,16 @@ pub(crate) struct DesignAssemblyOperandPath {
     link: DesignAssemblyOperandPathLink,
     pub(crate) record_index: u32,
     class_tag: DesignClassTag,
+    /// Type GUID that admitted the path record, when its type admitted it.
+    type_guid: Option<DesignRelaxedGuidText>,
     byte_offset: u64,
     /// Ordered occurrence GUIDs and their UTF-16 code-unit locations.
-    occurrence_guids: Vec<Located<DesignRelaxedGuidText>>,
+    occurrence_guids: Vec<Located<DesignOccurrenceKey>>,
     /// Ordered identity GUIDs and their UTF-16 code-unit locations.
     identity_guids: Vec<Located<DesignRelaxedGuidText>>,
+    /// The occurrence identity pairs that follow the identity GUIDs, two
+    /// entries per pair, and their UTF-16 code-unit locations.
+    paired_occurrence_keys: Vec<Located<DesignOccurrenceKey>>,
 }
 
 #[cfg(test)]
@@ -1207,35 +1322,37 @@ impl Clone for DesignAssemblyOperandPath {
             link: self.link.clone(),
             record_index: self.record_index,
             class_tag: self.class_tag.clone(),
+            type_guid: self.type_guid.clone(),
             byte_offset: self.byte_offset,
             occurrence_guids: self.occurrence_guids.clone(),
             identity_guids: self.identity_guids.clone(),
+            paired_occurrence_keys: self.paired_occurrence_keys.clone(),
         }
     }
 }
 
-struct PathGuidValues<'a>(&'a [Located<DesignRelaxedGuidText>]);
-struct PathGuidOffsets<'a>(&'a [Located<DesignRelaxedGuidText>]);
+struct PathGuidValues<'a, T>(&'a [Located<T>]);
+struct PathGuidOffsets<'a, T>(&'a [Located<T>]);
 
-impl PathGuidValues<'_> {
+impl<T> PathGuidValues<'_, T> {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
 
-impl PathGuidOffsets<'_> {
+impl<T> PathGuidOffsets<'_, T> {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
 
-impl Serialize for PathGuidValues<'_> {
+impl<T: Serialize> Serialize for PathGuidValues<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.0.iter().map(|guid| &guid.value))
     }
 }
 
-impl Serialize for PathGuidOffsets<'_> {
+impl<T> Serialize for PathGuidOffsets<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.0.iter().map(|guid| guid.offset))
     }
@@ -1246,13 +1363,19 @@ struct DesignAssemblyOperandPathRef<'a> {
     link: &'a DesignAssemblyOperandPathLink,
     record_index: u32,
     class_tag: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    type_guid: Option<&'a DesignRelaxedGuidText>,
     byte_offset: u64,
-    occurrence_guids: PathGuidValues<'a>,
-    occurrence_guid_offsets: PathGuidOffsets<'a>,
+    occurrence_guids: PathGuidValues<'a, DesignOccurrenceKey>,
+    occurrence_guid_offsets: PathGuidOffsets<'a, DesignOccurrenceKey>,
     #[serde(skip_serializing_if = "PathGuidValues::is_empty")]
-    identity_guids: PathGuidValues<'a>,
+    identity_guids: PathGuidValues<'a, DesignRelaxedGuidText>,
     #[serde(skip_serializing_if = "PathGuidOffsets::is_empty")]
-    identity_guid_offsets: PathGuidOffsets<'a>,
+    identity_guid_offsets: PathGuidOffsets<'a, DesignRelaxedGuidText>,
+    #[serde(skip_serializing_if = "PathGuidValues::is_empty")]
+    paired_occurrence_keys: PathGuidValues<'a, DesignOccurrenceKey>,
+    #[serde(skip_serializing_if = "PathGuidOffsets::is_empty")]
+    paired_occurrence_key_offsets: PathGuidOffsets<'a, DesignOccurrenceKey>,
 }
 
 impl Serialize for DesignAssemblyOperandPath {
@@ -1261,11 +1384,14 @@ impl Serialize for DesignAssemblyOperandPath {
             link: &self.link,
             record_index: self.record_index,
             class_tag: self.class_tag.as_str(),
+            type_guid: self.type_guid.as_ref(),
             byte_offset: self.byte_offset,
             occurrence_guids: PathGuidValues(&self.occurrence_guids),
             occurrence_guid_offsets: PathGuidOffsets(&self.occurrence_guids),
             identity_guids: PathGuidValues(&self.identity_guids),
             identity_guid_offsets: PathGuidOffsets(&self.identity_guids),
+            paired_occurrence_keys: PathGuidValues(&self.paired_occurrence_keys),
+            paired_occurrence_key_offsets: PathGuidOffsets(&self.paired_occurrence_keys),
         }
         .serialize(serializer)
     }
@@ -1280,18 +1406,31 @@ struct DesignAssemblyOperandPathWire {
     record_index: u32,
     /// Indexed-record class carrying this path.
     class_tag: String,
+    /// Type GUID that admitted the path record, when its type admitted it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_path_type_guid"
+    )]
+    type_guid: Option<DesignRelaxedGuidText>,
     /// Byte offset of the indexed header.
     byte_offset: u64,
-    /// Ordered occurrence GUIDs from the outermost occurrence to the selected occurrence.
-    occurrence_guids: Vec<DesignRelaxedGuidText>,
+    /// Ordered occurrence keys, or the zero key of a document-root path.
+    occurrence_guids: Vec<DesignOccurrenceKey>,
     /// Byte offsets of the UTF-16 GUID code units parallel to `occurrence_guids`.
     occurrence_guid_offsets: Vec<u64>,
-    /// Four ordered identity GUIDs following a class-390 occurrence path.
+    /// Ordered identity GUIDs of each path record; a root path has two.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     identity_guids: Vec<DesignRelaxedGuidText>,
     /// Byte offsets parallel to `identity_guids`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     identity_guid_offsets: Vec<u64>,
+    /// Occurrence identity pairs after the identity GUIDs, two entries per pair.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    paired_occurrence_keys: Vec<DesignOccurrenceKey>,
+    /// Byte offsets parallel to `paired_occurrence_keys`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    paired_occurrence_key_offsets: Vec<u64>,
 }
 
 impl DesignAssemblyOperandPath {
@@ -1300,15 +1439,52 @@ impl DesignAssemblyOperandPath {
         record_index: u32,
         class_tag: DesignClassTag,
         byte_offset: u64,
-        occurrence_guids: Vec<Located<DesignRelaxedGuidText>>,
+        occurrence_guids: Vec<Located<DesignOccurrenceKey>>,
         identity_guids: Vec<Located<DesignRelaxedGuidText>>,
     ) -> Result<Self, String> {
+        Self::try_new_typed(
+            link,
+            record_index,
+            class_tag,
+            None,
+            byte_offset,
+            occurrence_guids,
+            identity_guids,
+        )
+    }
+    /// A path whose record `type_guid` admitted it, or `None` for a path
+    /// admitted by its class tag.
+    pub(crate) fn try_new_typed(
+        link: DesignAssemblyOperandPathLink,
+        record_index: u32,
+        class_tag: DesignClassTag,
+        type_guid: Option<DesignRelaxedGuidText>,
+        byte_offset: u64,
+        occurrence_guids: Vec<Located<DesignOccurrenceKey>>,
+        identity_guids: Vec<Located<DesignRelaxedGuidText>>,
+    ) -> Result<Self, String> {
+        let typed = match &type_guid {
+            Some(guid)
+                if guid
+                    .as_str()
+                    .eq_ignore_ascii_case(TYPED_OCCURRENCE_PATH_TYPE_GUID) =>
+            {
+                true
+            }
+            Some(_) => return Err("type_guid names no occurrence-path record type".into()),
+            None => false,
+        };
         let legacy_pair =
             class_tag.as_str() == "386" && matches!(link.locator_class_tag.as_str(), "363" | "378");
         if occurrence_guids.is_empty() || (legacy_pair && occurrence_guids.len() != 1) {
             return Err("occurrence_guids has invalid assembly path arity".into());
         }
-        let identity_arity = if legacy_pair {
+        let root_path = occurrence_guids.len() == 1
+            && occurrence_guids[0].value.as_str() == "00000000-0000-0000-0000-000000000000"
+            && identity_guids.len() == 2;
+        let identity_arity = if typed {
+            root_path || !identity_guids.is_empty() && identity_guids.len().is_multiple_of(4)
+        } else if legacy_pair {
             identity_guids.len() == 1
         } else {
             match class_tag.as_str() {
@@ -1321,17 +1497,27 @@ impl DesignAssemblyOperandPath {
         if !identity_arity {
             return Err("identity_guids has invalid assembly path class arity".into());
         }
-        for (field, guids) in [
-            ("occurrence_guids", &occurrence_guids),
-            ("identity_guids", &identity_guids),
+        let follows_byte_offset = !legacy_pair && class_tag.as_str() != "412";
+        for (field, offsets) in [
+            (
+                "occurrence_guids",
+                occurrence_guids
+                    .iter()
+                    .map(|guid| guid.offset)
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "identity_guids",
+                identity_guids
+                    .iter()
+                    .map(|guid| guid.offset)
+                    .collect::<Vec<_>>(),
+            ),
         ] {
-            if !guids.windows(2).all(|pair| pair[0].offset < pair[1].offset) {
+            if !offsets.windows(2).all(|pair| pair[0] < pair[1]) {
                 return Err(format!("{field} offsets must strictly increase"));
             }
-            if !legacy_pair
-                && class_tag.as_str() != "412"
-                && guids.iter().any(|guid| guid.offset <= byte_offset)
-            {
+            if follows_byte_offset && offsets.iter().any(|offset| *offset <= byte_offset) {
                 return Err(format!("{field} offsets must follow byte_offset"));
             }
         }
@@ -1339,9 +1525,11 @@ impl DesignAssemblyOperandPath {
             link,
             record_index,
             class_tag,
+            type_guid,
             byte_offset,
             occurrence_guids,
             identity_guids,
+            paired_occurrence_keys: Vec::new(),
         })
     }
     pub(crate) fn link(&self) -> &DesignAssemblyOperandPathLink {
@@ -1350,44 +1538,84 @@ impl DesignAssemblyOperandPath {
     pub(crate) fn class_tag(&self) -> &DesignClassTag {
         &self.class_tag
     }
+    /// Whether the path record's type, not its class tag, admitted it.
+    pub(crate) fn admitted_by_type(&self) -> bool {
+        self.type_guid.is_some()
+    }
+    pub(crate) fn is_root(&self) -> bool {
+        self.admitted_by_type()
+            && self.occurrence_guids.len() == 1
+            && self.occurrence_guids[0].value.as_str() == "00000000-0000-0000-0000-000000000000"
+            && self.identity_guids.len() == 2
+    }
     pub(crate) fn byte_offset(&self) -> u64 {
         self.byte_offset
     }
-    pub(crate) fn occurrence_guids(&self) -> &[Located<DesignRelaxedGuidText>] {
+    pub(crate) fn occurrence_guids(&self) -> &[Located<DesignOccurrenceKey>] {
         &self.occurrence_guids
     }
     pub(crate) fn identity_guids(&self) -> &[Located<DesignRelaxedGuidText>] {
         &self.identity_guids
     }
-    pub(crate) fn try_append(
-        self,
-        continuation: Self,
-        ctx: &DecodeContext<'_>,
-    ) -> Result<Option<Self>, CodecError> {
-        if self.class_tag.as_str() != "330" || continuation.class_tag.as_str() != "330" {
-            return Ok(None);
+    pub(crate) fn paired_occurrence_keys(&self) -> &[Located<DesignOccurrenceKey>] {
+        &self.paired_occurrence_keys
+    }
+    /// This path with the occurrence identity pairs that follow its identity
+    /// GUIDs, two entries per pair, in source order after its first
+    /// occurrence. A continued path keeps each record's pairs, so a pair can
+    /// precede a continuation's identities.
+    pub(crate) fn with_paired_occurrence_keys(
+        mut self,
+        keys: Vec<Located<DesignOccurrenceKey>>,
+    ) -> Result<Self, String> {
+        if !keys.len().is_multiple_of(2) {
+            return Err("paired_occurrence_keys must hold whole pairs".into());
+        }
+        let mut previous = self
+            .occurrence_guids
+            .first()
+            .map_or(self.byte_offset, |guid| guid.offset);
+        for key in &keys {
+            if key.offset <= previous {
+                return Err(
+                    "paired_occurrence_keys must follow the path's first occurrence in order"
+                        .into(),
+                );
+            }
+            previous = key.offset;
+        }
+        self.paired_occurrence_keys = keys;
+        Ok(self)
+    }
+    /// This path continued by a further path record of its own form: two
+    /// class-330 records, or two records admitted by the typed path type.
+    pub(crate) fn try_append(self, continuation: Self) -> Option<Self> {
+        if self.is_root() || continuation.is_root() {
+            return None;
+        }
+        let typed = self.admitted_by_type() && continuation.admitted_by_type();
+        if !typed && (self.class_tag.as_str() != "330" || continuation.class_tag.as_str() != "330")
+        {
+            return None;
         }
         let mut occurrences = self.occurrence_guids;
-        ctx.extend_vec(
-            &mut occurrences,
-            continuation.occurrence_guids,
-            "f3d assembly path appended occurrences",
-        )?;
+        occurrences.extend(continuation.occurrence_guids);
         let mut identities = self.identity_guids;
-        ctx.extend_vec(
-            &mut identities,
-            continuation.identity_guids,
-            "f3d assembly path appended identities",
-        )?;
-        Ok(Self::try_new(
+        identities.extend(continuation.identity_guids);
+        let mut pairs = self.paired_occurrence_keys;
+        pairs.extend(continuation.paired_occurrence_keys);
+        Self::try_new_typed(
             self.link,
             self.record_index,
             self.class_tag,
+            self.type_guid,
             self.byte_offset,
             occurrences,
             identities,
         )
-        .ok())
+        .ok()?
+        .with_paired_occurrence_keys(pairs)
+        .ok()
     }
 }
 
@@ -1403,10 +1631,23 @@ impl TryFrom<DesignAssemblyOperandPathWire> for DesignAssemblyOperandPath {
         if wire.identity_guids.len() != wire.identity_guid_offsets.len() {
             return Err("identity_guids and identity_guid_offsets must have equal lengths".into());
         }
-        Self::try_new(
+        if wire.paired_occurrence_keys.len() != wire.paired_occurrence_key_offsets.len() {
+            return Err(
+                "paired_occurrence_keys and paired_occurrence_key_offsets must have equal lengths"
+                    .into(),
+            );
+        }
+        let pairs = wire
+            .paired_occurrence_keys
+            .into_iter()
+            .zip(wire.paired_occurrence_key_offsets)
+            .map(|(value, offset)| Located { value, offset })
+            .collect();
+        Self::try_new_typed(
             wire.link,
             wire.record_index,
             wire.class_tag.try_into()?,
+            wire.type_guid,
             wire.byte_offset,
             wire.occurrence_guids
                 .into_iter()
@@ -1418,7 +1659,8 @@ impl TryFrom<DesignAssemblyOperandPathWire> for DesignAssemblyOperandPath {
                 .zip(wire.identity_guid_offsets)
                 .map(|(value, offset)| Located { value, offset })
                 .collect(),
-        )
+        )?
+        .with_paired_occurrence_keys(pairs)
     }
 }
 
@@ -1435,15 +1677,23 @@ impl From<DesignAssemblyOperandPath> for DesignAssemblyOperandPathWire {
             .into_iter()
             .map(|guid| (guid.value, guid.offset))
             .unzip();
+        let (paired_occurrence_keys, paired_occurrence_key_offsets) = path
+            .paired_occurrence_keys
+            .into_iter()
+            .map(|key| (key.value, key.offset))
+            .unzip();
         Self {
             link: path.link,
             record_index: path.record_index,
             class_tag: path.class_tag.into(),
+            type_guid: path.type_guid,
             byte_offset: path.byte_offset,
             occurrence_guids,
             occurrence_guid_offsets,
             identity_guids,
             identity_guid_offsets,
+            paired_occurrence_keys,
+            paired_occurrence_key_offsets,
         }
     }
 }
@@ -1479,7 +1729,7 @@ pub(crate) enum DesignAssemblyOperandQualifier {
 
 impl DesignAssemblyOperandQualifier {
     /// Return the occurrence path when this qualifier carries one.
-    fn occurrence_path(&self) -> Option<&DesignAssemblyOperandPath> {
+    pub(crate) fn occurrence_path(&self) -> Option<&DesignAssemblyOperandPath> {
         match self {
             Self::OccurrencePath { path } => Some(path),
             Self::AxialTarget { .. } | Self::JointOrigin { .. } => None,
@@ -1490,7 +1740,7 @@ impl DesignAssemblyOperandQualifier {
 /// One operand frame embedded by an assembly-operation scope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DesignAssemblyOperandFrame {
-    /// Construction record referenced by the operand.
+    /// Record that supplies or carries the operand frame.
     pub(crate) reference_record_index: u32,
     /// Byte offset of `reference_record_index`.
     pub(crate) reference_offset: u64,
@@ -1504,6 +1754,11 @@ pub(crate) struct DesignAssemblyOperandFrame {
 mod tests;
 
 // Each optional key below names itself in whatever it refuses.
+cadmpeg_core::named_optional_field!(
+    deserialize_path_type_guid,
+    DesignRelaxedGuidText,
+    "type_guid"
+);
 cadmpeg_core::named_optional_field!(
     deserialize_operand_frames,
     [DesignAssemblyOperandFrame; 2],

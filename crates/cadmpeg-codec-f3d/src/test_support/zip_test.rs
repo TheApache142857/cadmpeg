@@ -12,6 +12,7 @@ use cadmpeg_ir::codec::{Codec, DecodeOptions};
 use zip::CompressionMethod;
 
 use crate::container;
+use crate::test_support::lost_edge_test::remove_body_lost_edge_bulkstream;
 use crate::test_support::manifest_test::{
     write_synthetic_manifests, write_synthetic_manifests_with_version,
 };
@@ -243,6 +244,22 @@ pub(crate) fn f3d_with_smbh_and_protein_with_generated_remove_body(smbh: &[u8]) 
     )
 }
 
+/// The generated `RemoveBody` design whose two-operand construction group ends
+/// an unresolved edge run of `run` records.
+pub(crate) fn f3d_with_smbh_and_remove_body_lost_edge_run(smbh: &[u8], run: u32) -> Vec<u8> {
+    let properties = vec![generated_instance_properties_for(
+        "11111111-2222-3333-4444-555555555555",
+    )];
+    let (design_bulk, design_records) = remove_body_lost_edge_bulkstream(run);
+    let design_metastream = generated_design_remove_body_metastream(&design_records);
+    f3d_with_smbh_and_instance_properties_and_design_with_metastream(
+        smbh,
+        &properties,
+        &design_bulk,
+        &design_metastream,
+    )
+}
+
 pub(crate) fn f3d_with_smbh_and_protein_with_generated_surface_stitch(smbh: &[u8]) -> Vec<u8> {
     let properties = vec![generated_instance_properties_for(
         "11111111-2222-3333-4444-555555555555",
@@ -301,7 +318,7 @@ pub(crate) fn f3d_with_smbh_and_protein_with_generated_form(smbh: &[u8]) -> Vec<
     )
 }
 
-fn generated_form_tsm() -> Vec<u8> {
+pub(crate) fn generated_form_tsm() -> Vec<u8> {
     br"#TS0200
 degree 3
 cap-type G1CAPS

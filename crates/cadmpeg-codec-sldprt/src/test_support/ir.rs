@@ -5,7 +5,6 @@
 use cadmpeg_ir::codec::write::target::TargetRequest;
 use std::io::Cursor;
 
-use cadmpeg_ir::codec::write::Encoder;
 use cadmpeg_ir::codec::{Codec, DecodeOptions};
 
 use crate::SldprtCodec;
@@ -83,19 +82,15 @@ pub(crate) fn translate_model_x(ir: &mut cadmpeg_ir::document::CadIr, dx: f64) {
             }
             CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(nurbs)) => {
                 nurbs
-                    .try_map_control_points(
-                        |_, pole| {
-                            let mut pole = pole.get();
-                            pole.x += dx;
-                            cadmpeg_ir::features::FinitePoint3::new(pole).ok_or_else(|| {
-                                cadmpeg_ir::geometry::nurbs::NurbsError::Structure(
-                                    "control_points contains a non-finite point".into(),
-                                )
-                            })
-                        },
-                        &cadmpeg_test_support::service_decode_context(),
-                    )
-                    .expect("pole edit admission")
+                    .try_map_control_points(|_, pole| {
+                        let mut pole = pole.get();
+                        pole.x += dx;
+                        cadmpeg_ir::features::FinitePoint3::new(pole).ok_or_else(|| {
+                            cadmpeg_ir::geometry::nurbs::NurbsError::Structure(
+                                "control_points contains a non-finite point".into(),
+                            )
+                        })
+                    })
                     .unwrap();
             }
             CurveGeometry::Solved(SolvedCurveGeometry::Polyline(polyline)) => {
@@ -197,19 +192,15 @@ pub(crate) fn translate_model_x(ir: &mut cadmpeg_ir::document::CadIr, dx: f64) {
             }
             SurfaceGeometry::Solved(SolvedSurfaceGeometry::Nurbs(nurbs)) => {
                 nurbs
-                    .try_map_control_points(
-                        |_, pole| {
-                            let mut pole = pole.get();
-                            pole.x += dx;
-                            cadmpeg_ir::features::FinitePoint3::new(pole).ok_or_else(|| {
-                                cadmpeg_ir::geometry::nurbs::NurbsError::Structure(
-                                    "control_points contains a non-finite point".into(),
-                                )
-                            })
-                        },
-                        &cadmpeg_test_support::service_decode_context(),
-                    )
-                    .expect("pole edit admission")
+                    .try_map_control_points(|_, pole| {
+                        let mut pole = pole.get();
+                        pole.x += dx;
+                        cadmpeg_ir::features::FinitePoint3::new(pole).ok_or_else(|| {
+                            cadmpeg_ir::geometry::nurbs::NurbsError::Structure(
+                                "control_points contains a non-finite point".into(),
+                            )
+                        })
+                    })
                     .unwrap();
             }
             SurfaceGeometry::Solved(SolvedSurfaceGeometry::Polygonal(surface)) => {
@@ -238,7 +229,7 @@ pub(crate) fn translate_model_x(ir: &mut cadmpeg_ir::document::CadIr, dx: f64) {
 pub(crate) fn strict_options() -> DecodeOptions {
     use cadmpeg_core::decode::{DecodeMode, DecodePolicy};
     DecodeOptions {
-        container_only: false,
+        depth: cadmpeg_core::decode::DecodeDepth::Full,
         policy: DecodePolicy {
             mode: DecodeMode::Strict,
             ..DecodePolicy::desktop()
@@ -294,13 +285,12 @@ pub(crate) fn source_less_cube() -> cadmpeg_ir::CadIr {
 
 pub(crate) fn encode_decode_result(ir: &cadmpeg_ir::CadIr) -> cadmpeg_ir::codec::DecodeResult {
     let mut encoded = Vec::new();
-    SldprtCodec
-        .plan(
-            cadmpeg_ir::codec::write::EncodeInput { ir, fidelity: None },
-            TargetRequest::Inherit,
-        )
-        .and_then(|plan| plan.write_to(&mut encoded))
-        .unwrap();
+    crate::test_support::plan_fixture_with_native_envelope(
+        cadmpeg_ir::codec::write::EncodeInput { ir, fidelity: None },
+        TargetRequest::Inherit,
+    )
+    .and_then(|plan| plan.write_to(&mut encoded))
+    .unwrap();
     SldprtCodec
         .decode(&mut Cursor::new(encoded), &DecodeOptions::default())
         .unwrap()

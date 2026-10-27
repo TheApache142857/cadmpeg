@@ -2,8 +2,6 @@
 
 use std::collections::BTreeMap;
 
-use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-use cadmpeg_core::CodecError;
 use cadmpeg_ir::document::CadIr;
 use cadmpeg_ir::features::{
     Feature, FeatureDefinition as IrFeatureDefinition, FeatureOperation as IrFeatureOperation,
@@ -80,13 +78,6 @@ fn feature(id: &str) -> Feature {
     }
 }
 
-fn link_service(scan: &crate::container::ContainerScan<'_>, ir: &mut CadIr) {
-    let arena = DecodeArena::new();
-    let policy = DecodePolicy::service();
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).expect("empty root");
-    link_feature_sketch_history(&ctx, scan, ir).expect("service history link");
-}
-
 #[test]
 fn history_link_rejects_duplicate_owner_feature_ids() {
     let scan = section_scan();
@@ -97,7 +88,7 @@ fn history_link_rejects_duplicate_owner_feature_ids() {
         feature("creo:model:sketch_feature#7"),
     ]);
 
-    link_service(&scan, &mut ir);
+    link_feature_sketch_history(&scan, &mut ir).expect("history link");
 
     assert!(ir.model.features[..2]
         .iter()
@@ -114,34 +105,13 @@ fn history_link_rejects_duplicate_sketch_feature_ids() {
         feature("creo:model:sketch_feature#7"),
     ]);
 
-    link_service(&scan, &mut ir);
+    link_feature_sketch_history(&scan, &mut ir).expect("history link");
 
     assert!(ir.model.features[0].dependencies.is_empty());
 }
 
 #[test]
-fn history_link_refuses_dependency_vector_before_growth() {
-    let scan = section_scan();
-    let mut ir = CadIr::empty();
-    ir.model.features.extend([
-        feature("creo:model:feature#2"),
-        feature("creo:model:sketch_feature#7"),
-    ]);
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).expect("empty root");
-
-    let error = link_feature_sketch_history(&ctx, &scan, &mut ir)
-        .expect_err("one sketch dependency exceeds the limit");
-    assert!(matches!(error, CodecError::ResourceLimit(resource)
-        if resource.dimension == ResourceDimension::CollectionItems
-            && resource.operation == "creo sketch history dependencies"));
-    assert!(ir.model.features[0].dependencies.is_empty());
-}
-
-#[test]
-fn history_link_preserves_service_profile_dependency() {
+fn history_link_records_sketch_dependency() {
     let scan = section_scan();
     let mut ir = CadIr::empty();
     ir.model.features.extend([
@@ -150,7 +120,7 @@ fn history_link_preserves_service_profile_dependency() {
     ]);
     let sketch_feature = ir.model.features[1].id.clone();
 
-    link_service(&scan, &mut ir);
+    link_feature_sketch_history(&scan, &mut ir).expect("history link");
 
     assert_eq!(
         ir.model.features[0].dependencies.as_slice(),
@@ -266,6 +236,141 @@ fn rowless_generated_profile_rejects_duplicate_entity_ids() {
     ));
 }
 
+fn two_cap_circular_profile_fixture() -> (
+    crate::feature::entity::FeatureEntityTable,
+    [crate::surface::SurfaceRow; 3],
+) {
+    let entry =
+        |entity_id, class_id, source_entity_id| crate::feature::entity::FeatureEntityTableEntry {
+            payload: crate::feature::entity::entry_payload(class_id, source_entity_id, None, None),
+            entity_id,
+            prefixed: false,
+            offset: 0,
+            end_offset: 0,
+        };
+    let table = crate::feature::entity::FeatureEntityTable::new(
+        7,
+        29,
+        vec![
+            entry(29, 204, None),
+            entry(30, 203, None),
+            entry(31, 200, Some(11)),
+            entry(32, 200, None),
+        ],
+        &std::collections::BTreeSet::new(),
+        0,
+    )
+    .with_surface_ids([29, 30, 32]);
+    let row = |id, kind| crate::surface::SurfaceRow {
+        id,
+        kind,
+        feature_id: 7,
+        reversed: false,
+        boundary_type: crate::surface::BoundaryType::Code00,
+        next_surface: 0,
+        offset: 0,
+    };
+    (
+        table,
+        [
+            row(29, crate::surface::SurfaceKind::Plane),
+            row(30, crate::surface::SurfaceKind::Plane),
+            row(32, crate::surface::SurfaceKind::Cylinder),
+        ],
+    )
+}
+
+fn circular_profile_admitted(
+    tables: &[crate::feature::entity::FeatureEntityTable],
+    rows: &[crate::surface::SurfaceRow],
+) -> bool {
+    section_entity_is_generated_profile(
+        true,
+        Some(7),
+        11,
+        &[crate::surface::SurfaceKind::Cylinder],
+        tables,
+        rows,
+    )
+}
+
+#[test]
+fn two_cap_circular_profile_binds_the_owned_source() {
+    let (table, rows) = two_cap_circular_profile_fixture();
+    assert!(circular_profile_admitted(
+        std::slice::from_ref(&table),
+        &rows
+    ));
+    for (complete, owner, source) in [
+        (false, Some(7), 11),
+        (true, None, 11),
+        (true, Some(8), 11),
+        (true, Some(7), 12),
+    ] {
+        assert!(!section_entity_is_generated_profile(
+            complete,
+            owner,
+            source,
+            &[crate::surface::SurfaceKind::Cylinder],
+            std::slice::from_ref(&table),
+            &rows,
+        ));
+    }
+}
+
+#[test]
+fn two_cap_circular_profile_requires_unique_owned_carriers() {
+    let (table, rows) = two_cap_circular_profile_fixture();
+    for (index, _) in rows.iter().enumerate() {
+        let mut foreign = rows.clone();
+        foreign[index].feature_id = 8;
+        assert!(!circular_profile_admitted(
+            std::slice::from_ref(&table),
+            &foreign
+        ));
+    }
+    let mut duplicate = rows.to_vec();
+    duplicate.push(rows[0].clone());
+    assert!(!circular_profile_admitted(
+        std::slice::from_ref(&table),
+        &duplicate
+    ));
+    let mut wrong_family = rows;
+    wrong_family[2].kind = crate::surface::SurfaceKind::Plane;
+    assert!(!circular_profile_admitted(
+        std::slice::from_ref(&table),
+        &wrong_family
+    ));
+}
+
+#[test]
+fn two_cap_circular_profile_rejects_competing_or_mixed_tables() {
+    let (mut table, rows) = two_cap_circular_profile_fixture();
+    assert!(!circular_profile_admitted(
+        &[table.clone(), table.clone()],
+        &rows
+    ));
+    table
+        .entries
+        .push(crate::feature::entity::FeatureEntityTableEntry {
+            payload: crate::feature::entity::entry_payload(200, Some(12), None, None),
+            entity_id: 33,
+            prefixed: false,
+            offset: 0,
+            end_offset: 0,
+        });
+    assert!(!circular_profile_admitted(
+        std::slice::from_ref(&table),
+        &rows
+    ));
+    let (mut table, rows) = two_cap_circular_profile_fixture();
+    table.entries[1].entity_id = table.entries[0].entity_id;
+    assert!(!circular_profile_admitted(
+        std::slice::from_ref(&table),
+        &rows
+    ));
+}
+
 fn ordered_binding_fixture() -> (
     crate::feature::entity::FeatureEntityTable,
     crate::feature::definitions::FeatureOrderTable,
@@ -309,47 +414,11 @@ fn ordered_binding_fixture() -> (
     (table, order, rows)
 }
 
-fn ordered_binding_limit_error(limit: u64, operation: &'static str) {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
+#[test]
+fn ordered_generated_surface_binding_keeps_identity() {
     let (table, order, rows) = ordered_binding_fixture();
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = limit;
-    let (ctx, _) =
-        DecodeContext::from_root_bytes(&[], &arena, &policy).expect("empty root is admitted");
-    let error = ordered_family_surface_bindings_for_feature(
-        &ctx,
-        &rows,
-        17,
-        &[table],
-        &order,
-        [9],
-        crate::surface::SurfaceKind::TorusOrSphere,
-    )
-    .expect_err("one generated surface binding exceeds the collection limit");
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(resource)
-        if resource.operation == operation),
-        "{error:?}"
-    );
-}
-
-#[test]
-fn ordered_generated_surface_ids_refuse_collection_limit() {
-    ordered_binding_limit_error(0, "creo bound generated surface IDs");
-}
-
-#[test]
-fn ordered_generated_surface_bindings_refuse_collection_limit() {
-    ordered_binding_limit_error(1, "creo ordered generated surface bindings");
-}
-
-#[test]
-fn ordered_generated_surface_binding_keeps_identity_under_service_policy() {
-    let (table, order, rows) = ordered_binding_fixture();
-    let bindings = crate::decode::with_test_decode_ctx(|ctx| {
+    let bindings = {
         ordered_family_surface_bindings_for_feature(
-            ctx,
             &rows,
             17,
             &[table],
@@ -357,14 +426,12 @@ fn ordered_generated_surface_binding_keeps_identity_under_service_policy() {
             [9],
             crate::surface::SurfaceKind::TorusOrSphere,
         )
-    })
-    .expect("service profile admits generated surface binding");
+    };
     assert_eq!(bindings, BTreeMap::from([(9, 43)]));
 }
 
 #[test]
-fn profile_segment_ids_refuse_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
+fn profile_segment_ids_match_profile_entities() {
     let segment = crate::feature::definitions::FeatureSegment {
         kind: crate::feature::definitions::FeatureSegmentKind::Line([1, 2]),
         directions: [None; 3],
@@ -384,26 +451,8 @@ fn profile_segment_ids_refuse_collection_limit() {
         .expect("profile entity identity"),
         reversed: false,
     }]];
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) =
-        DecodeContext::from_root_bytes(&[], &arena, &policy).expect("empty root is admitted");
-    let error = profile_segment_ids(&ctx, 2, &[&segment], &profiles)
-        .expect_err("one matched profile ID exceeds the collection limit");
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(resource)
-        if resource.operation == "creo profile segment ID nodes"),
-        "{error:?}"
-    );
     assert_eq!(
-        crate::decode::with_test_decode_ctx(|ctx| profile_segment_ids(
-            ctx,
-            2,
-            &[&segment],
-            &profiles
-        ))
-        .expect("service profile admits one profile ID"),
+        profile_segment_ids(2, &[&segment], &profiles),
         std::collections::BTreeSet::from([9]),
     );
 }

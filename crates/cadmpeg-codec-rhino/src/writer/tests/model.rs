@@ -131,23 +131,25 @@ fn multi_face_resolves_domains_and_incidence_in_arena_order() {
 }
 
 #[test]
-fn brep_mesh_presence_refuses_one_below_collection_need() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    use cadmpeg_core::CodecError;
-    let ir = polygon_sheet(&[
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(2.0, 0.0, 0.0),
-        Point3::new(0.0, 2.0, 0.0),
-    ]);
-    let model = WritableModel::try_new(&ir).expect("writable triangle");
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).expect("root");
-    let error = super::super::brep_payload(&ctx, &model, crate::RhinoArchiveVersion::V8)
+fn shell_face_listing_order_is_not_the_arena_order() {
+    let mut ir = cadmpeg_ir::examples::unit_cube().expect("unit cube fixture is admitted");
+    for face in &mut ir.model.faces {
+        face.name = None;
+    }
+    let arena: Vec<_> = ir.model.faces.iter().map(|face| face.id.clone()).collect();
+    assert_ne!(ir.model.shells[0].faces(), arena.as_slice());
+    assert!(WritableModel::try_new(&ir).is_ok());
+    let shell = &ir.model.shells[0];
+    ir.model.shells[0] = cadmpeg_ir::topology::Shell::new(
+        shell.id.clone(),
+        shell.region.clone(),
+        shell.faces()[1..].to_vec(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("a shell with faces");
+    let error = WritableModel::try_new(&ir)
         .err()
-        .expect("one face exceeds zero slots");
-    assert!(matches!(error, CodecError::ResourceLimit(limit)
-        if limit.dimension == ResourceDimension::CollectionItems
-            && limit.operation == "Rhino Brep mesh presence"));
+        .expect("a shell face missing from the arena is inconsistent");
+    assert!(matches!(error, cadmpeg_core::CodecError::Malformed(_)));
 }

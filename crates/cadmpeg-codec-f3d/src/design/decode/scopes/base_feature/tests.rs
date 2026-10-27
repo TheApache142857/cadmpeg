@@ -7,7 +7,6 @@ use crate::records::feature::base_feature::DesignBaseFeatureConstruction;
 use crate::records::feature::scope::{DesignFeatureKind, DesignParameterScope};
 use crate::records::identity::ReferenceRun;
 use crate::records::references::DesignClassTag;
-use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
 
 fn result_body_frame() -> (Vec<u8>, DesignParameterScope) {
     let body_count = 3usize;
@@ -81,35 +80,9 @@ fn result_body_frame() -> (Vec<u8>, DesignParameterScope) {
 }
 
 #[test]
-fn base_feature_result_runs_refuse_each_collection_limit() {
+fn base_feature_result_runs_admit_three_bodies() {
     let (bytes, scope) = result_body_frame();
-    for (limit, operation) in [
-        (2, "f3d BaseFeature entities"),
-        (5, "f3d BaseFeature references"),
-        (8, "f3d BaseFeature repeated reference fields"),
-        (10, "f3d BaseFeature remaining result bodies"),
-    ] {
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::default();
-        policy.limits.max_collection_items = limit;
-
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let result = exact_base_feature_construction(&ctx, &bytes, &scope);
-        assert!(
-            matches!(
-                result,
-                Err(cadmpeg_core::CodecError::ResourceLimit(failure))
-                    if failure.dimension == ResourceDimension::CollectionItems
-                        && failure.operation == operation
-            ),
-            "limit {limit}: {operation}"
-        );
-    }
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_collection_items = 11;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let result = exact_base_feature_construction(&ctx, &bytes, &scope)
+    let result = exact_base_feature_construction(&bytes, &scope)
         .unwrap()
         .expect("admitted BaseFeature result bodies");
     let DesignBaseFeatureConstruction::ResultBodies { bodies, .. } = result else {
@@ -123,7 +96,7 @@ fn snapshot_frame() -> (Vec<u8>, DesignParameterScope) {
     bytes[19] = 1;
     bytes[20..24].copy_from_slice(&2u32.to_le_bytes());
     let mut cursor = 24;
-    for (value, field) in [(101u64, [1u8, 2, 3, 4, 5, 6]), (202, [6u8, 5, 4, 3, 2, 1])] {
+    for (value, field) in [(101u64, [0u8, 0, 3, 4, 5, 6]), (202, [0u8, 0, 4, 3, 2, 1])] {
         bytes[cursor] = 1;
         bytes[cursor + 1..cursor + 9].copy_from_slice(&value.to_le_bytes());
         bytes[cursor + 9..cursor + 15].copy_from_slice(&field);
@@ -203,24 +176,9 @@ fn snapshot_frame() -> (Vec<u8>, DesignParameterScope) {
 }
 
 #[test]
-fn base_feature_snapshot_bodies_refuse_collection_limit() {
+fn base_feature_snapshot_admits_two_bodies() {
     let (bytes, scope) = snapshot_frame();
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::default();
-    policy.limits.max_collection_items = 1;
-
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let result = exact_base_feature_construction(&ctx, &bytes, &scope);
-    assert!(matches!(
-        result,
-        Err(cadmpeg_core::CodecError::ResourceLimit(failure))
-            if failure.dimension == ResourceDimension::CollectionItems
-                && failure.operation == "f3d BaseFeature snapshot bodies"
-    ));
-    let arena = DecodeArena::new();
-    policy.limits.max_collection_items = 2;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    let result = exact_base_feature_construction(&ctx, &bytes, &scope)
+    let result = exact_base_feature_construction(&bytes, &scope)
         .unwrap()
         .expect("admitted BaseFeature body snapshot");
     let DesignBaseFeatureConstruction::BodySnapshot { bodies, .. } = result else {
@@ -230,102 +188,46 @@ fn base_feature_snapshot_bodies_refuse_collection_limit() {
 }
 
 #[test]
-fn base_feature_snapshot_guid_refusal_is_not_an_absent_candidate() {
-    let (bytes, scope) = snapshot_frame();
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_retained_bytes = 0;
-    let refusal_cap = match cadmpeg_test_support::refusal::resource_limit_at(
-        ResourceDimension::RetainedBytes,
-        "retain F3D relaxed GUID",
-        |cap| {
-            let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-            match ResourceDimension::RetainedBytes {
-                cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                    policy.limits.max_retained_bytes = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-                    policy.limits.max_collection_items = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-                    policy.limits.max_materialized_bytes = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-                    policy.limits.max_work_units = cap;
-                }
-                dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-            }
-            let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            (exact_base_feature_construction(&ctx, &bytes, &scope)).map(|_| ())
-        },
-    ) {
-        cadmpeg_core::CodecError::ResourceLimit(limit) => limit.limit,
-        error => panic!("unexpected refusal: {error:?}"),
-    };
-    policy.limits = cadmpeg_core::decode::DecodePolicy::service().limits;
-    match ResourceDimension::RetainedBytes {
-        cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-            policy.limits.max_retained_bytes = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-            policy.limits.max_collection_items = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-            policy.limits.max_materialized_bytes = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-            policy.limits.max_work_units = refusal_cap;
-        }
-        dimension => panic!("unsupported refusal dimension: {dimension:?}"),
+fn local_base_feature_entries_preserve_per_element_members() {
+    let mut bytes = Vec::new();
+    for (target, member) in [(2485u64, 0u32), (2493, 1), (2494, u32::MAX)] {
+        bytes.push(1);
+        bytes.extend_from_slice(&target.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.extend_from_slice(&member.to_le_bytes());
     }
-    let refusal_cap = match cadmpeg_test_support::refusal::resource_limit_at(
-        ResourceDimension::RetainedBytes,
-        "retain F3D relaxed GUID",
-        |cap| {
-            let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-            match ResourceDimension::RetainedBytes {
-                cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                    policy.limits.max_retained_bytes = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-                    policy.limits.max_collection_items = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-                    policy.limits.max_materialized_bytes = cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-                    policy.limits.max_work_units = cap;
-                }
-                dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-            }
-            let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            (exact_base_feature_construction(&ctx, &bytes, &scope)).map(|_| ())
-        },
-    ) {
-        cadmpeg_core::CodecError::ResourceLimit(limit) => limit.limit,
-        error => panic!("unexpected refusal: {error:?}"),
-    };
-    policy.limits = cadmpeg_core::decode::DecodePolicy::service().limits;
-    match ResourceDimension::RetainedBytes {
-        cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-            policy.limits.max_retained_bytes = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-            policy.limits.max_collection_items = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-            policy.limits.max_materialized_bytes = refusal_cap;
-        }
-        cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-            policy.limits.max_work_units = refusal_cap;
-        }
-        dimension => panic!("unsupported refusal dimension: {dimension:?}"),
+    let mut cursor = 0;
+    for (target, member) in [(2485u64, 0u32), (2493, 1), (2494, u32::MAX)] {
+        let entry = super::read_base_feature_entry_at(&bytes, &mut cursor).unwrap();
+        assert_eq!(entry.value, target);
+        assert_eq!(&entry.field[2..], &member.to_le_bytes());
     }
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-    assert!(
-        matches!(exact_base_feature_construction(&ctx, &bytes, &scope),
-        Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-            if limit.dimension == ResourceDimension::RetainedBytes
-                && limit.operation == "retain F3D relaxed GUID" && limit.additional == 36)
-    );
+    assert_eq!(cursor, bytes.len());
+    for (slot, value) in [(9, 1), (10, 1), (9, 2), (10, 2), (9, 36)] {
+        let mut widened = bytes.clone();
+        widened[slot] = value;
+        let mut cursor = 0;
+        assert!(super::read_base_feature_entry_at(&widened, &mut cursor).is_none());
+        assert_eq!(cursor, 0);
+    }
+}
+
+#[test]
+fn base_feature_fixed_body_runs_refuse_nonlocal_reference_flags() {
+    let (snapshot, snapshot_scope) = snapshot_frame();
+    let (result, result_scope) = result_body_frame();
+    for (bytes, scope, marker_offsets) in [
+        (snapshot, snapshot_scope, vec![24, 39]),
+        (result, result_scope, vec![24, 39, 54, 69, 84, 99]),
+    ] {
+        for marker in marker_offsets {
+            for (flag, value) in [(9, 1), (10, 1), (9, 36)] {
+                let mut widened = bytes.clone();
+                widened[marker + flag] = value;
+                assert!(exact_base_feature_construction(&widened, &scope)
+                    .unwrap()
+                    .is_none());
+            }
+        }
+    }
 }

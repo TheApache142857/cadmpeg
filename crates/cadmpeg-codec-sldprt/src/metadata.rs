@@ -9,7 +9,10 @@ use cadmpeg_ir::attributes::{AttributeTarget, AttributeValue, SourceAttribute};
 use cadmpeg_ir::ids::AttributeId;
 use cadmpeg_ir::Exactness;
 
-use crate::layout::transformed_reference_plane_metadata as trans_plane;
+use crate::layout::{
+    transformed_reference_enclosure_extent as enclosure_extent,
+    transformed_reference_plane_metadata as trans_plane,
+};
 
 pub(crate) fn attributes(
     ctx: &DecodeContext<'_>,
@@ -19,7 +22,6 @@ pub(crate) fn attributes(
     let mut out = Vec::new();
     for section in scan.sections() {
         scan_vectors(
-            ctx,
             section,
             &VectorScan {
                 token: b"moBBoxCenterData_c",
@@ -32,7 +34,6 @@ pub(crate) fn attributes(
             annotations,
         )?;
         scan_vectors(
-            ctx,
             section,
             &VectorScan {
                 token: b"moDefaultRefPlnData_c",
@@ -44,9 +45,9 @@ pub(crate) fn attributes(
             &mut out,
             annotations,
         )?;
-        scan_part(ctx, section, &mut out, annotations)?;
-        scan_configuration_manager(ctx, section, &mut out, annotations)?;
-        scan_transformed_reference_plane(ctx, section, &mut out, annotations)?;
+        scan_part(section, &mut out, annotations)?;
+        scan_configuration_manager(section, &mut out, annotations)?;
+        scan_transformed_reference_plane(section, &mut out, annotations)?;
         scan_units_xml(ctx, section, &mut out, annotations)?;
         scan_length_user_units(ctx, section, &mut out, annotations)?;
     }
@@ -54,58 +55,61 @@ pub(crate) fn attributes(
 }
 
 fn scan_transformed_reference_plane(
-    ctx: &DecodeContext<'_>,
     section: Section<'_>,
     out: &mut Vec<SourceAttribute>,
     annotations: &mut Annotations,
 ) -> Result<(), CodecError> {
     const TOKEN: &[u8] = b"moTransRefPlaneData_c";
-    const PREFIX: &[u8] = &trans_plane::PREFIX_VALUE;
-    let payload = section.payload();
-    for offset in payload
-        .windows(TOKEN.len())
-        .enumerate()
-        .filter_map(|(at, bytes)| (bytes == TOKEN).then_some(at))
-    {
-        let prefix = offset + TOKEN.len();
-        if payload.get(prefix..prefix + PREFIX.len()) != Some(PREFIX) {
+    for (offset, bytes) in section.payload().windows(TOKEN.len()).enumerate() {
+        if bytes != TOKEN {
             continue;
         }
-        let start = prefix + trans_plane::CENTER;
-        let Some(values) = (0..9)
-            .map(|index| View::f64_le_at(payload, start + index * 8))
-            .collect::<Option<Vec<_>>>()
-        else {
+        let Some(values) = transformed_enclosure(section.payload(), offset) else {
             continue;
         };
-        if !values
-            .iter()
-            .all(|value| value.is_finite() && value.abs() < 1_000.0)
-            || values[3] <= 1.0e-5
-            || values[4] <= 1.0e-5
-        {
-            continue;
-        }
-        let (Some(center), Some(extents), Some(auxiliary), Some(diagonal)) = (
+        let (Some(center), Some(upper), Some(lower), Some(radius)) = (
             millimetres(&values[..3]),
-            millimetres(&values[3..5]),
-            AttributeValue::vector(values[5..8].iter().copied()),
-            AttributeValue::float(values[8] * 1000.0),
+            millimetres(&values[3..6]),
+            millimetres(&values[6..9]),
+            AttributeValue::float(values[9] * 1000.0),
         ) else {
             continue;
         };
-        ctx.reserve_vec(out, 1, "collect SLDPRT document attributes")?;
         out.push(attribute(
-            ctx,
             section,
             offset,
-            &cadmpeg_ir::identity_component!("transformed_reference_plane"),
+            &cadmpeg_ir::identity_component!("transformed_reference_enclosure"),
             TOKEN,
-            vec![center, extents, auxiliary, diagonal],
+            vec![center, upper, lower, radius],
             annotations,
         )?);
     }
     Ok(())
+}
+
+pub(crate) fn transformed_enclosure(payload: &[u8], token: usize) -> Option<[f64; 10]> {
+    let declaration = token.checked_sub(6)?;
+    if payload.get(declaration..token) != Some(&[0xff, 0xff, 1, 0, 21, 0]) {
+        return None;
+    }
+    let body = token.checked_add(b"moTransRefPlaneData_c".len())?;
+    payload.get(body..body.checked_add(trans_plane::LEN)?)?;
+    if payload.get(body + trans_plane::EXTENT_PRESENT) != Some(&1) {
+        return None;
+    }
+    let start = body.checked_add(trans_plane::LEN)?;
+    payload.get(start..start.checked_add(enclosure_extent::LEN)?)?;
+    let values: [Option<f64>; 10] =
+        std::array::from_fn(|index| View::f64_le_at(payload, start + index * 8));
+    let values: Vec<_> = values.into_iter().collect::<Option<Vec<_>>>()?;
+    let values: [f64; 10] = values.try_into().ok()?;
+    valid_transformed_enclosure(&values).then_some(values)
+}
+
+pub(crate) fn valid_transformed_enclosure(values: &[f64; 10]) -> bool {
+    values.iter().all(|value| value.is_finite())
+        && values[9] >= 0.0
+        && (0..3).all(|axis| values[axis + 6] <= values[axis] && values[axis] <= values[axis + 3])
 }
 
 fn scan_length_user_units(
@@ -117,10 +121,6 @@ fn scan_length_user_units(
     const TOKEN: &[u8] = b"moLengthUserUnits_c";
     const STRING_MARKER: &[u8] = &[0xff, 0xfe, 0xff];
     let payload = section.payload();
-    ctx.charge_work(
-        u64_from_index(payload.len()),
-        "scan SLDPRT linear unit names",
-    )?;
     for offset in payload
         .windows(TOKEN.len())
         .enumerate()
@@ -147,10 +147,6 @@ fn scan_length_user_units(
         if bytes.is_empty() || bytes.len() % 2 != 0 {
             continue;
         }
-        ctx.charge_work(
-            u64_from_index(bytes.len() / 2),
-            "validate SLDPRT linear unit name",
-        )?;
         let scalars = || {
             char::decode_utf16(
                 (0..bytes.len() / 2).filter_map(|index| View::u16_le_at(bytes, index * 2)),
@@ -166,9 +162,7 @@ fn scan_length_user_units(
             false,
             "retain SLDPRT linear unit name",
         )?;
-        ctx.reserve_vec(out, 1, "collect SLDPRT document attributes")?;
         out.push(attribute(
-            ctx,
             section,
             offset,
             &cadmpeg_ir::identity_component!("source_linear_unit_name"),
@@ -186,22 +180,16 @@ fn scan_units_xml(
     out: &mut Vec<SourceAttribute>,
     annotations: &mut Annotations,
 ) -> Result<(), CodecError> {
-    let Some(text) = crate::container::xml_text_charged(
-        ctx,
-        section.payload(),
-        "materialize SLDPRT document metadata XML",
-    )?
-    else {
+    let Some(text) = crate::container::xml_text(section.payload()) else {
         return Ok(());
     };
-    let admitted_document = match ctx.parse_xml(text.as_str(), "decode XML tree") {
+    let document = match ctx.parse_xml(text.as_str(), "decode XML tree") {
         Ok(tree) => tree,
         Err(error @ CodecError::ResourceLimit(_)) => return Err(error),
         Err(_) => {
             return Ok(());
         }
     };
-    let document = admitted_document.document();
     for node in document.descendants().filter(roxmltree::Node::is_element) {
         let value = if node.tag_name().name() == "SW_UnitsLinear" {
             node.text()
@@ -213,9 +201,7 @@ fn scan_units_xml(
         let Some(code) = value.and_then(|value| value.trim().parse::<i64>().ok()) else {
             continue;
         };
-        ctx.reserve_vec(out, 1, "collect SLDPRT document attributes")?;
         out.push(attribute(
-            ctx,
             section,
             node.range().start,
             &cadmpeg_ir::identity_component!("source_linear_unit_code"),
@@ -237,7 +223,6 @@ struct VectorScan<'a> {
 }
 
 fn scan_vectors(
-    ctx: &DecodeContext<'_>,
     section: Section<'_>,
     scan: &VectorScan<'_>,
     out: &mut Vec<SourceAttribute>,
@@ -275,9 +260,7 @@ fn scan_vectors(
         let Some(values) = values else {
             continue;
         };
-        ctx.reserve_vec(out, 1, "collect SLDPRT document attributes")?;
         out.push(attribute(
-            ctx,
             section,
             offset,
             name,
@@ -290,7 +273,6 @@ fn scan_vectors(
 }
 
 fn scan_part(
-    ctx: &DecodeContext<'_>,
     section: Section<'_>,
     out: &mut Vec<SourceAttribute>,
     annotations: &mut Annotations,
@@ -309,9 +291,7 @@ fn scan_part(
         ) else {
             continue;
         };
-        ctx.reserve_vec(out, 1, "collect SLDPRT document attributes")?;
         out.push(attribute(
-            ctx,
             section,
             offset,
             &cadmpeg_ir::identity_component!("part_record"),
@@ -327,7 +307,6 @@ fn scan_part(
 }
 
 fn scan_configuration_manager(
-    ctx: &DecodeContext<'_>,
     section: Section<'_>,
     out: &mut Vec<SourceAttribute>,
     annotations: &mut Annotations,
@@ -350,9 +329,7 @@ fn scan_configuration_manager(
         let Ok(filetime) = i64::try_from(filetime) else {
             continue;
         };
-        ctx.reserve_vec(out, 1, "collect SLDPRT document attributes")?;
         out.push(attribute(
-            ctx,
             section,
             offset,
             &cadmpeg_ir::identity_component!("configuration_manager"),
@@ -375,7 +352,6 @@ fn millimetres(values: &[f64]) -> Option<AttributeValue> {
 }
 
 fn attribute(
-    ctx: &DecodeContext<'_>,
     section: Section<'_>,
     offset: usize,
     name: &cadmpeg_ir::ids::IdentityComponent,
@@ -392,7 +368,6 @@ fn attribute(
         cadmpeg_ir::ids::IdentityKey::from(section.ordinal()).colon(offset),
     );
     crate::annotations::note(
-        ctx,
         annotations,
         id.as_str(),
         section.source_stream(),

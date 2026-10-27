@@ -1,6 +1,7 @@
 {
   "ir": {
-    "ir_version": "38",
+    "ir_version": "9",
+    "decode_depth": "full",
     "source": {
       "identity": {
         "classification": "classified",
@@ -425,6 +426,7 @@
         "asm_bulletin_boards": [],
         "asm_delta_states": [],
         "asm_entity_changes": [],
+        "asm_face_boundaries": [],
         "asm_histories": [],
         "asm_history_records": [],
         "body_native_keys": [
@@ -497,6 +499,7 @@
           }
         ],
         "design_body_recipe_operands": [],
+        "design_body_reference_tails": [],
         "design_canvas_images": [],
         "design_component_naming_spaces": [],
         "design_component_occurrences": [],
@@ -588,6 +591,8 @@
         "design_face_source_groups": [],
         "design_feature_timelines": [],
         "design_fillet_radius_groups": [],
+        "design_intent_failures": [],
+        "design_joint_motions": [],
         "design_loft_legacy_body_carriers": [],
         "design_material_assignments": [
           {
@@ -660,6 +665,8 @@
           }
         ],
         "design_parameters": [],
+        "design_placement_constructions": [],
+        "design_profile_curve_selections": [],
         "design_record_headers": [
           {
             "id": "f3d:FusionAssetName[Active]/Design1/BulkStream.dat:design-record-header#1006",
@@ -1567,6 +1574,16 @@
       "geometry_transferred": true
     },
     "losses": [
+      {
+        "code": {
+          "scope": "namespaced",
+          "namespace": "f3d",
+          "code": "feature.sheet-thickness-unruled",
+          "kind": "feature_history_retained"
+        },
+        "severity": "warning",
+        "message": "1 sheet-metal base flange(s) use the thickness copy their scope stores: their sheet-metal rule states no readable thickness, and the copy can differ from it."
+      },
       {
         "code": {
           "scope": "namespaced",

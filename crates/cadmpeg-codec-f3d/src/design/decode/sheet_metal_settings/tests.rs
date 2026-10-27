@@ -193,7 +193,49 @@ fn settings_decoder_skips_unregistered_bulk_without_requesting_a_metastream() {
     zip.write_all(&[]).unwrap();
     let bytes = zip.finish().unwrap().into_inner();
     crate::test_support::zip_test::with_scan(&bytes, |scan| {
-        let ctx = cadmpeg_test_support::service_decode_context();
-        assert!(super::decode_settings(&ctx, scan).unwrap().is_empty());
+        assert!(super::decode_settings(scan).unwrap().is_empty());
     });
+}
+
+#[test]
+fn settings_name_every_linked_record_for_header_retention() {
+    let settings: crate::records::sheet_metal_settings::DesignSheetMetalSettings =
+        serde_json::from_value(serde_json::json!({
+            "id": "f3d:Design1/BulkStream.dat:design-sheet-metal-settings#20", "record_index": 50,
+            "byte_offset": 20, "paired_byte_offset": 100, "mask": 4,
+            "inputs": {"version": "v2", "slots": [null, 55, null, null, null, null, null]},
+            "rule_record_index": 51, "presentation_record_index": 52, "owner_record_index": 53,
+            "context_record_index": 54,
+        }))
+        .unwrap();
+    let indices = super::linked_record_indices(&[settings]);
+    assert_eq!(
+        indices,
+        [50, 55, 51, 52, 53, 54].map(|index| ("f3d:Design1/BulkStream.dat".to_owned(), index))
+    );
+}
+
+#[test]
+fn rule_thickness_is_the_first_entry_named_thickness() {
+    let rule = |name: &str| {
+        let mut bytes = vec![0xaa; 7];
+        let start = bytes.len();
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(b"285");
+        bytes.extend_from_slice(&273_u32.to_le_bytes());
+        bytes.extend_from_slice(&[0; 10]);
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(name.len()).unwrap().to_le_bytes());
+        for unit in name.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0.25_f64.to_le_bytes());
+        (bytes, start)
+    };
+    let (bytes, start) = rule("Thickness");
+    let (thickness, offset) = super::rule_thickness(&bytes, start).expect("rule thickness");
+    assert_eq!(thickness.get(), 0.25);
+    assert_eq!(offset, u64::try_from(start + 47).unwrap());
+    let (other, start) = rule("KFactor00");
+    assert!(super::rule_thickness(&other, start).is_none());
 }

@@ -311,14 +311,15 @@ impl<'a> WritableModel<'a> {
         check_object_attributes(body.id.as_str(), body.name.as_deref())?;
         let region = &model.regions[0];
         let shell = &model.shells[0];
+        let mut shell_faces: Vec<_> = shell.faces().iter().collect();
+        shell_faces.sort_unstable();
+        let mut arena_faces: Vec<_> = model.faces.iter().map(|face| &face.id).collect();
+        arena_faces.sort_unstable();
         if region.id != body.regions[0]
             || region.body != body.id
             || region.shells != std::slice::from_ref(&shell.id)
             || shell.region != region.id
-            || !shell
-                .faces()
-                .iter()
-                .eq(model.faces.iter().map(|face| &face.id))
+            || shell_faces != arena_faces
             || !shell.wire_edges().is_empty()
             || !shell.free_vertices().is_empty()
         {
@@ -496,7 +497,8 @@ impl<'a> WritableModel<'a> {
                                 CodecError::ResourceLimit(limit)
                             }
                             cadmpeg_ir::eval::EvaluationFailure::NoValue
-                            | cadmpeg_ir::eval::EvaluationFailure::NonFinite(_) => {
+                            | cadmpeg_ir::eval::EvaluationFailure::NonFinite(_)
+                            | cadmpeg_ir::eval::EvaluationFailure::WorkExhausted => {
                                 CodecError::malformed(format_args!(
                                     "edge {} curve has no finite start point",
                                     edge.id.as_str()
@@ -509,7 +511,8 @@ impl<'a> WritableModel<'a> {
                                 CodecError::ResourceLimit(limit)
                             }
                             cadmpeg_ir::eval::EvaluationFailure::NoValue
-                            | cadmpeg_ir::eval::EvaluationFailure::NonFinite(_) => {
+                            | cadmpeg_ir::eval::EvaluationFailure::NonFinite(_)
+                            | cadmpeg_ir::eval::EvaluationFailure::WorkExhausted => {
                                 CodecError::malformed(format_args!(
                                     "edge {} curve has no finite end point",
                                     edge.id.as_str()

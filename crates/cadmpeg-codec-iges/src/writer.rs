@@ -25,7 +25,7 @@ use cadmpeg_ir::geometry::{
     CurveGeometry, ProceduralSurfaceDefinition, SolvedCurveGeometry, SolvedSurfaceGeometry,
     Surface, SurfaceGeometry,
 };
-use cadmpeg_ir::ids::{CurveId, PointId, ShellId, SurfaceId, VertexId};
+use cadmpeg_ir::ids::{CoedgeId, CurveId, PointId, ShellId, SurfaceId, VertexId};
 use cadmpeg_ir::math::{Point3, Vector3};
 use cadmpeg_ir::native::NativeNamespace;
 use cadmpeg_ir::report::{
@@ -34,8 +34,8 @@ use cadmpeg_ir::report::{
 };
 use cadmpeg_ir::scalar::{FiniteReal, Length};
 use cadmpeg_ir::topology::{
-    BodyKind, Color, Edge, IncreasingParameterInterval, Loop, LoopBoundaryRole, PcurveUse, Region,
-    Sense,
+    BodyKind, Coedge, Color, Edge, IncreasingParameterInterval, Loop, LoopBoundaryRole, PcurveUse,
+    Region, Sense,
 };
 use cadmpeg_ir::units::{FiniteVector, OrthonormalFrame3, UnitVector3};
 use cadmpeg_ir::CadIr;
@@ -179,12 +179,17 @@ fn body(
 
 /// What [`synthesize`] does with each model arena.
 ///
-/// `reject_unsupported_model` refuses every arena declared `Reported` except
-/// `procedural_curves`, which `procedural_reduction_losses` charges as reduced
-/// to their carriers. Topology and geometry go through the B-rep, trimmed-sheet
-/// or free-geometry entity graph.
+/// Arenas refused by `reject_unsupported_model` are `Dropped`; procedural
+/// curves are also `Dropped` because only their solved carriers are written and
+/// `procedural_reduction_losses` charges for their definitions. Topology and
+/// geometry go through the B-rep, trimmed-sheet or free-geometry entity graph.
+/// `points`, `curves`, `surfaces`, `edges` and `vertices` are `Reported` because
+/// `WriterSupportGeometryNotRepresented`, `WriterSupportEdgeNotRepresented` and
+/// `WriterFreeGeometryOmitted` account for withheld support geometry, support edges
+/// and free points or vertices, respectively; `procedural_surfaces` is `Reported`
+/// because `ProceduralReduced` accounts for definitions reduced to solved carriers.
 const SYNTHESIS_COVERAGE: ArenaDispositions = {
-    use ArenaDisposition::{Reported, Written};
+    use ArenaDisposition::{Dropped, Reported, Written};
     ArenaDispositions {
         bodies: Written,
         regions: Written,
@@ -192,41 +197,41 @@ const SYNTHESIS_COVERAGE: ArenaDispositions = {
         faces: Written,
         loops: Written,
         coedges: Written,
-        edges: Written,
-        vertices: Written,
-        points: Written,
-        surfaces: Written,
-        curves: Written,
-        subds: Reported,
+        edges: Reported,
+        vertices: Reported,
+        points: Reported,
+        surfaces: Reported,
+        curves: Reported,
+        subds: Dropped,
         pcurves: Written,
-        procedural_surfaces: Written,
-        procedural_curves: Reported,
-        assets: Reported,
-        features: Reported,
-        feature_input_topologies: Reported,
-        feature_result_topologies: Reported,
-        configurations: Reported,
-        parameters: Reported,
-        sketches: Reported,
-        sketch_entities: Reported,
-        sketch_constraints: Reported,
-        spatial_sketches: Reported,
-        spatial_sketch_entities: Reported,
-        spatial_sketch_constraints: Reported,
-        spreadsheets: Reported,
-        product_definitions: Reported,
-        occurrences: Reported,
-        assembly_joints: Reported,
-        drawings: Reported,
-        semantic_annotations: Reported,
-        presentation_documents: Reported,
-        view_presentations: Reported,
-        tessellations: Reported,
-        appearances: Reported,
-        appearance_bindings: Reported,
-        attributes: Reported,
-        pmi: Reported,
-        presentation_layers: Reported,
+        procedural_surfaces: Reported,
+        procedural_curves: Dropped,
+        assets: Dropped,
+        features: Dropped,
+        feature_input_topologies: Dropped,
+        feature_result_topologies: Dropped,
+        configurations: Dropped,
+        parameters: Dropped,
+        sketches: Dropped,
+        sketch_entities: Dropped,
+        sketch_constraints: Dropped,
+        spatial_sketches: Dropped,
+        spatial_sketch_entities: Dropped,
+        spatial_sketch_constraints: Dropped,
+        spreadsheets: Dropped,
+        product_definitions: Dropped,
+        occurrences: Dropped,
+        assembly_joints: Dropped,
+        drawings: Dropped,
+        semantic_annotations: Dropped,
+        presentation_documents: Dropped,
+        view_presentations: Dropped,
+        tessellations: Dropped,
+        appearances: Dropped,
+        appearance_bindings: Dropped,
+        attributes: Dropped,
+        pmi: Dropped,
+        presentation_layers: Dropped,
     }
 };
 
@@ -422,6 +427,13 @@ fn append_name_properties(
 }
 
 fn synthesize(ir: &CadIr, version: crate::IgesVersion) -> Result<Synthesis, CodecError> {
+    let lowered = cadmpeg_ir::codec::write::subset_lowering::lower_subset_curves(ir, |curve| {
+        curve
+            .geometry
+            .solved()
+            .is_none_or(|solved| flatten_curve(solved).is_err())
+    })?;
+    let ir = lowered.as_ref();
     let arena = DecodeArena::new();
     let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &DecodePolicy::default())?;
     let ctx = &ctx;
@@ -517,7 +529,7 @@ fn synthesize(ir: &CadIr, version: crate::IgesVersion) -> Result<Synthesis, Code
                 body.id
             )));
         }
-        let ownership = ownership::SourceOwnership::build(ctx, ir)?;
+        let ownership = ownership::SourceOwnership::build(ir);
         let mut entities = Vec::new();
         let mut consumed_points = std::collections::BTreeSet::new();
         let mut consumed_curves = BTreeSet::<String>::new();
@@ -534,33 +546,14 @@ fn synthesize(ir: &CadIr, version: crate::IgesVersion) -> Result<Synthesis, Code
                 &mut losses,
             )?;
         }
-        for directrix in ir.model.surfaces.iter().filter_map(|surface| {
-            ownership.surface_status(surface)?;
-            let SurfaceGeometry::Procedural {
-                construction,
-                cache: None,
-            } = &surface.geometry
-            else {
-                return None;
-            };
+        mark_native_construction_curves(
+            ir,
             ir.model
-                .procedural_surfaces
+                .surfaces
                 .iter()
-                .find(|procedural| procedural.id == *construction)
-                .and_then(|procedural| match procedural.definition() {
-                    ProceduralSurfaceDefinition::Revolution(definition_payload) => {
-                        let directrix = definition_payload.directrix();
-                        Some(directrix)
-                    }
-                    ProceduralSurfaceDefinition::Extrusion(definition_payload) => {
-                        let directrix = definition_payload.directrix();
-                        Some(directrix)
-                    }
-                    _ => None,
-                })
-        }) {
-            mark_curve_descendants(ir, directrix, &mut consumed_curves, &mut BTreeSet::new())?;
-        }
+                .filter(|surface| ownership.surface_status(surface).is_some()),
+            &mut consumed_curves,
+        )?;
         let mut edges = ir.model.edges.iter().collect::<Vec<_>>();
         edges.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
         for edge in edges {
@@ -595,7 +588,6 @@ fn synthesize(ir: &CadIr, version: crate::IgesVersion) -> Result<Synthesis, Code
             })?)?;
             let span = edge_span(ir, edge, &geometry)?;
             append_curve_entity(
-                ctx,
                 &mut entities,
                 ir,
                 CurveEntityRequest {
@@ -613,35 +605,17 @@ fn synthesize(ir: &CadIr, version: crate::IgesVersion) -> Result<Synthesis, Code
             consumed_points.insert(vertex_point_id(ir, &edge.end)?);
         }
 
-        let mut curves = ir.model.curves.iter().collect::<Vec<_>>();
-        curves.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
-        for curve in curves {
-            if consumed_curves.contains(curve.id.as_str()) {
-                continue;
-            }
-            let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
-                CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
-            })?)?;
-            let span = curve
-                .parameter_range
-                .map(|_| curve_reference_span(ir, &curve.id, &geometry))
-                .transpose()?;
-            append_curve_entity(
-                ctx,
-                &mut entities,
+        append_unowned_curves(
+            UnownedCurves {
                 ir,
-                CurveEntityRequest {
-                    version,
-                    curve_id: &curve.id,
-                    geometry: &geometry,
-                    span: span.as_ref(),
-                    sense: Sense::Forward,
-                    status: ownership.status(curve.source_object.as_ref()),
-                    reference_offset: 0,
-                },
-            )?;
-            mark_curve_descendants(ir, &curve.id, &mut consumed_curves, &mut BTreeSet::new())?;
-        }
+                version,
+                ownership: &ownership,
+                ignored: &BTreeSet::new(),
+            },
+            &mut entities,
+            &mut consumed_curves,
+            &mut losses,
+        )?;
 
         let mut points = ir.model.points.iter().collect::<Vec<_>>();
         points.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
@@ -649,7 +623,7 @@ fn synthesize(ir: &CadIr, version: crate::IgesVersion) -> Result<Synthesis, Code
             if consumed_points.contains(&point.id) {
                 continue;
             }
-            append_free_point_entity(ctx, &mut entities, point, &ownership, &mut losses)?;
+            append_free_point_entity(&mut entities, point, &ownership, &mut losses);
         }
         entities
     };
@@ -1518,11 +1492,14 @@ fn validate_brep_topology<'a>(
                             &surface.geometry,
                             span.start,
                             span.end,
-                            coedge.sense,
+                            UseDirection {
+                                traversal: coedge.sense,
+                                written: edge_use_sense(coedge.sense, face.sense),
+                            },
                             topology_edge_explicit_tolerance(ir, edge),
                             coedge.id.as_str(),
                         );
-                        validate_brep_pcurve_uses(ctx, &orientation, &coedge.pcurves)?;
+                        validate_brep_pcurve_uses(&orientation, &coedge.pcurves)?;
                     }
                     for (vertex_id, after, pcurves) in loop_.vertex_occurrences() {
                         if after.is_some_and(|coedge_id| !loop_.coedges().contains(coedge_id)) {
@@ -1549,11 +1526,11 @@ fn validate_brep_topology<'a>(
                             &surface.geometry,
                             position,
                             position,
-                            Sense::Forward,
+                            UseDirection::traversed(Sense::Forward),
                             cadmpeg_ir::units::COINCIDENCE_TOLERANCE,
                             loop_.id.as_str(),
                         );
-                        validate_brep_pcurve_uses(ctx, &orientation, pcurves)?;
+                        validate_brep_pcurve_uses(&orientation, pcurves)?;
                     }
                 }
             }
@@ -1591,7 +1568,9 @@ fn validate_brep_topology<'a>(
         || used_brep_pcurve_ids(ir).len() != ir.model.pcurves.len()
     {
         return Err(CodecError::NotImplemented(format!(
-            "IGES B-rep topology ownership is incomplete: regions {}/{} shells {}/{} faces {}/{} loops {}/{} coedges {}/{} edges {}/{} vertices {}/{} pcurves {}/{}",
+            "IGES B-rep topology ownership is incomplete: regions {}/{} shells {}/{} \
+             faces {}/{} loops {}/{} coedges {}/{} edges {}/{} vertices {}/{} \
+             pcurves {}/{}",
             owned_regions.len(),
             supported_region_count,
             owned_shells.len(),
@@ -1710,7 +1689,7 @@ fn brep_entities(
     losses: &mut Vec<LossNote>,
 ) -> Result<Vec<Entity>, CodecError> {
     let ir = topology.ir;
-    let ownership = ownership::SourceOwnership::build(ctx, ir)?;
+    let ownership = ownership::SourceOwnership::build(ir);
     let version = topology.version;
     let ignored_carriers = ignored_carrier_geometry(ir)?;
     let mut topology_point_ids = std::collections::BTreeSet::new();
@@ -1750,12 +1729,7 @@ fn brep_entities(
     let mut entities = Vec::new();
     let mut surface_indices = BTreeMap::new();
     let mut surfaces = ir.model.surfaces.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut surfaces,
-        |left, right| left.id.as_str().cmp(right.id.as_str()),
-        |item| item.id.as_str().len(),
-        "iges surfaces sort",
-    )?;
+    surfaces.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
     for surface in surfaces {
         if let Some(index) =
             append_surface_entities(ctx, &mut entities, ir, surface, version, &ownership, losses)?
@@ -1777,7 +1751,7 @@ fn brep_entities(
     }
     let mut edge_curve_indices = BTreeMap::new();
     let mut edges = topology_edge_ids.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(&mut edges, Ord::cmp, |item| item.len(), "iges edges sort")?;
+    edges.sort_by(Ord::cmp);
     for edge_id in edges {
         let edge = ir
             .model
@@ -1811,7 +1785,6 @@ fn brep_entities(
         })?)?;
         let span = edge_span(ir, edge, &geometry)?;
         let index = append_curve_entity(
-            ctx,
             &mut entities,
             ir,
             CurveEntityRequest {
@@ -1820,7 +1793,7 @@ fn brep_entities(
                 geometry: &geometry,
                 span: Some(&span),
                 sense: Sense::Forward,
-                status: ownership.status(curve.source_object.as_ref()),
+                status: ownership.topology_status(curve.source_object.as_ref()),
                 reference_offset: 0,
             },
         )?;
@@ -1828,47 +1801,91 @@ fn brep_entities(
         mark_curve_descendants(ir, curve_id, &mut consumed_curve_ids, &mut BTreeSet::new())?;
     }
 
-    let mut curves = ir.model.curves.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut curves,
-        |left, right| left.id.as_str().cmp(right.id.as_str()),
-        |item| item.id.as_str().len(),
-        "iges curves sort",
+    mark_native_construction_curves(
+        ir,
+        ir.model
+            .surfaces
+            .iter()
+            .filter(|surface| surface_indices.contains_key(surface.id.as_str())),
+        &mut consumed_curve_ids,
     )?;
-    for curve in curves {
-        if consumed_curve_ids.contains(curve.id.as_str())
-            || ignored_carriers.curves.contains(curve.id.as_str())
-        {
-            continue;
-        }
-        let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
-            CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
-        })?)?;
-        let span = curve
-            .parameter_range
-            .map(|_| curve_reference_span(ir, &curve.id, &geometry))
-            .transpose()?;
-        append_curve_entity(
-            ctx,
-            &mut entities,
+    let ignored_curves = append_unowned_curves(
+        UnownedCurves {
             ir,
-            CurveEntityRequest {
-                version,
-                curve_id: &curve.id,
-                geometry: &geometry,
-                span: span.as_ref(),
-                sense: Sense::Forward,
-                status: ownership.status(curve.source_object.as_ref()),
-                reference_offset: 0,
-            },
-        )?;
-        mark_curve_descendants(ir, &curve.id, &mut consumed_curve_ids, &mut BTreeSet::new())?;
+            version,
+            ownership: &ownership,
+            ignored: &ignored_carriers.curves,
+        },
+        &mut entities,
+        &mut consumed_curve_ids,
+        losses,
+    )?;
+    ignored_carriers.report_omitted(ignored_curves, "B-rep", losses);
+
+    let mut written_pcurves = BTreeMap::new();
+    for loop_ in topology.loops.values().copied() {
+        let face = ir
+            .model
+            .faces
+            .iter()
+            .find(|face| face.id == loop_.face)
+            .ok_or_else(|| {
+                CodecError::malformed(format_args!(
+                    "IGES B-rep loop {} references missing face {}",
+                    loop_.id, loop_.face
+                ))
+            })?;
+        let surface = topology
+            .surfaces
+            .get(face.surface.as_str())
+            .copied()
+            .ok_or_else(|| {
+                CodecError::malformed(format_args!(
+                    "IGES topology emission references unvalidated surface {}",
+                    face.surface.as_str()
+                ))
+            })?;
+        for coedge_id in loop_.coedges() {
+            let carrier = boundary_coedge(ir, loop_, coedge_id)?;
+            let coedge: &Coedge = carrier.coedge;
+            let uses = pcurve_orientation_context(
+                ir,
+                &surface.geometry,
+                carrier.span.start,
+                carrier.span.end,
+                UseDirection {
+                    traversal: coedge.sense,
+                    written: edge_use_sense(coedge.sense, face.sense),
+                },
+                topology_edge_explicit_tolerance(ir, carrier.edge),
+                coedge.id.as_str(),
+            )
+            .written_uses(&coedge.pcurves)?;
+            written_pcurves.insert(coedge.id.as_str(), uses);
+        }
     }
+    // A stored pcurve entity is written only when a use references it; a
+    // physically dependent entity without a parent is standalone geometry to
+    // an importer.
+    let mut stored_pcurves = written_pcurves
+        .values()
+        .flat_map(stored_pcurve_ids)
+        .collect::<BTreeSet<_>>();
+    stored_pcurves.extend(
+        topology
+            .loops
+            .values()
+            .flat_map(|loop_| loop_.vertex_pcurves())
+            .map(|pcurve_use| pcurve_use.pcurve.as_str()),
+    );
 
     let mut pcurve_indices = BTreeMap::new();
     for (pcurve_id, pcurve) in topology.pcurves {
+        if !stored_pcurves.contains(pcurve_id) {
+            continue;
+        }
         let index = entities.len();
-        entities.push(pcurve_entity(ctx, ir, pcurve)?);
+        entities.push(pcurve_entity(ir, pcurve)?);
         pcurve_indices.insert(pcurve_id.to_owned(), index);
     }
 
@@ -1876,12 +1893,7 @@ fn brep_entities(
         .iter()
         .map(|body| body.id.as_str().to_owned())
         .collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut body_ids,
-        Ord::cmp,
-        std::string::String::len,
-        "iges body_ids sort",
-    )?;
+    body_ids.sort_by(Ord::cmp);
     for body_id in body_ids {
         let body = bodies
             .iter()
@@ -1976,12 +1988,7 @@ fn brep_entities(
         }
 
         let mut vertex_ids = body_vertex_ids.into_iter().collect::<Vec<_>>();
-        ctx.stable_sort_by(
-            &mut vertex_ids,
-            Ord::cmp,
-            std::string::String::len,
-            "iges vertex_ids sort",
-        )?;
+        vertex_ids.sort_by(Ord::cmp);
         let mut vertex_indices = BTreeMap::new();
         for (index, vertex_id) in vertex_ids.iter().enumerate() {
             vertex_indices.insert(vertex_id.clone(), index);
@@ -2015,12 +2022,7 @@ fn brep_entities(
         });
 
         let mut edge_ids = body_edge_ids.into_iter().collect::<Vec<_>>();
-        ctx.stable_sort_by(
-            &mut edge_ids,
-            Ord::cmp,
-            std::string::String::len,
-            "iges edge_ids sort",
-        )?;
+        edge_ids.sort_by(Ord::cmp);
         let mut edge_indices = BTreeMap::new();
         for (index, edge_id) in edge_ids.iter().enumerate() {
             edge_indices.insert(edge_id.clone(), index);
@@ -2088,23 +2090,15 @@ fn brep_entities(
                         loop_.id, loop_.face
                     ))
                 })?;
-            let surface = topology
-                .surfaces
-                .get(face.surface.as_str())
-                .copied()
-                .ok_or_else(|| {
-                    CodecError::malformed(format_args!(
-                        "IGES topology emission references unvalidated surface {}",
-                        face.surface.as_str()
-                    ))
-                })?;
             let use_count = loop_
                 .coedges()
                 .len()
                 .checked_add(loop_.vertices().count())
                 .ok_or_else(|| CodecError::Malformed("IGES loop use count overflows".into()))?;
             let mut parameters = use_count.to_string();
-            for coedge_id in loop_.coedges() {
+            let ring = loop_.coedges();
+            for position in edge_use_positions(ring.len(), face.sense) {
+                let coedge_id = &ring[position];
                 let coedge = topology
                     .coedges
                     .get(coedge_id.as_str())
@@ -2122,54 +2116,15 @@ fn brep_entities(
                         loop_.id
                     ))
                 })?;
-                let sense = brep_sense(coedge.sense);
-                let edge = ir
-                    .model
-                    .edges
-                    .iter()
-                    .find(|edge| edge.id == coedge.edge)
-                    .ok_or_else(|| {
-                        CodecError::malformed(format_args!(
-                            "IGES coedge {} references missing edge {}",
-                            coedge.id, coedge.edge
-                        ))
-                    })?;
-                let curve_id = edge.curve().ok_or_else(|| {
-                    CodecError::NotImplemented(format!(
-                        "IGES B-rep coedge {} cannot orient pcurves for carrier-less edge {}",
-                        coedge.id, edge.id
+                let sense = brep_sense(edge_use_sense(coedge.sense, face.sense));
+                let written = written_pcurves.get(coedge.id.as_str()).ok_or_else(|| {
+                    CodecError::malformed(format_args!(
+                        "IGES topology emission references unplanned coedge {}",
+                        coedge.id
                     ))
                 })?;
-                let curve = ir
-                    .model
-                    .curves
-                    .iter()
-                    .find(|curve| curve.id == *curve_id)
-                    .ok_or_else(|| {
-                        CodecError::malformed(format_args!(
-                            "IGES edge {} references missing curve {}",
-                            edge.id, curve_id
-                        ))
-                    })?;
-                let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
-                    CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
-                })?)?;
-                let span = edge_span(ir, edge, &geometry)?;
-                let pcurve_entities = pcurve_orientation_context(
-                    ir,
-                    &surface.geometry,
-                    span.start,
-                    span.end,
-                    coedge.sense,
-                    topology_edge_explicit_tolerance(ir, edge),
-                    coedge.id.as_str(),
-                )
-                .oriented_entities(
-                    ctx,
-                    &coedge.pcurves,
-                    &pcurve_indices,
-                    &mut entities,
-                )?;
+                let pcurve_entities =
+                    pcurve_use_entities(ir, written, &pcurve_indices, &mut entities)?;
                 write!(
                     parameters,
                     ",0,{},{},{},{}",
@@ -2188,11 +2143,19 @@ fn brep_entities(
                     )
                     .map_err(CodecError::malformed)?;
                 }
-                for vertex_use in loop_
+                let anchor = match face.sense {
+                    Sense::Forward => &coedge.id,
+                    Sense::Reversed => &ring[(position + ring.len() - 1) % ring.len()],
+                };
+                let mut following = loop_
                     .anchored_vertex_uses()
                     .iter()
-                    .filter(|vertex_use| vertex_use.after == coedge.id)
-                {
+                    .filter(|vertex_use| vertex_use.after == *anchor)
+                    .collect::<Vec<_>>();
+                if face.sense == Sense::Reversed {
+                    following.reverse();
+                }
+                for vertex_use in following {
                     let vertex_index = vertex_indices[vertex_use.vertex.as_str()];
                     write!(
                         parameters,
@@ -2203,7 +2166,7 @@ fn brep_entities(
                         vertex_use.pcurves.len()
                     )
                     .map_err(CodecError::malformed)?;
-                    for pcurve_use in &vertex_use.pcurves {
+                    for pcurve_use in pole_use_order(&vertex_use.pcurves, face.sense) {
                         write!(
                             parameters,
                             ",{},{}",
@@ -2225,7 +2188,7 @@ fn brep_entities(
                     pcurves.len()
                 )
                 .map_err(CodecError::malformed)?;
-                for pcurve_use in pcurves {
+                for pcurve_use in pole_use_order(pcurves, face.sense) {
                     write!(
                         parameters,
                         ",{},{}",
@@ -2358,12 +2321,7 @@ fn brep_entities(
         }
     }
     let mut points = ir.model.points.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut points,
-        |left, right| left.id.as_str().cmp(right.id.as_str()),
-        |item| item.id.as_str().len(),
-        "iges points sort",
-    )?;
+    points.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
     for point in points {
         if topology_point_ids.contains(point.id.as_str()) {
             continue;
@@ -2375,9 +2333,38 @@ fn brep_entities(
             )));
             continue;
         }
-        append_free_point_entity(ctx, &mut entities, point, &ownership, losses)?;
+        append_free_point_entity(&mut entities, point, &ownership, losses);
     }
     Ok(entities)
+}
+
+/// The Type 508 edge-use orientation of a coedge. A Type 508 loop keeps its
+/// face on the left about the support normal, and a reversed face keeps it on
+/// the left about the reversed normal, so a reversed face writes its loops
+/// backward.
+fn edge_use_sense(coedge: Sense, face: Sense) -> Sense {
+    if coedge == face {
+        Sense::Forward
+    } else {
+        Sense::Reversed
+    }
+}
+
+/// The pcurve uses of a pole-vertex use in Type 508 order. A reversed face
+/// writes its loops backward, so it writes the uses in reverse order.
+fn pole_use_order(uses: &[PcurveUse], face: Sense) -> Vec<&PcurveUse> {
+    match face {
+        Sense::Forward => uses.iter().collect(),
+        Sense::Reversed => uses.iter().rev().collect(),
+    }
+}
+
+/// The ring positions of a loop in Type 508 edge-use order.
+fn edge_use_positions(count: usize, face: Sense) -> Vec<usize> {
+    match face {
+        Sense::Forward => (0..count).collect(),
+        Sense::Reversed => (0..count).rev().collect(),
+    }
 }
 
 fn brep_sense(sense: Sense) -> i32 {
@@ -2410,6 +2397,24 @@ struct IgnoredCarrierGeometry {
     curves: std::collections::BTreeSet<String>,
     vertices: std::collections::BTreeSet<String>,
     points: std::collections::BTreeSet<String>,
+}
+
+impl IgnoredCarrierGeometry {
+    /// Reports the ignored edges, which no topology path writes, and the
+    /// `curves` ignored curves that the `path` writer skipped.
+    fn report_omitted(&self, curves: usize, path: &str, losses: &mut Vec<LossNote>) {
+        if !self.edges.is_empty() {
+            losses.push(IgesLossCode::WriterDuplicateCarrierOmitted.note(format!(
+                "{} free edge record(s) duplicating a written carrier were not written on the {path} path",
+                self.edges.len()
+            )));
+        }
+        if curves != 0 {
+            losses.push(IgesLossCode::WriterDuplicateCarrierOmitted.note(format!(
+                "{curves} free curve record(s) duplicating a written parameter curve were not written on the {path} path"
+            )));
+        }
+    }
 }
 
 fn ignored_carrier_geometry(ir: &CadIr) -> Result<IgnoredCarrierGeometry, CodecError> {
@@ -2618,7 +2623,7 @@ fn topology_entities(
     losses: &mut Vec<LossNote>,
 ) -> Result<Vec<Entity>, CodecError> {
     let ir = topology.ir;
-    let ownership = ownership::SourceOwnership::build(ctx, ir)?;
+    let ownership = ownership::SourceOwnership::build(ir);
     let version = topology.version;
     let ignored_carriers = ignored_carrier_geometry(ir)?;
     let topology_edge_ids = ir
@@ -2630,12 +2635,7 @@ fn topology_entities(
     let mut entities = Vec::new();
     let mut surface_indices = BTreeMap::new();
     let mut surfaces = ir.model.surfaces.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut surfaces,
-        |left, right| left.id.as_str().cmp(right.id.as_str()),
-        |item| item.id.as_str().len(),
-        "iges surfaces sort",
-    )?;
+    surfaces.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
     for surface in surfaces {
         if let Some(index) =
             append_surface_entities(ctx, &mut entities, ir, surface, version, &ownership, losses)?
@@ -2644,16 +2644,54 @@ fn topology_entities(
         }
     }
 
+    let mut faces = ir.model.faces.iter().collect::<Vec<_>>();
+    faces.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+    let mut boundaries = Vec::new();
+    for face in &faces {
+        let surface_index = surface_indices[face.surface.as_str()];
+        let surface = topology
+            .surfaces
+            .get(face.surface.as_str())
+            .copied()
+            .ok_or_else(|| {
+                CodecError::malformed(format_args!(
+                    "IGES topology emission references unvalidated surface {}",
+                    face.surface.as_str()
+                ))
+            })?;
+        let loops = face_loop_order(ir, face)?;
+        let bounded = loops
+            .iter()
+            .all(|loop_| face.loop_role(&loop_.id) == LoopBoundaryRole::Unspecified);
+        for loop_ in loops {
+            boundaries.push((
+                surface_index,
+                written_boundary(ir, loop_, &surface.geometry, !bounded)?,
+            ));
+        }
+    }
+    // A stored carrier entity is written only when a boundary references it;
+    // a physically dependent entity without a parent is standalone geometry
+    // to an importer.
+    let mut stored_edges = BTreeMap::<&str, StoredEdgeForm>::new();
+    let mut stored_pcurves = BTreeSet::new();
+    for (_, boundary) in &boundaries {
+        for written in &boundary.coedges {
+            if let Some(form) = boundary.stored_edge_form(written) {
+                let stored = stored_edges
+                    .entry(written.carrier.edge.id.as_str())
+                    .or_insert(form);
+                *stored = (*stored).max(form);
+            }
+            stored_pcurves.extend(stored_pcurve_ids(&written.pcurves));
+        }
+    }
+
     let mut edge_indices = BTreeMap::new();
     let mut consumed_curves = std::collections::BTreeSet::new();
     let mut consumed_points = std::collections::BTreeSet::new();
     let mut edges = ir.model.edges.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut edges,
-        |left, right| left.id.as_str().cmp(right.id.as_str()),
-        |item| item.id.as_str().len(),
-        "iges edges sort",
-    )?;
+    edges.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
     for edge in edges {
         if !topology_edge_ids.contains(edge.id.as_str()) {
             continue;
@@ -2678,129 +2716,96 @@ fn topology_entities(
         let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
             CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
         })?)?;
-        let span = edge_span(ir, edge, &geometry)?;
-        let index = append_curve_entity(
-            ctx,
-            &mut entities,
-            ir,
-            CurveEntityRequest {
-                version,
-                curve_id,
-                geometry: &geometry,
-                span: Some(&span),
-                sense: Sense::Forward,
-                status: EntityStatus::PhysicallyDependent,
-                reference_offset: 0,
-            },
-        )?;
-        edge_indices.insert(edge.id.as_str().to_owned(), index);
         mark_curve_descendants(ir, curve_id, &mut consumed_curves, &mut BTreeSet::new())?;
         consumed_points.insert(vertex_point_id(ir, &edge.start)?.as_str().to_owned());
         consumed_points.insert(vertex_point_id(ir, &edge.end)?.as_str().to_owned());
+        let Some(form) = stored_edges.get(edge.id.as_str()) else {
+            continue;
+        };
+        let span = edge_span(ir, edge, &geometry)?;
+        let request = CurveEntityRequest {
+            version,
+            curve_id,
+            geometry: &geometry,
+            span: Some(&span),
+            sense: Sense::Forward,
+            status: EntityStatus::PhysicallyDependent,
+            reference_offset: 0,
+        };
+        let stored = match form {
+            StoredEdgeForm::Whole => {
+                StoredEdgeCurve::Whole(append_curve_entity(&mut entities, ir, request)?)
+            }
+            StoredEdgeForm::Constituents => StoredEdgeCurve::Constituents(
+                append_curve_constituents(&mut entities, ir, request)?,
+            ),
+        };
+        edge_indices.insert(edge.id.as_str().to_owned(), stored);
     }
 
-    let mut curves = ir.model.curves.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut curves,
-        |left, right| left.id.as_str().cmp(right.id.as_str()),
-        |item| item.id.as_str().len(),
-        "iges curves sort",
+    mark_native_construction_curves(
+        ir,
+        ir.model
+            .surfaces
+            .iter()
+            .filter(|surface| surface_indices.contains_key(surface.id.as_str())),
+        &mut consumed_curves,
     )?;
-    for curve in curves {
-        if consumed_curves.contains(curve.id.as_str())
-            || ignored_carriers.curves.contains(curve.id.as_str())
-        {
-            continue;
-        }
-        let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
-            CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
-        })?)?;
-        let span = curve
-            .parameter_range
-            .map(|_| curve_reference_span(ir, &curve.id, &geometry))
-            .transpose()?;
-        append_curve_entity(
-            ctx,
-            &mut entities,
+    let ignored_curves = append_unowned_curves(
+        UnownedCurves {
             ir,
-            CurveEntityRequest {
-                version,
-                curve_id: &curve.id,
-                geometry: &geometry,
-                span: span.as_ref(),
-                sense: Sense::Forward,
-                status: ownership.status(curve.source_object.as_ref()),
-                reference_offset: 0,
-            },
-        )?;
-        mark_curve_descendants(ir, &curve.id, &mut consumed_curves, &mut BTreeSet::new())?;
-    }
+            version,
+            ownership: &ownership,
+            ignored: &ignored_carriers.curves,
+        },
+        &mut entities,
+        &mut consumed_curves,
+        losses,
+    )?;
+    ignored_carriers.report_omitted(ignored_curves, "trimmed-sheet", losses);
 
     let mut pcurve_indices = BTreeMap::new();
     for (pcurve_id, pcurve) in topology.pcurves {
+        if !stored_pcurves.contains(pcurve_id) {
+            continue;
+        }
         let index = entities.len();
-        entities.push(pcurve_entity(ctx, ir, pcurve)?);
+        entities.push(pcurve_entity(ir, pcurve)?);
         pcurve_indices.insert(pcurve_id.to_owned(), index);
     }
 
     let mut boundary_indices = BTreeMap::new();
     let mut curve_on_surface_indices = BTreeMap::new();
-    let mut faces = ir.model.faces.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut faces,
-        |left, right| left.id.as_str().cmp(right.id.as_str()),
-        |item| item.id.as_str().len(),
-        "iges faces sort",
-    )?;
-    for face in &faces {
-        let surface_index = surface_indices[face.surface.as_str()];
-        let surface = topology
-            .surfaces
-            .get(face.surface.as_str())
-            .copied()
-            .ok_or_else(|| {
-                CodecError::malformed(format_args!(
-                    "IGES topology emission references unvalidated surface {}",
-                    face.surface.as_str()
-                ))
-            })?;
-        let loops = face_loop_order(ir, face)?;
-        let bounded = loops
-            .iter()
-            .all(|loop_| face.loop_role(&loop_.id) == LoopBoundaryRole::Unspecified);
-        for loop_ in loops {
-            if bounded {
-                let boundary = boundary_entity(
-                    ctx,
-                    ir,
-                    loop_,
-                    surface_index,
-                    &surface.geometry,
-                    (&edge_indices, &pcurve_indices),
-                    &mut entities,
-                )?;
-                let index = entities.len();
-                entities.push(boundary);
-                boundary_indices.insert(loop_.id.as_str().to_owned(), index);
-            } else {
-                let curve_on_surface = curve_on_surface_entity(
-                    ctx,
-                    ir,
-                    &mut entities,
-                    CurveOnSurfaceEntityRequest {
-                        version,
-                        loop_,
-                        surface_index,
-                        surface: &surface.geometry,
-                        edge_indices: &edge_indices,
-                        pcurve_indices: &pcurve_indices,
-                    },
-                )?;
-                let index = entities.len();
-                entities.push(curve_on_surface);
-                curve_on_surface_indices.insert(loop_.id.as_str().to_owned(), index);
-            }
-        }
+    for (surface_index, boundary) in &boundaries {
+        let entity = if boundary.trimmed {
+            curve_on_surface_entity(
+                ir,
+                &mut entities,
+                CurveOnSurfaceEntityRequest {
+                    version,
+                    boundary,
+                    surface_index: *surface_index,
+                    edge_indices: &edge_indices,
+                    pcurve_indices: &pcurve_indices,
+                },
+            )?
+        } else {
+            boundary_entity(
+                ir,
+                boundary,
+                *surface_index,
+                (&edge_indices, &pcurve_indices),
+                &mut entities,
+            )?
+        };
+        let index = entities.len();
+        entities.push(entity);
+        let indices = if boundary.trimmed {
+            &mut curve_on_surface_indices
+        } else {
+            &mut boundary_indices
+        };
+        indices.insert(boundary.loop_.id.as_str().to_owned(), index);
     }
 
     for face in &faces {
@@ -2895,12 +2900,7 @@ fn topology_entities(
     }
 
     let mut points = ir.model.points.iter().collect::<Vec<_>>();
-    ctx.stable_sort_by(
-        &mut points,
-        |left, right| left.id.as_str().cmp(right.id.as_str()),
-        |item| item.id.as_str().len(),
-        "iges points sort",
-    )?;
+    points.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
     for point in points {
         if consumed_points.contains(point.id.as_str()) {
             continue;
@@ -2912,7 +2912,7 @@ fn topology_entities(
             )));
             continue;
         }
-        append_free_point_entity(ctx, &mut entities, point, &ownership, losses)?;
+        append_free_point_entity(&mut entities, point, &ownership, losses);
     }
     Ok(entities)
 }
@@ -3298,16 +3298,17 @@ fn validate_trimmed_sheet_topology<'a>(
                             pcurve.id
                         )));
                     };
-                    if pcurve_use
-                        .parameter_range
-                        .is_some_and(|range| !same_range(range.endpoints(), parameter_range.get()))
-                    {
+                    if pcurve_use.parameter_range.is_some_and(|range| {
+                        let [start, end] = range.endpoints();
+                        !same_range([start, end], parameter_range.get())
+                            && !same_range([end, start], parameter_range.get())
+                    }) {
                         return Err(CodecError::NotImplemented(format!(
                             "IGES semantic writer cannot restrict pcurve use {}",
                             pcurve_use.pcurve
                         )));
                     }
-                    pcurve_entity(ctx, ir, pcurve)?;
+                    pcurve_entity(ir, pcurve)?;
                     used_pcurves.insert(pcurve.id.as_str().to_owned());
                 }
                 let orientation = pcurve_orientation_context(
@@ -3315,7 +3316,7 @@ fn validate_trimmed_sheet_topology<'a>(
                     &surface.geometry,
                     span.start,
                     span.end,
-                    coedge.sense,
+                    UseDirection::traversed(coedge.sense),
                     topology_edge_explicit_tolerance(ir, edge),
                     coedge.id.as_str(),
                 );
@@ -3416,105 +3417,276 @@ fn face_outer_loop<'a>(face: &cadmpeg_ir::topology::Face, loops: &'a [&Loop]) ->
         .filter(|loop_| face.loop_role(&loop_.id) == LoopBoundaryRole::Outer)
 }
 
-fn boundary_entity(
-    ctx: &DecodeContext<'_>,
-    ir: &CadIr,
+/// A coedge of a boundary loop with its edge carrier and the edge span on it.
+struct BoundaryCoedge<'ir> {
+    coedge: &'ir Coedge,
+    edge: &'ir Edge,
+    curve_id: &'ir CurveId,
+    geometry: CurveGeometry,
+    span: CurveSpan,
+}
+
+impl BoundaryCoedge<'_> {
+    /// The direction relative to the edge carrier in which a boundary written
+    /// in `direction` relative to the loop traversal writes this coedge.
+    fn written(&self, direction: Sense) -> Sense {
+        if self.coedge.sense == direction {
+            Sense::Forward
+        } else {
+            Sense::Reversed
+        }
+    }
+}
+
+fn boundary_coedge<'ir>(
+    ir: &'ir CadIr,
     loop_: &Loop,
+    coedge_id: &CoedgeId,
+) -> Result<BoundaryCoedge<'ir>, CodecError> {
+    let coedge = ir
+        .model
+        .coedges
+        .iter()
+        .find(|coedge| coedge.id == *coedge_id)
+        .ok_or_else(|| {
+            CodecError::malformed(format_args!(
+                "IGES loop {} references missing coedge {}",
+                loop_.id, coedge_id
+            ))
+        })?;
+    let edge = ir
+        .model
+        .edges
+        .iter()
+        .find(|edge| edge.id == coedge.edge)
+        .ok_or_else(|| {
+            CodecError::malformed(format_args!(
+                "IGES coedge {} references missing edge {}",
+                coedge.id, coedge.edge
+            ))
+        })?;
+    let curve_id = edge.curve().ok_or_else(|| {
+        CodecError::NotImplemented(format!(
+            "IGES loop {} does not encode carrier-less edge {}",
+            loop_.id, edge.id
+        ))
+    })?;
+    let curve = ir
+        .model
+        .curves
+        .iter()
+        .find(|curve| curve.id == *curve_id)
+        .ok_or_else(|| {
+            CodecError::malformed(format_args!(
+                "IGES edge {} references missing curve {}",
+                edge.id, curve_id
+            ))
+        })?;
+    let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
+        CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
+    })?)?;
+    let span = edge_span(ir, edge, &geometry)?;
+    Ok(BoundaryCoedge {
+        coedge,
+        edge,
+        curve_id,
+        geometry,
+        span,
+    })
+}
+
+/// One coedge of a written Type 141 or Type 142 boundary with the entities
+/// that its written use references.
+struct WrittenCoedge<'ir> {
+    carrier: BoundaryCoedge<'ir>,
+    /// The model curve entity. A Type 141 boundary states the coedge sense,
+    /// so it references the stored edge curve.
+    model: CarrierEntity,
+    pcurves: Vec<WrittenPcurveUse<'ir>>,
+}
+
+/// The Type 141 or Type 142 boundary of one loop with its coedges in
+/// written order.
+struct WrittenBoundary<'ir> {
+    loop_: &'ir Loop,
+    /// Whether the boundary is a Type 142 curve on a surface.
+    trimmed: bool,
+    coedges: Vec<WrittenCoedge<'ir>>,
+}
+
+impl WrittenBoundary<'_> {
+    /// Whether the boundary writes its model curve as one Type 102 composite
+    /// of its coedge curves. A Type 102 entity cannot be a constituent of
+    /// another one, so that composite takes the constituents of a composite
+    /// edge curve.
+    fn composes_model_curve(&self) -> bool {
+        self.trimmed && self.coedges.len() > 1
+    }
+
+    /// The form in which `coedge` references its stored edge curve.
+    fn stored_edge_form(&self, coedge: &WrittenCoedge<'_>) -> Option<StoredEdgeForm> {
+        (coedge.model == CarrierEntity::Stored).then(|| {
+            if self.composes_model_curve()
+                && matches!(
+                    coedge.carrier.geometry,
+                    CurveGeometry::Solved(SolvedCurveGeometry::Composite { .. })
+                )
+            {
+                StoredEdgeForm::Constituents
+            } else {
+                StoredEdgeForm::Whole
+            }
+        })
+    }
+}
+
+/// How the written boundaries reference the stored curve of an edge.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum StoredEdgeForm {
+    /// Only through the constituents of its Type 102 composite.
+    Constituents,
+    /// As one entity.
+    Whole,
+}
+
+/// The written entities of the stored curve of an edge.
+enum StoredEdgeCurve {
+    Whole(usize),
+    /// The constituents of a Type 102 composite, without the composite.
+    Constituents(Vec<usize>),
+}
+
+/// The boundary of `loop_` on `surface` with the curve entities that each
+/// coedge use references.
+fn written_boundary<'ir>(
+    ir: &'ir CadIr,
+    loop_: &'ir Loop,
+    surface: &'ir SurfaceGeometry,
+    trimmed: bool,
+) -> Result<WrittenBoundary<'ir>, CodecError> {
+    let carriers = loop_
+        .coedges()
+        .iter()
+        .map(|coedge_id| boundary_coedge(ir, loop_, coedge_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let orientation = |carrier: &BoundaryCoedge<'ir>, written: Sense| {
+        pcurve_orientation_context(
+            ir,
+            surface,
+            carrier.span.start,
+            carrier.span.end,
+            UseDirection {
+                traversal: carrier.coedge.sense,
+                written,
+            },
+            topology_edge_explicit_tolerance(ir, carrier.edge),
+            carrier.coedge.id.as_str(),
+        )
+    };
+    let coedges = if trimmed {
+        let mut chained = carriers
+            .into_iter()
+            .map(|carrier| {
+                let coedge: &'ir Coedge = carrier.coedge;
+                let chain = orientation(&carrier, coedge.sense).orientation(&coedge.pcurves)?;
+                Ok((carrier, chain))
+            })
+            .collect::<Result<Vec<_>, CodecError>>()?;
+        // Type 142 and Type 144 give a boundary no direction, so the boundary
+        // is written in the direction that takes fewer reversed copies of its
+        // curves.
+        let copies = |direction: Sense| {
+            chained
+                .iter()
+                .map(|(carrier, chain)| {
+                    let written = carrier.written(direction);
+                    usize::from(written == Sense::Reversed)
+                        + reversed_pcurve_copies(*chain, written, &carrier.coedge.pcurves)
+                })
+                .sum::<usize>()
+        };
+        let direction = if copies(Sense::Reversed) < copies(Sense::Forward) {
+            chained.reverse();
+            Sense::Reversed
+        } else {
+            Sense::Forward
+        };
+        chained
+            .into_iter()
+            .map(|(carrier, chain)| {
+                let coedge: &'ir Coedge = carrier.coedge;
+                let written = carrier.written(direction);
+                let pcurves = orientation(&carrier, written)
+                    .written_uses_for_chain(chain, &coedge.pcurves)?;
+                Ok(WrittenCoedge {
+                    carrier,
+                    model: if written == Sense::Forward {
+                        CarrierEntity::Stored
+                    } else {
+                        CarrierEntity::ReversedCopy
+                    },
+                    pcurves,
+                })
+            })
+            .collect::<Result<Vec<_>, CodecError>>()?
+    } else {
+        carriers
+            .into_iter()
+            .map(|carrier| {
+                let coedge: &'ir Coedge = carrier.coedge;
+                let pcurves = orientation(&carrier, coedge.sense).written_uses(&coedge.pcurves)?;
+                Ok(WrittenCoedge {
+                    carrier,
+                    model: CarrierEntity::Stored,
+                    pcurves,
+                })
+            })
+            .collect::<Result<Vec<_>, CodecError>>()?
+    };
+    Ok(WrittenBoundary {
+        loop_,
+        trimmed,
+        coedges,
+    })
+}
+
+fn boundary_entity(
+    ir: &CadIr,
+    boundary: &WrittenBoundary<'_>,
     surface_index: usize,
-    surface: &SurfaceGeometry,
-    curve_indices: (&BTreeMap<String, usize>, &BTreeMap<String, usize>),
+    curve_indices: (&BTreeMap<String, StoredEdgeCurve>, &BTreeMap<String, usize>),
     entities: &mut Vec<Entity>,
 ) -> Result<Entity, CodecError> {
     let (edge_indices, pcurve_indices) = curve_indices;
-    let coedges = loop_
-        .coedges()
-        .iter()
-        .map(|coedge_id| {
-            ir.model
-                .coedges
-                .iter()
-                .find(|coedge| coedge.id == *coedge_id)
-                .ok_or_else(|| {
-                    CodecError::malformed(format_args!(
-                        "IGES loop {} references missing coedge {}",
-                        loop_.id, coedge_id
-                    ))
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let has_pcurves = coedges
+    let has_pcurves = boundary
+        .coedges
         .first()
-        .is_some_and(|coedge| !coedge.pcurves.is_empty());
+        .is_some_and(|written| !written.carrier.coedge.pcurves.is_empty());
     let representation = i32::from(has_pcurves);
     let mut parameters = format!(
         "{representation},{BOUNDARY_PREFERENCE_MODEL_CURVES},{},{}",
         reference_marker(surface_index),
-        loop_.coedges().len()
+        boundary.coedges.len()
     );
-    for coedge in coedges {
-        let edge_index = edge_indices
-            .get(coedge.edge.as_str())
-            .copied()
-            .ok_or_else(|| {
-                CodecError::malformed(format_args!(
-                    "IGES boundary loop {} references missing edge entity {}",
-                    loop_.id, coedge.edge
-                ))
-            })?;
+    for written in &boundary.coedges {
+        let coedge = written.carrier.coedge;
+        let Some(StoredEdgeCurve::Whole(edge_index)) = edge_indices.get(coedge.edge.as_str())
+        else {
+            return Err(CodecError::malformed(format_args!(
+                "IGES boundary loop {} references missing edge entity {}",
+                boundary.loop_.id, coedge.edge
+            )));
+        };
         let sense = match coedge.sense {
             Sense::Forward => 1,
             Sense::Reversed => 2,
         };
         parameters.push(',');
-        parameters.push_str(&reference_marker(edge_index));
-        write!(parameters, ",{sense},{}", coedge.pcurves.len()).map_err(CodecError::malformed)?;
-        let pcurve_entities = if coedge.pcurves.is_empty() {
-            Vec::new()
-        } else {
-            let edge = ir
-                .model
-                .edges
-                .iter()
-                .find(|edge| edge.id == coedge.edge)
-                .ok_or_else(|| {
-                    CodecError::malformed(format_args!(
-                        "IGES coedge {} references missing edge {}",
-                        coedge.id, coedge.edge
-                    ))
-                })?;
-            let curve_id = edge.curve().ok_or_else(|| {
-                CodecError::NotImplemented(format!(
-                    "IGES boundary loop {} cannot orient pcurves for carrier-less edge {}",
-                    loop_.id, edge.id
-                ))
-            })?;
-            let curve = ir
-                .model
-                .curves
-                .iter()
-                .find(|curve| curve.id == *curve_id)
-                .ok_or_else(|| {
-                    CodecError::malformed(format_args!(
-                        "IGES edge {} references missing curve {}",
-                        edge.id, curve_id
-                    ))
-                })?;
-            let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
-                CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
-            })?)?;
-            let span = edge_span(ir, edge, &geometry)?;
-            pcurve_orientation_context(
-                ir,
-                surface,
-                span.start,
-                span.end,
-                coedge.sense,
-                topology_edge_explicit_tolerance(ir, edge),
-                coedge.id.as_str(),
-            )
-            .oriented_entities(ctx, &coedge.pcurves, pcurve_indices, entities)?
-        };
-        for (_, pcurve_index) in pcurve_entities {
+        parameters.push_str(&reference_marker(*edge_index));
+        write!(parameters, ",{sense},{}", written.pcurves.len()).map_err(CodecError::malformed)?;
+        for (_, pcurve_index) in
+            pcurve_use_entities(ir, &written.pcurves, pcurve_indices, entities)?
+        {
             parameters.push(',');
             parameters.push_str(&reference_marker(pcurve_index));
         }
@@ -3531,118 +3703,71 @@ fn boundary_entity(
 }
 
 #[derive(Clone, Copy)]
-struct CurveOnSurfaceEntityRequest<'a> {
+struct CurveOnSurfaceEntityRequest<'a, 'ir> {
     version: crate::IgesVersion,
-    loop_: &'a Loop,
+    boundary: &'a WrittenBoundary<'ir>,
     surface_index: usize,
-    surface: &'a SurfaceGeometry,
-    edge_indices: &'a BTreeMap<String, usize>,
+    edge_indices: &'a BTreeMap<String, StoredEdgeCurve>,
     pcurve_indices: &'a BTreeMap<String, usize>,
 }
 
 fn curve_on_surface_entity(
-    ctx: &DecodeContext<'_>,
     ir: &CadIr,
     entities: &mut Vec<Entity>,
-    request: CurveOnSurfaceEntityRequest<'_>,
+    request: CurveOnSurfaceEntityRequest<'_, '_>,
 ) -> Result<Entity, CodecError> {
     let CurveOnSurfaceEntityRequest {
         version,
-        loop_,
+        boundary,
         surface_index,
-        surface,
         edge_indices,
         pcurve_indices,
     } = request;
+    let composes = boundary.composes_model_curve();
     let mut model_children = Vec::new();
     let mut pcurve_children = Vec::new();
-    for coedge_id in loop_.coedges() {
-        let coedge = ir
-            .model
-            .coedges
-            .iter()
-            .find(|coedge| coedge.id == *coedge_id)
-            .ok_or_else(|| {
-                CodecError::malformed(format_args!(
-                    "IGES loop {} references missing coedge {}",
-                    loop_.id, coedge_id
-                ))
-            })?;
-        let edge = ir
-            .model
-            .edges
-            .iter()
-            .find(|edge| edge.id == coedge.edge)
-            .ok_or_else(|| {
-                CodecError::malformed(format_args!(
-                    "IGES coedge {} references missing edge {}",
-                    coedge.id, coedge.edge
-                ))
-            })?;
-        let curve_id = edge.curve().ok_or_else(|| {
-            CodecError::NotImplemented(format!(
-                "IGES Type 142 output does not encode carrier-less edge {}",
-                edge.id
-            ))
-        })?;
-        let curve = ir
-            .model
-            .curves
-            .iter()
-            .find(|curve| curve.id == *curve_id)
-            .ok_or_else(|| {
-                CodecError::malformed(format_args!(
-                    "IGES edge {} references missing curve {}",
-                    edge.id, curve_id
-                ))
-            })?;
-        let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
-            CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
-        })?)?;
-        let span = edge_span(ir, edge, &geometry)?;
-        let model_index = if coedge.sense == Sense::Forward {
-            *edge_indices.get(edge.id.as_str()).ok_or_else(|| {
-                CodecError::malformed(format_args!(
-                    "IGES Type 142 loop {} references missing edge entity {}",
-                    loop_.id, edge.id
-                ))
-            })?
-        } else {
-            append_curve_entity(
-                ctx,
-                entities,
-                ir,
-                CurveEntityRequest {
+    for written in &boundary.coedges {
+        let carrier = &written.carrier;
+        match written.model {
+            CarrierEntity::Stored => match edge_indices.get(carrier.edge.id.as_str()) {
+                Some(StoredEdgeCurve::Whole(index)) => model_children.push(*index),
+                Some(StoredEdgeCurve::Constituents(indices)) => {
+                    model_children.extend(indices.iter().copied());
+                }
+                None => {
+                    return Err(CodecError::malformed(format_args!(
+                        "IGES Type 142 loop {} references missing edge entity {}",
+                        boundary.loop_.id, carrier.edge.id
+                    )));
+                }
+            },
+            CarrierEntity::ReversedCopy => {
+                let request = CurveEntityRequest {
                     version,
-                    curve_id,
-                    geometry: &geometry,
-                    span: Some(&span),
-                    sense: coedge.sense,
+                    curve_id: carrier.curve_id,
+                    geometry: &carrier.geometry,
+                    span: Some(&carrier.span),
+                    sense: Sense::Reversed,
                     status: EntityStatus::PhysicallyDependent,
                     reference_offset: 0,
-                },
-            )?
-        };
-        model_children.push(model_index);
+                };
+                if composes {
+                    model_children.extend(append_curve_constituents(entities, ir, request)?);
+                } else {
+                    model_children.push(append_curve_entity(entities, ir, request)?);
+                }
+            }
+        }
         pcurve_children.extend(
-            pcurve_orientation_context(
-                ir,
-                surface,
-                span.start,
-                span.end,
-                coedge.sense,
-                topology_edge_explicit_tolerance(ir, edge),
-                coedge.id.as_str(),
-            )
-            .oriented_entities(ctx, &coedge.pcurves, pcurve_indices, entities)?
-            .into_iter()
-            .map(|(_, index)| index),
+            pcurve_use_entities(ir, &written.pcurves, pcurve_indices, entities)?
+                .into_iter()
+                .map(|(_, index)| index),
         );
     }
     if model_children.is_empty() || pcurve_children.is_empty() {
         return Err(CodecError::NotImplemented(format!(
             "IGES Type 144 loop {} requires model and parameter curve carriers",
-            loop_.id
+            boundary.loop_.id
         )));
     }
     let model_curve = if model_children.len() == 1 {
@@ -3810,7 +3935,6 @@ fn composite_entity_references(entity: &Entity) -> Result<Vec<usize>, CodecError
 }
 
 fn oriented_curve_entity(
-    ctx: &DecodeContext<'_>,
     geometry: &CurveGeometry,
     span: &CurveSpan,
     sense: Sense,
@@ -3818,7 +3942,6 @@ fn oriented_curve_entity(
 ) -> Result<Entity, CodecError> {
     if sense == Sense::Forward {
         let mut entity = curve_entity(
-            ctx,
             geometry.solved().ok_or_else(|| {
                 CodecError::NotImplemented("IGES carrier has no solved geometry".into())
             })?,
@@ -3835,7 +3958,6 @@ fn oriented_curve_entity(
     };
     let mut entity = match geometry {
         CurveGeometry::Solved(SolvedCurveGeometry::Line(_)) => curve_entity(
-            ctx,
             geometry.solved().ok_or_else(|| {
                 CodecError::NotImplemented("IGES carrier has no solved geometry".into())
             })?,
@@ -3843,13 +3965,12 @@ fn oriented_curve_entity(
             version,
         )?,
         CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(nurbs)) => {
-            let (reversed, range) = reverse_nurbs(ctx, nurbs, span.range)?;
+            let (reversed, range) = reverse_nurbs(nurbs, span.range)?;
             let reversed_span = CurveSpan {
                 range,
                 ..reversed_span
             };
             curve_entity(
-                ctx,
                 &SolvedCurveGeometry::Nurbs(reversed),
                 Some(&reversed_span),
                 version,
@@ -3866,26 +3987,19 @@ fn oriented_curve_entity(
                 *ref_direction,
                 radius,
                 span.range.get(),
-                ctx,
             )
-            .map_err(|error| match error {
-                crate::entities::curve_conversion::CurveConversionError::Resource(error) => error,
-                other @ crate::entities::curve_conversion::CurveConversionError::Carrier(_) => {
-                    CodecError::malformed(format_args!("circular: {other}"))
-                }
-            })?
+            .map_err(|error| CodecError::malformed(format_args!("circular: {error}")))?
             .ok_or_else(|| {
                 CodecError::NotImplemented(format!(
                     "IGES reversed circular edge span is not convertible ({span:?})"
                 ))
             })?;
-            let (reversed, range) = reverse_nurbs(ctx, &reversed, span.range)?;
+            let (reversed, range) = reverse_nurbs(&reversed, span.range)?;
             let reversed_span = CurveSpan {
                 range,
                 ..reversed_span
             };
             curve_entity(
-                ctx,
                 &SolvedCurveGeometry::Nurbs(reversed),
                 Some(&reversed_span),
                 version,
@@ -3904,26 +4018,19 @@ fn oriented_curve_entity(
                 major_radius,
                 minor_radius,
                 span.range.get(),
-                ctx,
             )
-            .map_err(|error| match error {
-                crate::entities::curve_conversion::CurveConversionError::Resource(error) => error,
-                other @ crate::entities::curve_conversion::CurveConversionError::Carrier(_) => {
-                    CodecError::malformed(format_args!("elliptical: {other}"))
-                }
-            })?
+            .map_err(|error| CodecError::malformed(format_args!("elliptical: {error}")))?
             .ok_or_else(|| {
                 CodecError::NotImplemented(format!(
                     "IGES reversed elliptical edge span is not convertible ({span:?})"
                 ))
             })?;
-            let (reversed, range) = reverse_nurbs(ctx, &reversed, span.range)?;
+            let (reversed, range) = reverse_nurbs(&reversed, span.range)?;
             let reversed_span = CurveSpan {
                 range,
                 ..reversed_span
             };
             curve_entity(
-                ctx,
                 &SolvedCurveGeometry::Nurbs(reversed),
                 Some(&reversed_span),
                 version,
@@ -3940,26 +4047,19 @@ fn oriented_curve_entity(
                 *major_direction,
                 focal_distance,
                 span.range.get(),
-                ctx,
             )
-            .map_err(|error| match error {
-                crate::entities::curve_conversion::CurveConversionError::Resource(error) => error,
-                other @ crate::entities::curve_conversion::CurveConversionError::Carrier(_) => {
-                    CodecError::malformed(format_args!("parabolic: {other}"))
-                }
-            })?
+            .map_err(|error| CodecError::malformed(format_args!("parabolic: {error}")))?
             .ok_or_else(|| {
                 CodecError::NotImplemented(format!(
                     "IGES reversed parabolic edge span is not convertible ({span:?})"
                 ))
             })?;
-            let (reversed, range) = reverse_nurbs(ctx, &reversed, span.range)?;
+            let (reversed, range) = reverse_nurbs(&reversed, span.range)?;
             let reversed_span = CurveSpan {
                 range,
                 ..reversed_span
             };
             curve_entity(
-                ctx,
                 &SolvedCurveGeometry::Nurbs(reversed),
                 Some(&reversed_span),
                 version,
@@ -3968,21 +4068,19 @@ fn oriented_curve_entity(
         CurveGeometry::Solved(SolvedCurveGeometry::Polyline(polyline)) => {
             let values = polyline_parameters(polyline)?;
             let original = NurbsCurve::from_lanes(
-                ctx,
                 1,
                 polyline_knots(&values),
                 polyline.points().collect(),
                 None,
                 false,
-            )?
+            )
             .map_err(|error| CodecError::malformed(format_args!("polyline: {error}")))?;
-            let (reversed, range) = reverse_nurbs(ctx, &original, span.range)?;
+            let (reversed, range) = reverse_nurbs(&original, span.range)?;
             let reversed_span = CurveSpan {
                 range,
                 ..reversed_span
             };
             curve_entity(
-                ctx,
                 &SolvedCurveGeometry::Nurbs(reversed),
                 Some(&reversed_span),
                 version,
@@ -4010,7 +4108,6 @@ fn oriented_curve_entity(
                 end: span.start,
             };
             curve_entity(
-                ctx,
                 reversed_geometry.solved().ok_or_else(|| {
                     CodecError::NotImplemented("IGES carrier has no solved geometry".into())
                 })?,
@@ -4166,11 +4263,6 @@ fn pcurve_support_surfaces(ir: &CadIr, pcurve_id: &cadmpeg_ir::ids::PcurveId) ->
 }
 
 fn source_pcurve(ir: &CadIr, pcurve: &Pcurve) -> Result<Pcurve, CodecError> {
-    let writer_arena = cadmpeg_core::decode::DecodeArena::new();
-    let writer_policy = cadmpeg_core::decode::DecodePolicy::desktop();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &writer_arena, &writer_policy)?;
-
     let mut parameter_map = None;
     for surface_id in pcurve_support_surfaces(ir, &pcurve.id) {
         let candidate =
@@ -4191,19 +4283,16 @@ fn source_pcurve(ir: &CadIr, pcurve: &Pcurve) -> Result<Pcurve, CodecError> {
         return Ok(pcurve);
     };
     nurbs
-        .try_map_control_points(
-            |_, point| {
-                let point = point.get();
-                cadmpeg_ir::units::FinitePoint2::new(cadmpeg_ir::math::Point2::new(
-                    point.u.mul_add(u_factor, u_offset),
-                    point.v.mul_add(v_factor, v_offset),
-                ))
-                .ok_or_else(|| {
-                    NurbsError::Structure("control_points contains a non-finite point".into())
-                })
-            },
-            &ctx,
-        )?
+        .try_map_control_points(|_, point| {
+            let point = point.get();
+            cadmpeg_ir::units::FinitePoint2::new(cadmpeg_ir::math::Point2::new(
+                point.u.mul_add(u_factor, u_offset),
+                point.v.mul_add(v_factor, v_offset),
+            ))
+            .ok_or_else(|| {
+                NurbsError::Structure("control_points contains a non-finite point".into())
+            })
+        })
         .map_err(|error| {
             CodecError::malformed(format_args!(
                 "pcurve {} parameter mapping: {error}",
@@ -4213,11 +4302,7 @@ fn source_pcurve(ir: &CadIr, pcurve: &Pcurve) -> Result<Pcurve, CodecError> {
     Ok(pcurve)
 }
 
-fn oriented_pcurve_entity(
-    ctx: &DecodeContext<'_>,
-    ir: &CadIr,
-    pcurve: &Pcurve,
-) -> Result<Entity, CodecError> {
+fn oriented_pcurve_entity(ir: &CadIr, pcurve: &Pcurve) -> Result<Entity, CodecError> {
     let pcurve = source_pcurve(ir, pcurve)?;
     let range = pcurve.parameter_range().ok_or_else(|| {
         CodecError::NotImplemented(format!(
@@ -4234,12 +4319,11 @@ fn oriented_pcurve_entity(
     let nurbs = nurbs
         .lift(|point| Point3::new(point.u, point.v, 0.0))
         .map_err(|error| CodecError::malformed(format_args!("pcurve {}: {error}", pcurve.id)))?;
-    let (reversed, range) = reverse_nurbs(ctx, &nurbs, range)?;
-    encode_nurbs(ctx, &reversed, range, "PCURVE")
+    let (reversed, range) = reverse_nurbs(&nurbs, range)?;
+    encode_nurbs(&reversed, range, "PCURVE")
 }
 
 fn reverse_nurbs(
-    ctx: &DecodeContext<'_>,
     nurbs: &NurbsCurve,
     range: FiniteVector<2>,
 ) -> Result<(NurbsCurve, FiniteVector<2>), CodecError> {
@@ -4264,16 +4348,12 @@ fn reverse_nurbs(
     let reversed_range = FiniteVector::from([reflect(range_end)?, reflect(range_start)?]);
     let mut poles = nurbs.pole_rows().clone();
     poles.reverse();
-    let reversed = NurbsCurve::new(ctx, nurbs.degree(), knots, poles, nurbs.periodic())?
+    let reversed = NurbsCurve::new(nurbs.degree(), knots, poles, nurbs.periodic())
         .map_err(|error| CodecError::malformed(format_args!("reversed NURBS: {error}")))?;
     Ok((reversed, reversed_range))
 }
 
-fn pcurve_entity(
-    ctx: &DecodeContext<'_>,
-    ir: &CadIr,
-    pcurve: &Pcurve,
-) -> Result<Entity, CodecError> {
+fn pcurve_entity(ir: &CadIr, pcurve: &Pcurve) -> Result<Entity, CodecError> {
     let pcurve = source_pcurve(ir, pcurve)?;
     let range = pcurve.parameter_range().ok_or_else(|| {
         CodecError::NotImplemented(format!(
@@ -4290,7 +4370,7 @@ fn pcurve_entity(
     let curve = nurbs
         .lift(|point| Point3::new(point.u, point.v, 0.0))
         .map_err(|error| CodecError::malformed(format_args!("pcurve {}: {error}", pcurve.id)))?;
-    encode_nurbs(ctx, &curve, range, "PCURVE")
+    encode_nurbs(&curve, range, "PCURVE")
 }
 
 fn reference_marker(index: usize) -> String {
@@ -4371,7 +4451,6 @@ fn isoparametric_flag(pcurve_use: &PcurveUse, owner: &str) -> Result<i32, CodecE
 }
 
 fn validate_brep_pcurve_uses(
-    ctx: &DecodeContext<'_>,
     orientation: &PcurveOrientationContext<'_>,
     uses: &[PcurveUse],
 ) -> Result<(), CodecError> {
@@ -4395,10 +4474,10 @@ fn validate_brep_pcurve_uses(
                 orientation.owner, pcurve.id
             ))
         })?;
-        if pcurve_use
-            .parameter_range
-            .is_some_and(|use_range| !same_range(use_range.endpoints(), range.get()))
-        {
+        if pcurve_use.parameter_range.is_some_and(|use_range| {
+            let [start, end] = use_range.endpoints();
+            !same_range([start, end], range.get()) && !same_range([end, start], range.get())
+        }) {
             return Err(CodecError::NotImplemented(format!(
                 "IGES B-rep {} cannot restrict pcurve use {}",
                 orientation.owner, pcurve_use.pcurve
@@ -4410,15 +4489,28 @@ fn validate_brep_pcurve_uses(
                 orientation.owner, pcurve.id
             )));
         }
-        pcurve_entity(ctx, orientation.ir, pcurve)?;
+        pcurve_entity(orientation.ir, pcurve)?;
     }
     orientation.validate(uses)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PcurveOrientation {
-    Natural,
-    Directed,
+/// The directions of one coedge's pcurve uses relative to its edge curve.
+#[derive(Clone, Copy)]
+struct UseDirection {
+    /// The coedge's traversal.
+    traversal: Sense,
+    /// The direction in which the owning entity writes the uses.
+    written: Sense,
+}
+
+impl UseDirection {
+    /// Uses written in the coedge's traversal direction.
+    const fn traversed(traversal: Sense) -> Self {
+        Self {
+            traversal,
+            written: traversal,
+        }
+    }
 }
 
 struct PcurveOrientationContext<'a> {
@@ -4426,34 +4518,38 @@ struct PcurveOrientationContext<'a> {
     surface: &'a SurfaceGeometry,
     natural_start: Point3,
     natural_end: Point3,
-    sense: Sense,
+    direction: UseDirection,
     tolerance: f64,
     owner: &'a str,
 }
 
-impl PcurveOrientationContext<'_> {
+impl<'a> PcurveOrientationContext<'a> {
     fn validate(&self, uses: &[PcurveUse]) -> Result<(), CodecError> {
         self.orientation(uses).map(|_| ())
     }
 
-    fn orientation(&self, uses: &[PcurveUse]) -> Result<PcurveOrientation, CodecError> {
+    /// The direction of the pcurve chain relative to the edge curve. A chain
+    /// runs in the coedge's traversal; a reversed coedge also admits a chain
+    /// stated in the edge curve's direction.
+    fn orientation(&self, uses: &[PcurveUse]) -> Result<Sense, CodecError> {
+        let traversal = self.direction.traversal;
         if uses.is_empty() {
-            return Ok(PcurveOrientation::Directed);
+            return Ok(traversal);
         }
         let tolerance = effective_topology_tolerance(self.tolerance);
         let mapped = self.map(uses)?;
-        let (directed_start, directed_end) = if self.sense == Sense::Forward {
+        let (directed_start, directed_end) = if traversal == Sense::Forward {
             (self.natural_start, self.natural_end)
         } else {
             (self.natural_end, self.natural_start)
         };
         if pcurve_chain_matches(&mapped, directed_start, directed_end, tolerance) {
-            return Ok(PcurveOrientation::Directed);
+            return Ok(traversal);
         }
-        if self.sense == Sense::Reversed
+        if traversal == Sense::Reversed
             && pcurve_chain_matches(&mapped, self.natural_start, self.natural_end, tolerance)
         {
-            return Ok(PcurveOrientation::Natural);
+            return Ok(Sense::Forward);
         }
         Err(CodecError::malformed(format_args!(
             "IGES {} pcurve chain endpoints disagree with its directed support edge",
@@ -4533,32 +4629,42 @@ impl PcurveOrientationContext<'_> {
                           position: &str| {
                 point.map_err(|failure| match failure {
                     EvaluationFailure::ResourceLimit(limit) => limit.into(),
-                    EvaluationFailure::NoValue | EvaluationFailure::NonFinite(_) => {
-                        CodecError::malformed(format_args!(
-                            "IGES point {} pcurve {} {position} has non-finite coordinates",
-                            self.owner, pcurve.id
-                        ))
-                    }
+                    EvaluationFailure::NoValue
+                    | EvaluationFailure::NonFinite(_)
+                    | EvaluationFailure::WorkExhausted => CodecError::malformed(format_args!(
+                        "IGES point {} pcurve {} {position} has non-finite coordinates",
+                        self.owner, pcurve.id
+                    )),
                 })
             };
-            mapped.push((finite(start, "start")?.get(), finite(end, "end")?.get()));
+            let (start, end) = (finite(start, "start")?.get(), finite(end, "end")?.get());
+            mapped.push(if use_runs_backward(pcurve_use) {
+                (end, start)
+            } else {
+                (start, end)
+            });
         }
         Ok(mapped)
     }
 
-    fn oriented_entities<'uses>(
+    /// The written uses of the chain that `orientation` resolves.
+    fn written_uses(&self, uses: &'a [PcurveUse]) -> Result<Vec<WrittenPcurveUse<'a>>, CodecError> {
+        let chain = self.orientation(uses)?;
+        self.written_uses_for_chain(chain, uses)
+    }
+
+    /// The uses of a chain in direction `chain`, in the written order. A use
+    /// that the written direction traverses backward references a reversed
+    /// copy of its pcurve.
+    fn written_uses_for_chain(
         &self,
-        ctx: &DecodeContext<'_>,
-        uses: &'uses [PcurveUse],
-        pcurve_indices: &BTreeMap<String, usize>,
-        entities: &mut Vec<Entity>,
-    ) -> Result<Vec<(&'uses PcurveUse, usize)>, CodecError> {
-        let orientation = self.orientation(uses)?;
-        let reverse = self.sense == Sense::Reversed && orientation == PcurveOrientation::Natural;
-        let ordered_uses = if reverse {
-            uses.iter().rev().collect::<Vec<_>>()
-        } else {
+        chain: Sense,
+        uses: &'a [PcurveUse],
+    ) -> Result<Vec<WrittenPcurveUse<'a>>, CodecError> {
+        let ordered_uses = if chain == self.direction.written {
             uses.iter().collect::<Vec<_>>()
+        } else {
+            uses.iter().rev().collect::<Vec<_>>()
         };
         ordered_uses
             .into_iter()
@@ -4575,22 +4681,97 @@ impl PcurveOrientationContext<'_> {
                             self.owner, pcurve_use.pcurve
                         ))
                     })?;
-                let index = if reverse {
-                    let index = entities.len();
-                    entities.push(oriented_pcurve_entity(ctx, self.ir, pcurve)?);
-                    index
+                let entity = if takes_reversed_copy(chain, self.direction.written, pcurve_use) {
+                    CarrierEntity::ReversedCopy
                 } else {
-                    *pcurve_indices.get(pcurve.id.as_str()).ok_or_else(|| {
-                        CodecError::malformed(format_args!(
-                            "IGES {} references missing pcurve entity {}",
-                            self.owner, pcurve.id
-                        ))
-                    })?
+                    CarrierEntity::Stored
                 };
-                Ok((pcurve_use, index))
+                Ok(WrittenPcurveUse {
+                    pcurve_use,
+                    pcurve,
+                    entity,
+                })
             })
             .collect()
     }
+}
+
+/// The entity that a written use of a curve or a pcurve references.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CarrierEntity {
+    /// The stored entity of the carrier.
+    Stored,
+    /// A reversed copy of the carrier, written for the use.
+    ReversedCopy,
+}
+
+/// One pcurve use in written order with the entity that it references.
+struct WrittenPcurveUse<'ir> {
+    pcurve_use: &'ir PcurveUse,
+    pcurve: &'ir Pcurve,
+    entity: CarrierEntity,
+}
+
+/// The ids of the pcurves whose stored entities `uses` reference.
+fn stored_pcurve_ids<'ir>(
+    uses: impl IntoIterator<Item = &'ir WrittenPcurveUse<'ir>>,
+) -> impl Iterator<Item = &'ir str> {
+    uses.into_iter()
+        .filter(|written| written.entity == CarrierEntity::Stored)
+        .map(|written| written.pcurve.id.as_str())
+}
+
+/// The entity of each written pcurve use. A reversed copy is appended to
+/// `entities`.
+fn pcurve_use_entities<'ir>(
+    ir: &CadIr,
+    uses: &[WrittenPcurveUse<'ir>],
+    pcurve_indices: &BTreeMap<String, usize>,
+    entities: &mut Vec<Entity>,
+) -> Result<Vec<(&'ir PcurveUse, usize)>, CodecError> {
+    uses.iter()
+        .map(|written| {
+            let index = match written.entity {
+                CarrierEntity::Stored => *pcurve_indices
+                    .get(written.pcurve.id.as_str())
+                    .ok_or_else(|| {
+                        CodecError::malformed(format_args!(
+                            "IGES pcurve {} has no stored entity",
+                            written.pcurve.id
+                        ))
+                    })?,
+                CarrierEntity::ReversedCopy => {
+                    let index = entities.len();
+                    entities.push(oriented_pcurve_entity(ir, written.pcurve)?);
+                    index
+                }
+            };
+            Ok((written.pcurve_use, index))
+        })
+        .collect()
+}
+
+/// The number of reversed pcurve copies that a chain in direction `chain`
+/// takes when its uses are written in direction `written`.
+fn reversed_pcurve_copies(chain: Sense, written: Sense, uses: &[PcurveUse]) -> usize {
+    uses.iter()
+        .filter(|pcurve_use| takes_reversed_copy(chain, written, pcurve_use))
+        .count()
+}
+
+/// Whether a use of a chain in direction `chain`, written in direction
+/// `written`, traverses its pcurve backward.
+fn takes_reversed_copy(chain: Sense, written: Sense, pcurve_use: &PcurveUse) -> bool {
+    (chain != written) ^ use_runs_backward(pcurve_use)
+}
+
+/// Whether a coedge traverses its pcurve backward: its use states a
+/// decreasing interval.
+fn use_runs_backward(pcurve_use: &PcurveUse) -> bool {
+    pcurve_use.parameter_range.is_some_and(|range| {
+        let [start, end] = range.endpoints();
+        end < start
+    })
 }
 
 fn pcurve_orientation_context<'a>(
@@ -4598,7 +4779,7 @@ fn pcurve_orientation_context<'a>(
     surface: &'a SurfaceGeometry,
     natural_start: Point3,
     natural_end: Point3,
-    sense: Sense,
+    direction: UseDirection,
     tolerance: f64,
     owner: &'a str,
 ) -> PcurveOrientationContext<'a> {
@@ -4607,7 +4788,7 @@ fn pcurve_orientation_context<'a>(
         surface,
         natural_start,
         natural_end,
-        sense,
+        direction,
         tolerance,
         owner,
     }
@@ -5171,7 +5352,9 @@ fn reject_unsupported_native(ir: &CadIr) -> Result<Vec<LossNote>, CodecError> {
         }
         let message = match arena.as_str() {
             "directions" => {
-                "IGES direction records are regenerated only for required analytic-surface support; native direction identities and unrelated records are omitted".to_owned()
+                "IGES direction records are regenerated only for required \
+                 analytic-surface support; native direction identities and unrelated \
+                 records are omitted".to_owned()
             }
             "display_attributes" => {
                 "IGES display attributes are not regenerated by the bounded semantic writer".to_owned()
@@ -5180,7 +5363,9 @@ fn reject_unsupported_native(ir: &CadIr) -> Result<Vec<LossNote>, CodecError> {
                 "IGES product occurrence expansion is not regenerated by the bounded semantic writer".to_owned()
             }
             "quarantined_directory_records" | "quarantined_parameter_records" => format!(
-                "IGES native arena {arena} holds {} quarantined record(s) that the bounded semantic writer does not regenerate, because a record that failed typing has no fields to write",
+                "IGES native arena {arena} holds {} quarantined record(s) that the \
+                 bounded semantic writer does not regenerate, because a record that \
+                 failed typing has no fields to write",
                 records.len()
             ),
             _ => continue,
@@ -5244,39 +5429,25 @@ fn construction_carrier_interval(
     }
 }
 
-fn report_unowned_support(
-    ctx: &DecodeContext<'_>,
-    losses: &mut Vec<LossNote>,
-    id: &str,
-) -> Result<(), CodecError> {
+fn report_unowned_support(losses: &mut Vec<LossNote>, id: &str) {
     let code = IgesLossCode::WriterSupportGeometryNotRepresented;
-    let message = ctx.format_retained(
-        format_args!("1 support geometry record ({id}) has no exported owner and was withheld"),
-        "iges orphan support diagnostic",
-    )?;
-    ctx.charge_retained(
-        4 + cadmpeg_core::decode::u64_from_index(code.code().len()),
-        "iges orphan support loss kind",
-    )?;
-    ctx.push_vec(losses, code.note(message), "iges orphan support loss")
+    let message =
+        format!("1 support geometry record ({id}) has no exported owner and was withheld");
+    losses.push(code.note(message));
 }
 
 fn append_free_point_entity(
-    ctx: &DecodeContext<'_>,
     entities: &mut Vec<Entity>,
     point: &cadmpeg_ir::topology::Point,
     ownership: &ownership::SourceOwnership<'_>,
     losses: &mut Vec<LossNote>,
-) -> Result<(), CodecError> {
+) {
     let status = ownership.status(point.source_object.as_ref());
     if status.is_physically_dependent() {
-        return report_unowned_support(ctx, losses, point.id.as_str());
+        report_unowned_support(losses, point.id.as_str());
+        return;
     }
-    ctx.push_vec(
-        entities,
-        point_entity_with_status(point.position(), status),
-        "iges standalone point entity",
-    )
+    entities.push(point_entity_with_status(point.position(), status));
 }
 
 fn point_entity_with_status(position: FinitePoint3, status: EntityStatus) -> Entity {
@@ -5375,7 +5546,7 @@ fn append_surface_entities(
     losses: &mut Vec<LossNote>,
 ) -> Result<Option<usize>, CodecError> {
     let Some(status) = ownership.surface_status(surface) else {
-        report_unowned_support(ctx, losses, surface.id.as_str())?;
+        report_unowned_support(losses, surface.id.as_str());
         return Ok(None);
     };
     let base_index = entities.len();
@@ -5435,10 +5606,10 @@ fn surface_entities_for_ir(
                 })?;
             match procedural.definition() {
                 ProceduralSurfaceDefinition::Revolution(_) => {
-                    revolution_surface_entities(ctx, ir, construction, base_index, version)
+                    revolution_surface_entities(ir, construction, base_index, version)
                 }
                 ProceduralSurfaceDefinition::Extrusion(_) => {
-                    extrusion_surface_entities(ctx, ir, construction, base_index, version)
+                    extrusion_surface_entities(ir, construction, base_index, version)
                 }
                 _ => Err(CodecError::NotImplemented(
                     "IGES semantic writer only encodes procedural Revolution and Extrusion surfaces as native entities".into(),
@@ -5450,7 +5621,6 @@ fn surface_entities_for_ir(
 }
 
 fn extrusion_surface_entities(
-    ctx: &DecodeContext<'_>,
     ir: &CadIr,
     construction: &cadmpeg_ir::ids::ProceduralSurfaceId,
     base_index: usize,
@@ -5550,9 +5720,9 @@ fn extrusion_surface_entities(
         ) {
             Ok(point) => Ok(point),
             Err(EvaluationFailure::NonFinite(_)) => Err(non_finite_point(label)),
-            Err(EvaluationFailure::NoValue) => Err(CodecError::malformed(format_args!(
-                "IGES {label} cannot be evaluated"
-            ))),
+            Err(EvaluationFailure::NoValue | EvaluationFailure::WorkExhausted) => Err(
+                CodecError::malformed(format_args!("IGES {label} cannot be evaluated")),
+            ),
             Err(EvaluationFailure::ResourceLimit(limit)) => Err(limit.into()),
         };
         (
@@ -5578,7 +5748,6 @@ fn extrusion_surface_entities(
     };
     let mut entities = Vec::new();
     let directrix_local_index = append_curve_entity(
-        ctx,
         &mut entities,
         ir,
         CurveEntityRequest {
@@ -5659,7 +5828,6 @@ impl RevolutionSweep {
 }
 
 fn revolution_surface_entities(
-    ctx: &DecodeContext<'_>,
     ir: &CadIr,
     construction: &cadmpeg_ir::ids::ProceduralSurfaceId,
     base_index: usize,
@@ -5737,7 +5905,9 @@ fn revolution_surface_entities(
     )
     .map_err(|failure| match failure {
         EvaluationFailure::ResourceLimit(limit) => CodecError::ResourceLimit(limit),
-        EvaluationFailure::NoValue | EvaluationFailure::NonFinite(_) => {
+        EvaluationFailure::NoValue
+        | EvaluationFailure::NonFinite(_)
+        | EvaluationFailure::WorkExhausted => {
             CodecError::Malformed("IGES Type 120 generatrix start cannot be evaluated".into())
         }
     })?;
@@ -5748,20 +5918,40 @@ fn revolution_surface_entities(
     )
     .map_err(|failure| match failure {
         EvaluationFailure::ResourceLimit(limit) => CodecError::ResourceLimit(limit),
-        EvaluationFailure::NoValue | EvaluationFailure::NonFinite(_) => {
+        EvaluationFailure::NoValue
+        | EvaluationFailure::NonFinite(_)
+        | EvaluationFailure::WorkExhausted => {
             CodecError::Malformed("IGES Type 120 generatrix terminate cannot be evaluated".into())
         }
     })?;
     let axis_direction = axis_direction.to_unit_length();
-    let axis_end = axis_origin.translated(*axis_direction.as_raw(), 1.0);
-    let axis_geometry = CurveGeometry::Solved(SolvedCurveGeometry::Line(
-        cadmpeg_ir::geometry::analytic::LineCurve::new(axis_origin, axis_direction),
-    ));
-    let axis_span = CurveSpan {
-        range: FiniteVector::from([FiniteReal::ZERO, FiniteReal::ONE]),
-        start: *axis_origin,
-        end: axis_end,
-    };
+    let (axis_geometry, axis_span) =
+        match revolution_axis_curve(ir, axis_origin.get(), *axis_direction.as_raw(), None).filter(
+            |_| {
+                !matches!(
+                    source_curve.geometry.solved(),
+                    Some(SolvedCurveGeometry::Transformed(_))
+                )
+            },
+        ) {
+            Some(axis) => {
+                let geometry = flatten_curve(axis.geometry.solved().ok_or_else(|| {
+                    CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
+                })?)?;
+                let span = curve_reference_span(ir, &axis.id, &geometry)?;
+                (geometry, span)
+            }
+            None => (
+                CurveGeometry::Solved(SolvedCurveGeometry::Line(
+                    cadmpeg_ir::geometry::analytic::LineCurve::new(axis_origin, axis_direction),
+                )),
+                CurveSpan {
+                    range: FiniteVector::from([FiniteReal::ZERO, FiniteReal::ONE]),
+                    start: *axis_origin,
+                    end: axis_origin.translated(*axis_direction.as_raw(), 1.0),
+                },
+            ),
+        };
     let generatrix_span = CurveSpan {
         range: FiniteVector::from(cadmpeg_ir::topology::ParameterInterval::from(
             parameter_interval,
@@ -5774,7 +5964,6 @@ fn revolution_surface_entities(
         .ok_or_else(|| CodecError::Malformed("IGES entity index overflows".into()))?;
     Ok(vec![
         curve_entity(
-            ctx,
             axis_geometry.solved().ok_or_else(|| {
                 CodecError::NotImplemented("IGES carrier has no solved geometry".into())
             })?,
@@ -5782,7 +5971,6 @@ fn revolution_surface_entities(
             version,
         )?,
         curve_entity(
-            ctx,
             geometry.solved().ok_or_else(|| {
                 CodecError::NotImplemented("IGES carrier has no solved geometry".into())
             })?,
@@ -6223,13 +6411,11 @@ struct CurveEntityRequest<'a> {
 }
 
 fn append_curve_entity(
-    ctx: &DecodeContext<'_>,
     entities: &mut Vec<Entity>,
     ir: &CadIr,
     request: CurveEntityRequest<'_>,
 ) -> Result<usize, CodecError> {
     let mut emitter = CurveEntityEmitter {
-        ctx,
         entities,
         ir,
         active: BTreeSet::new(),
@@ -6245,8 +6431,28 @@ fn append_curve_entity(
     )
 }
 
+/// The entities of the constituents of a Type 102 composite curve, without
+/// an entity for the composite, or the one entity of any other curve.
+fn append_curve_constituents(
+    entities: &mut Vec<Entity>,
+    ir: &CadIr,
+    request: CurveEntityRequest<'_>,
+) -> Result<Vec<usize>, CodecError> {
+    let CurveGeometry::Solved(SolvedCurveGeometry::Composite { segments, .. }) = request.geometry
+    else {
+        return append_curve_entity(entities, ir, request).map(|index| vec![index]);
+    };
+    let mut emitter = CurveEntityEmitter {
+        entities,
+        ir,
+        active: BTreeSet::from([request.curve_id.clone()]),
+        version: request.version,
+        reference_offset: request.reference_offset,
+    };
+    emitter.append_composite_constituents(segments, request.sense)
+}
+
 struct CurveEntityEmitter<'a> {
-    ctx: &'a DecodeContext<'a>,
     entities: &'a mut Vec<Entity>,
     ir: &'a CadIr,
     active: BTreeSet<CurveId>,
@@ -6282,7 +6488,6 @@ impl CurveEntityEmitter<'_> {
             _ => {
                 let mut entity = match sense {
                     Sense::Forward => curve_entity(
-                        self.ctx,
                         geometry.solved().ok_or_else(|| {
                             CodecError::NotImplemented("IGES carrier has no solved geometry".into())
                         })?,
@@ -6295,13 +6500,7 @@ impl CurveEntityEmitter<'_> {
                                 "IGES reversed curve {curve_id} requires a parameter range"
                             ))
                         })?;
-                        oriented_curve_entity(
-                            self.ctx,
-                            geometry,
-                            span,
-                            Sense::Reversed,
-                            self.version,
-                        )?
+                        oriented_curve_entity(geometry, span, Sense::Reversed, self.version)?
                     }
                 };
                 entity.status = status;
@@ -6535,11 +6734,11 @@ fn curve_reference_span_inner(
                     )
                     .map_err(|failure| match failure {
                         EvaluationFailure::ResourceLimit(limit) => CodecError::ResourceLimit(limit),
-                        EvaluationFailure::NoValue | EvaluationFailure::NonFinite(_) => {
-                            CodecError::NotImplemented(format!(
-                                "IGES composite child curve {curve_id} has no evaluable start"
-                            ))
-                        }
+                        EvaluationFailure::NoValue
+                        | EvaluationFailure::NonFinite(_)
+                        | EvaluationFailure::WorkExhausted => CodecError::NotImplemented(format!(
+                            "IGES composite child curve {curve_id} has no evaluable start"
+                        )),
                     })?;
                     let end = cadmpeg_ir::eval::decode::curve_point(
                         cadmpeg_ir::eval::admission::EvaluationAdmission::Standard,
@@ -6548,11 +6747,11 @@ fn curve_reference_span_inner(
                     )
                     .map_err(|failure| match failure {
                         EvaluationFailure::ResourceLimit(limit) => CodecError::ResourceLimit(limit),
-                        EvaluationFailure::NoValue | EvaluationFailure::NonFinite(_) => {
-                            CodecError::NotImplemented(format!(
-                                "IGES composite child curve {curve_id} has no evaluable end"
-                            ))
-                        }
+                        EvaluationFailure::NoValue
+                        | EvaluationFailure::NonFinite(_)
+                        | EvaluationFailure::WorkExhausted => CodecError::NotImplemented(format!(
+                            "IGES composite child curve {curve_id} has no evaluable end"
+                        )),
                     })?;
                     Ok(CurveSpan {
                         range,
@@ -6602,6 +6801,207 @@ fn curve_reference_span_inner(
     result
 }
 
+/// Marks as consumed the stored curves that the native Type 120 or Type 122
+/// entity of each of `surfaces` writes as its own constituents.
+fn mark_native_construction_curves<'ir>(
+    ir: &'ir CadIr,
+    surfaces: impl Iterator<Item = &'ir Surface>,
+    consumed: &mut BTreeSet<String>,
+) -> Result<(), CodecError> {
+    for surface in surfaces {
+        let SurfaceGeometry::Procedural {
+            construction,
+            cache: None,
+        } = &surface.geometry
+        else {
+            continue;
+        };
+        let Some(procedural) = ir
+            .model
+            .procedural_surfaces
+            .iter()
+            .find(|procedural| procedural.id == *construction)
+        else {
+            continue;
+        };
+        let directrix = match procedural.definition() {
+            ProceduralSurfaceDefinition::Revolution(definition_payload) => {
+                definition_payload.directrix()
+            }
+            ProceduralSurfaceDefinition::Extrusion(definition_payload) => {
+                definition_payload.directrix()
+            }
+            _ => continue,
+        };
+        let placement = ir
+            .model
+            .curves
+            .iter()
+            .find(|curve| curve.id == *directrix)
+            .and_then(|curve| match curve.geometry.solved() {
+                Some(SolvedCurveGeometry::Transformed(placed)) => Some(placed),
+                _ => None,
+            });
+        let mut curves = vec![directrix];
+        if let Some(placed) = placement {
+            curves.extend(
+                ir.model
+                    .curves
+                    .iter()
+                    .filter(|curve| {
+                        is_support_curve(curve) && curve.geometry.solved() == Some(placed.basis())
+                    })
+                    .map(|curve| &curve.id),
+            );
+        }
+        if let ProceduralSurfaceDefinition::Revolution(definition_payload) = procedural.definition()
+        {
+            if let Some(axis) = revolution_axis_curve(
+                ir,
+                definition_payload.axis_origin().get(),
+                *definition_payload.axis_direction().as_raw(),
+                placement.map(cadmpeg_ir::geometry::PlacedCurve::transform),
+            ) {
+                curves.push(&axis.id);
+            }
+        }
+        for curve in curves {
+            mark_curve_descendants(ir, curve, consumed, &mut BTreeSet::new())?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether the source states `curve` as support geometry.
+fn is_support_curve(curve: &cadmpeg_ir::geometry::Curve) -> bool {
+    curve
+        .source_object
+        .as_ref()
+        .and_then(|source| source.geometry_role)
+        == Some(cadmpeg_ir::SourceGeometryRole::Support)
+}
+
+/// The one support line that, under `placement`, starts at the axis origin
+/// of a revolution and runs along its axis direction. That line is the axis
+/// of revolution of the source Type 120 entity.
+fn revolution_axis_curve<'ir>(
+    ir: &'ir CadIr,
+    origin: Point3,
+    direction: Vector3,
+    placement: Option<&cadmpeg_ir::transform::Transform>,
+) -> Option<&'ir cadmpeg_ir::geometry::Curve> {
+    let placed_axis = |line: &cadmpeg_ir::geometry::analytic::LineCurve| {
+        let line_origin = line.origin().get();
+        let line_direction = *line.direction().as_raw();
+        match placement {
+            None => Some((line_origin, line_direction)),
+            Some(transform) => Some((
+                transform.apply_point(line_origin)?.get(),
+                transform.apply_vector(line_direction)?.get().unit()?,
+            )),
+        }
+    };
+    let mut lines = ir.model.curves.iter().filter(|curve| {
+        is_support_curve(curve)
+            && curve
+                .geometry
+                .solved()
+                .and_then(|solved| flatten_curve(solved).ok())
+                .is_some_and(|geometry| match geometry {
+                    CurveGeometry::Solved(SolvedCurveGeometry::Line(line)) => placed_axis(&line)
+                        .is_some_and(|(line_origin, line_direction)| {
+                            same_point(line_origin, origin)
+                                && same_float(line_direction.x, direction.x)
+                                && same_float(line_direction.y, direction.y)
+                                && same_float(line_direction.z, direction.z)
+                        }),
+                    _ => false,
+                })
+    });
+    let line = lines.next()?;
+    lines.next().is_none().then_some(line)
+}
+
+/// The writer state for curves that no written entity has consumed.
+#[derive(Clone, Copy)]
+struct UnownedCurves<'a, 'ir> {
+    ir: &'ir CadIr,
+    version: crate::IgesVersion,
+    ownership: &'a ownership::SourceOwnership<'ir>,
+    ignored: &'a BTreeSet<String>,
+}
+
+/// Writes each curve that no written entity has consumed, in identity order,
+/// and returns the number of `ignored` curves skipped. A physically dependent
+/// entity is valid only under a written parent, so a physically dependent
+/// curve that no written curve consumes is withheld with a loss.
+fn append_unowned_curves(
+    request: UnownedCurves<'_, '_>,
+    entities: &mut Vec<Entity>,
+    consumed: &mut BTreeSet<String>,
+    losses: &mut Vec<LossNote>,
+) -> Result<usize, CodecError> {
+    let UnownedCurves {
+        ir,
+        version,
+        ownership,
+        ignored,
+    } = request;
+    let mut curves = ir.model.curves.iter().collect::<Vec<_>>();
+    curves.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+    let mut ignored_curves = 0_usize;
+    let mut dependent = Vec::new();
+    for curve in curves {
+        if consumed.contains(curve.id.as_str()) {
+            continue;
+        }
+        if ignored.contains(curve.id.as_str()) {
+            ignored_curves += 1;
+            continue;
+        }
+        let status = ownership.status(curve.source_object.as_ref());
+        if status.is_physically_dependent() {
+            dependent.push((curve, status));
+            continue;
+        }
+        let geometry = flatten_curve(curve.geometry.solved().ok_or_else(|| {
+            CodecError::NotImplemented("IGES curve carrier has no solved geometry".into())
+        })?)?;
+        let span = curve
+            .parameter_range
+            .map(|_| curve_reference_span(ir, &curve.id, &geometry))
+            .transpose()?;
+        append_curve_entity(
+            entities,
+            ir,
+            CurveEntityRequest {
+                version,
+                curve_id: &curve.id,
+                geometry: &geometry,
+                span: span.as_ref(),
+                sense: Sense::Forward,
+                status,
+                reference_offset: 0,
+            },
+        )?;
+        mark_curve_descendants(ir, &curve.id, consumed, &mut BTreeSet::new())?;
+    }
+    for (curve, status) in dependent {
+        if consumed.contains(curve.id.as_str()) {
+            continue;
+        }
+        if matches!(status, EntityStatus::ParameterCurve) {
+            losses.push(IgesLossCode::WriterSupportGeometryNotRepresented.note(format!(
+                "1 support geometry record ({}) was withheld because its parameter-space carrier has no exported owner",
+                curve.id
+            )));
+        } else {
+            report_unowned_support(losses, curve.id.as_str());
+        }
+    }
+    Ok(ignored_curves)
+}
+
 fn mark_curve_descendants(
     ir: &CadIr,
     curve_id: &CurveId,
@@ -6649,12 +7049,19 @@ fn edge_span(ir: &CadIr, edge: &Edge, geometry: &CurveGeometry) -> Result<CurveS
         })?;
         return curve_reference_span(ir, curve_id, geometry);
     }
-    let range = edge.param_range().ok_or_else(|| {
+    let missing_range = || {
         CodecError::NotImplemented(format!(
             "IGES semantic writer requires a parameter range for edge {}",
             edge.id
         ))
-    })?;
+    };
+    let (range, full_period) = match edge.param_range() {
+        Some(range) => (range, false),
+        None => (
+            closed_edge_full_period(edge, geometry)?.ok_or_else(missing_range)?,
+            true,
+        ),
+    };
     if range[0] >= range[1] {
         return Err(CodecError::malformed(format_args!(
             "IGES edge {} requires a finite non-zero parameter span",
@@ -6681,12 +7088,12 @@ fn edge_span(ir: &CadIr, edge: &Edge, geometry: &CurveGeometry) -> Result<CurveS
         )
         .map_err(|failure| match failure {
             EvaluationFailure::ResourceLimit(limit) => CodecError::ResourceLimit(limit),
-            EvaluationFailure::NoValue | EvaluationFailure::NonFinite(_) => {
-                CodecError::malformed(format_args!(
-                    "IGES edge {} start cannot be evaluated on its curve",
-                    edge.id
-                ))
-            }
+            EvaluationFailure::NoValue
+            | EvaluationFailure::NonFinite(_)
+            | EvaluationFailure::WorkExhausted => CodecError::malformed(format_args!(
+                "IGES edge {} start cannot be evaluated on its curve",
+                edge.id
+            )),
         })?;
         let evaluated_end = cadmpeg_ir::eval::decode::curve_point(
             cadmpeg_ir::eval::admission::EvaluationAdmission::Standard,
@@ -6695,14 +7102,20 @@ fn edge_span(ir: &CadIr, edge: &Edge, geometry: &CurveGeometry) -> Result<CurveS
         )
         .map_err(|failure| match failure {
             EvaluationFailure::ResourceLimit(limit) => CodecError::ResourceLimit(limit),
-            EvaluationFailure::NoValue | EvaluationFailure::NonFinite(_) => CodecError::malformed(
-                format_args!("IGES edge {} end cannot be evaluated on its curve", edge.id),
-            ),
+            EvaluationFailure::NoValue
+            | EvaluationFailure::NonFinite(_)
+            | EvaluationFailure::WorkExhausted => CodecError::malformed(format_args!(
+                "IGES edge {} end cannot be evaluated on its curve",
+                edge.id
+            )),
         })?;
         let tolerance = edge_topology_tolerance(ir, edge)?;
         if !close_point_with_tolerance(start, evaluated_start.get(), tolerance)
             || !close_point_with_tolerance(end, evaluated_end.get(), tolerance)
         {
+            if full_period {
+                return Err(missing_range());
+            }
             return Err(CodecError::malformed(format_args!(
                 "IGES edge {} endpoints disagree with its curve parameter range",
                 edge.id
@@ -6710,6 +7123,27 @@ fn edge_span(ir: &CadIr, edge: &Edge, geometry: &CurveGeometry) -> Result<CurveS
         }
     }
     Ok(CurveSpan { range, start, end })
+}
+
+/// The canonical closed-traversal interval of a closed edge that stores no
+/// parameter range. The caller requires the edge vertex at both interval ends.
+/// `None` means the carrier has no closed traversal.
+fn closed_edge_full_period(
+    edge: &Edge,
+    geometry: &CurveGeometry,
+) -> Result<Option<FiniteVector<2>>, CodecError> {
+    if edge.start != edge.end {
+        return Ok(None);
+    }
+    geometry
+        .solved()
+        .and_then(SolvedCurveGeometry::closed_traversal_range)
+        .map(|range| {
+            FiniteVector::new(range.endpoints()).ok_or_else(|| {
+                CodecError::Malformed("IGES curve parameter range is invalid".into())
+            })
+        })
+        .transpose()
 }
 
 fn edge_topology_tolerance(ir: &CadIr, edge: &Edge) -> Result<f64, CodecError> {
@@ -6827,7 +7261,6 @@ fn conic_coefficients(major: f64, minor: f64) -> Result<[FiniteReal; 3], CodecEr
 }
 
 fn curve_entity(
-    ctx: &DecodeContext<'_>,
     geometry: &SolvedCurveGeometry,
     span: Option<&CurveSpan>,
     version: crate::IgesVersion,
@@ -7017,19 +7450,18 @@ fn curve_entity(
                 transform: Some(placement(center, major, y_axis)?),
             })
         }
-        SolvedCurveGeometry::Nurbs(nurbs) => encode_nurbs(ctx, nurbs, range, "NURBS"),
+        SolvedCurveGeometry::Nurbs(nurbs) => encode_nurbs(nurbs, range, "NURBS"),
         SolvedCurveGeometry::Polyline(polyline) => {
             let values = polyline_parameters(polyline)?;
             let nurbs = NurbsCurve::from_lanes(
-                ctx,
                 1,
                 polyline_knots(&values),
                 polyline.points().collect(),
                 None,
                 false,
-            )?
+            )
             .map_err(|error| CodecError::malformed(format_args!("polyline: {error}")))?;
-            encode_nurbs(ctx, &nurbs, range, "POLYLINE")
+            encode_nurbs(&nurbs, range, "POLYLINE")
         }
         SolvedCurveGeometry::Degenerate(_) => Err(CodecError::NotImplemented(
             "IGES semantic writer does not encode this curve geometry".into(),
@@ -7047,7 +7479,6 @@ fn curve_entity(
 }
 
 fn encode_nurbs(
-    ctx: &DecodeContext<'_>,
     nurbs: &NurbsCurve,
     range: FiniteVector<2>,
     label: &'static str,
@@ -7066,7 +7497,6 @@ fn encode_nurbs(
             "IGES NURBS parameter range lies outside its knot domain".into(),
         ));
     }
-    let mut _unit_weight_storage = None;
     let weights = match nurbs.weights() {
         Some(weights) => {
             if weights.iter().any(|weight| weight.get() <= 0.0) {
@@ -7077,11 +7507,8 @@ fn encode_nurbs(
             weights.into_iter().map(FiniteReal::from).collect()
         }
         None => {
-            let (weights, storage) = ctx.with_scoped_storage("iges NURBS weights", || {
-                ctx.alloc_filled(control_count, FiniteReal::ONE, "iges NURBS weights")
-            })?;
-            _unit_weight_storage = Some(storage);
-            weights
+            let poles = nurbs.control_points();
+            vec![FiniteReal::ONE; poles.len()]
         }
     };
     let polynomial = weights
@@ -7234,11 +7661,6 @@ fn apply_rigid_transform(
     geometry: CurveGeometry,
     transform: cadmpeg_ir::transform::Transform,
 ) -> Result<CurveGeometry, CodecError> {
-    let writer_arena = cadmpeg_core::decode::DecodeArena::new();
-    let writer_policy = cadmpeg_core::decode::DecodePolicy::desktop();
-    let (ctx, _) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &writer_arena, &writer_policy)?;
-
     let point = |value: FinitePoint3| -> Result<FinitePoint3, CodecError> {
         transform.apply_point(value.get()).ok_or_else(|| {
             CodecError::malformed("transformed curve point has a non-finite coordinate")
@@ -7373,17 +7795,14 @@ fn apply_rigid_transform(
         }
         CurveGeometry::Solved(SolvedCurveGeometry::Nurbs(mut nurbs)) => {
             nurbs
-                .try_map_control_points(
-                    |_, control_point| {
-                        transform.apply_point(control_point.get()).ok_or_else(|| {
-                            NurbsError::EditRefused(
-                                "transformed NURBS curve control point has a non-finite coordinate"
-                                    .to_string(),
-                            )
-                        })
-                    },
-                    &ctx,
-                )?
+                .try_map_control_points(|_, control_point| {
+                    transform.apply_point(control_point.get()).ok_or_else(|| {
+                        NurbsError::EditRefused(
+                            "transformed NURBS curve control point has a non-finite coordinate"
+                                .to_string(),
+                        )
+                    })
+                })
                 .map_err(|error| match error {
                     NurbsError::EditRefused(message) => CodecError::malformed(message),
                     error => {
@@ -7545,10 +7964,9 @@ fn polyline_parameters(polyline: &PolylineCurve) -> Result<PolylineParameters, C
             (0..count)
                 .map(|value| {
                     cadmpeg_core::convert::f64_from_index(value).ok_or_else(|| {
-                        cadmpeg_core::decode::refuse_local_limit(
-                            "iges polyline parameters",
-                            u64::MAX,
-                            1,
+                        CodecError::NotImplemented(
+                            "IGES polyline point index is not exactly representable as a parameter"
+                                .into(),
                         )
                     })
                 })
@@ -7573,8 +7991,7 @@ fn polyline_parameters(polyline: &PolylineCurve) -> Result<PolylineParameters, C
 }
 
 fn polyline_knots(parameters: &PolylineParameters) -> Vec<f64> {
-    let mut knots = Vec::new();
-    knots.extend([parameters.first; 2]);
+    let mut knots = vec![parameters.first; 2];
     knots.extend_from_slice(&parameters.interior);
     knots.extend([parameters.last; 2]);
     knots
@@ -7643,10 +8060,7 @@ fn encode_file(
         finite(minimum_resolution, "Global minimum resolution")?,
         finite(maximum_coordinate, "Global maximum coordinate")?,
     );
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::default();
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&global, &arena, &policy)?;
-    let global_cards = crate::global::layout_global_cards(&global, &ctx)?;
+    let global_cards = crate::global::layout_global_cards(&global)?;
     let global_count = global_cards.len();
     let mut expanded = Vec::new();
     let mut expanded_index_by_entity = Vec::new();
@@ -7704,13 +8118,7 @@ fn encode_file(
                 CodecError::NotImplemented("IGES directory sequence overflows".into())
             })?;
         let parameter_text = entity.parameter_text();
-        let parameter_arena = cadmpeg_core::decode::DecodeArena::new();
-        let (parameter_ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(
-            &parameter_text,
-            &parameter_arena,
-            &policy,
-        )?;
-        let fragments = crate::parameter::layout_parameter_cards(&parameter_text, &parameter_ctx)?;
+        let fragments = crate::parameter::layout_parameter_cards(&parameter_text)?;
         let parameter_count = fragments.len();
         let parameter_count = u32::try_from(parameter_count)
             .map_err(|_| CodecError::NotImplemented("IGES parameter count overflows".into()))?;

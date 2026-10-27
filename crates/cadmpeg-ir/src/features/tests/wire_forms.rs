@@ -232,6 +232,122 @@ fn termination_families_preserve_wire_and_reject_cross_family_variants() {
 }
 
 #[test]
+fn to_plane_termination_keeps_its_frame_and_native_record() {
+    use crate::features::{AngularTermination, LinearTermination};
+
+    let wire = serde_json::json!({
+        "kind": "to_plane",
+        "plane": {
+            "origin": {"x": 10.0, "y": -20.0, "z": 5.0},
+            "normal": {"x": 0.0, "y": 0.0, "z": 2.0},
+            "u_axis": {"x": 1.0, "y": 0.0, "z": 0.0}
+        },
+        "native": "native:plane"
+    });
+    let termination: LinearTermination = serde_json::from_value(wire.clone()).unwrap();
+    let LinearTermination::ToPlane { plane, native } = &termination else {
+        panic!("not a to-plane termination: {termination:?}");
+    };
+    assert_eq!(
+        plane.normal().get(),
+        crate::math::Vector3::new(0.0, 0.0, 2.0)
+    );
+    assert_eq!(native.as_str(), "native:plane");
+    assert_eq!(serde_json::to_value(&termination).unwrap(), wire);
+    assert!(serde_json::from_value::<AngularTermination>(wire.clone()).is_err());
+
+    let mut blank = wire.clone();
+    blank["native"] = serde_json::json!(" ");
+    let mut missing = wire.clone();
+    missing.as_object_mut().unwrap().remove("native");
+    let mut oblique = wire.clone();
+    oblique["plane"]["u_axis"] = serde_json::json!({"x": 1.0, "y": 0.0, "z": 1.0});
+    let mut degenerate = wire;
+    degenerate["plane"]["normal"] = serde_json::json!({"x": 0.0, "y": 0.0, "z": 0.0});
+    for refused in [blank, missing, oblique, degenerate] {
+        assert!(serde_json::from_value::<LinearTermination>(refused).is_err());
+    }
+}
+
+#[test]
+fn from_plane_start_keeps_its_frame_and_native_record() {
+    use crate::features::ExtrudeStart;
+
+    let wire = serde_json::json!({
+        "kind": "from_plane",
+        "plane": {
+            "origin": {"x": 0.0, "y": 0.0, "z": 40.0},
+            "normal": {"x": 1.0, "y": 0.0, "z": 0.0},
+            "u_axis": {"x": 0.0, "y": 1.0, "z": 0.0}
+        },
+        "native": "native:plane"
+    });
+    let start: ExtrudeStart = serde_json::from_value(wire.clone()).unwrap();
+    assert!(matches!(
+        &start,
+        ExtrudeStart::FromPlane { native, .. } if native.as_str() == "native:plane"
+    ));
+    assert_eq!(serde_json::to_value(&start).unwrap(), wire);
+    let mut with_offset = wire;
+    with_offset["offset"] = serde_json::json!(1.0);
+    assert!(serde_json::from_value::<ExtrudeStart>(with_offset).is_err());
+}
+
+/// The plane-to-plane extrusion example of `docs/cad-ir.md`.
+#[test]
+fn plane_to_plane_extrusion_example_round_trips() {
+    use crate::features::{
+        ExtrudeExtent, ExtrudeStart, FeatureDefinition, FeatureOperation, LinearTermination,
+    };
+
+    let plane = |z: f64| {
+        serde_json::json!({
+            "origin": {"x": 0.0, "y": 0.0, "z": z},
+            "normal": {"x": 0.0, "y": 0.0, "z": 1.0},
+            "u_axis": {"x": 1.0, "y": 0.0, "z": 0.0}
+        })
+    };
+    let wire = serde_json::json!({
+        "definition": "extrude",
+        "profile": {"kind": "native", "value": "native:profile"},
+        "direction": {"kind": "profile_normal"},
+        "start": {
+            "kind": "from_plane",
+            "plane": plane(40.0),
+            "native": "native:start-plane"
+        },
+        "extent": {
+            "kind": "one_sided",
+            "side": {
+                "termination": {
+                    "kind": "to_plane",
+                    "plane": plane(100.0),
+                    "native": "native:end-plane"
+                }
+            }
+        },
+        "op": "join"
+    });
+    let definition: FeatureDefinition = serde_json::from_value(wire.clone()).unwrap();
+    let FeatureDefinition::Operation(FeatureOperation::Extrude { start, extent, .. }) = &definition
+    else {
+        panic!("not an extrusion: {definition:?}");
+    };
+    let ExtrudeStart::FromPlane { plane: start, .. } = start else {
+        panic!("not a from-plane start: {start:?}");
+    };
+    assert_eq!(start.origin().get(), Point3::new(0.0, 0.0, 40.0));
+    let ExtrudeExtent::OneSided { side } = extent else {
+        panic!("not a one-sided extent: {extent:?}");
+    };
+    let LinearTermination::ToPlane { plane: end, .. } = &side.termination else {
+        panic!("not a to-plane termination: {:?}", side.termination);
+    };
+    assert_eq!(end.origin().get(), Point3::new(0.0, 0.0, 100.0));
+    assert_eq!(serde_json::to_value(&definition).unwrap(), wire);
+}
+
+#[test]
 fn loft_sections_preserve_profile_shape() {
     use crate::features::{
         BooleanOp, FeatureDefinition, FeatureOperation, LoftSection, PlanarProfileRef, ProfileRef,
@@ -322,9 +438,8 @@ fn generated_sweep_sections_round_trip_and_validate() {
             evaluation: crate::features::FeatureEvaluation::from_definition(definition),
             native_ref: None,
         });
-        ir.finalize(&cadmpeg_test_support::service_decode_context())
-            .expect("fixture ordering is admitted");
-        validate_neutral(&ir, Vec::new()).expect("resource allocation did not fail")
+        ir.finalize();
+        validate_neutral(&ir, Vec::new()).expect("validate the neutral model")
     };
     let report = validate_definition(definition.clone());
     assert!(report.is_ok(), "{report:#?}");
@@ -365,9 +480,7 @@ fn full_round_fillet_keeps_automatic_side_semantics() {
                 FaceSelection::Faces(vec![center.clone()]),
                 FullRoundSideSelection::Automatic,
                 FullRoundSideSelection::Automatic,
-                &cadmpeg_test_support::service_decode_context(),
             )
-            .expect("operand admission")
             .unwrap(),
         ),
     });
@@ -391,7 +504,7 @@ fn full_round_fillet_keeps_automatic_side_semantics() {
         native_ref: None,
     });
     assert!(!validate_neutral(&ir, Vec::new())
-        .expect("resource allocation did not fail")
+        .expect("validate the neutral model")
         .findings
         .iter()
         .any(|finding| {
@@ -403,9 +516,7 @@ fn full_round_fillet_keeps_automatic_side_semantics() {
         FaceSelection::Faces(vec![center.clone()]),
         FullRoundSideSelection::Explicit(FaceSelection::Faces(vec![center])),
         FullRoundSideSelection::Automatic,
-        &cadmpeg_test_support::service_decode_context(),
     )
-    .expect("operand admission")
     .is_err());
 }
 
@@ -853,9 +964,7 @@ fn edge_selections_round_trip_through_json() {
                 .expect("valid identity"),
             vec![HistoricalEdgeId::mint("synthetic:history-input:edge#0").expect("valid identity")],
             "edge:9".into(),
-            &cadmpeg_test_support::service_decode_context(),
         )
-        .expect("selection storage is admitted")
         .unwrap(),
         EdgeSelection::historical_partial(
             FeatureInputTopologyId::mint("synthetic:history-input:state#0")
@@ -863,9 +972,7 @@ fn edge_selections_round_trip_through_json() {
             vec![HistoricalEdgeId::mint("synthetic:history-input:edge#0").expect("valid identity")],
             vec!["native:edge-operand#1".into()],
             "edge:9".into(),
-            &cadmpeg_test_support::service_decode_context(),
         )
-        .expect("selection storage is admitted")
         .unwrap(),
         EdgeSelection::Native("sldprt:history:feature#10:0".into()),
     ];
@@ -888,9 +995,7 @@ fn historical_edge_paths_round_trip_through_json() {
             HistoricalEdgeId::mint("synthetic:history-input:edge#1").expect("valid identity"),
         ],
         "native:path#0".into(),
-        &cadmpeg_test_support::service_decode_context(),
     )
-    .expect("selection storage is admitted")
     .unwrap();
     let json = serde_json::to_string(&path).unwrap();
     assert_eq!(serde_json::from_str::<PathRef>(&json).unwrap(), path);
@@ -915,9 +1020,7 @@ fn face_selections_round_trip_through_json() {
                 .expect("valid identity"),
             vec![HistoricalFaceId::mint("synthetic:history-input:face#0").expect("valid identity")],
             "face:13".into(),
-            &cadmpeg_test_support::service_decode_context(),
         )
-        .expect("selection storage is admitted")
         .unwrap(),
         FaceSelection::historical_partial(
             FeatureInputTopologyId::mint("synthetic:history-input:state#0")
@@ -925,9 +1028,7 @@ fn face_selections_round_trip_through_json() {
             vec![HistoricalFaceId::mint("synthetic:history-input:face#0").expect("valid identity")],
             vec!["native:face-operand#1".into()],
             "face:12".into(),
-            &cadmpeg_test_support::service_decode_context(),
         )
-        .expect("selection storage is admitted")
         .unwrap(),
         FaceSelection::Native("sldprt:history:feature#14:0".into()),
     ];
@@ -946,9 +1047,7 @@ fn historical_face_profiles_round_trip_through_json() {
         FeatureInputTopologyId::mint("synthetic:history-input:state#0").expect("valid identity"),
         vec![HistoricalFaceId::mint("synthetic:history-input:face#0").expect("valid identity")],
         vec!["native:profile-group#0".into()],
-        &cadmpeg_test_support::service_decode_context(),
     )
-    .expect("selection storage is admitted")
     .unwrap();
     let json = serde_json::to_string(&profile).unwrap();
     assert_eq!(
@@ -965,37 +1064,32 @@ fn body_selections_round_trip_through_json() {
     let selections = vec![
         BodySelection::Unresolved,
         BodySelection::Bodies(
-            crate::features::DistinctMembers::try_from(
-                vec![BodyId::mint("synthetic:test:body#0").expect("valid identity")],
-                &cadmpeg_test_support::service_decode_context(),
-            )
+            crate::features::DistinctMembers::try_from(vec![
+                BodyId::mint("synthetic:test:body#0").expect("valid identity")
+            ])
             .expect("distinct bodies"),
         ),
         BodySelection::Resolved {
-            bodies: crate::features::DistinctMembers::try_from(
-                vec![BodyId::mint("synthetic:test:body#0").expect("valid identity")],
-                &cadmpeg_test_support::service_decode_context(),
+            bodies: crate::features::DistinctMembers::try_from(vec![BodyId::mint(
+                "synthetic:test:body#0",
             )
+            .expect("valid identity")])
             .expect("distinct bodies"),
             native: "body:17".into(),
         },
         BodySelection::ResolvedSet {
-            members: crate::features::BodyMembers::try_from_rows(
-                vec![
-                    crate::features::BodyMember::new(
-                        BodyId::mint("synthetic:test:body#0").expect("valid identity"),
-                        cadmpeg_core::text::NonBlankString::new("body:17")
-                            .expect("valid body selection row"),
-                    ),
-                    crate::features::BodyMember::new(
-                        BodyId::mint("synthetic:test:body#1").expect("valid identity"),
-                        cadmpeg_core::text::NonBlankString::new("body:18")
-                            .expect("valid body selection row"),
-                    ),
-                ],
-                &cadmpeg_test_support::service_decode_context(),
-            )
-            .expect("selection storage is admitted")
+            members: crate::features::BodyMembers::try_from_rows(vec![
+                crate::features::BodyMember::new(
+                    BodyId::mint("synthetic:test:body#0").expect("valid identity"),
+                    cadmpeg_core::text::NonBlankString::new("body:17")
+                        .expect("valid body selection row"),
+                ),
+                crate::features::BodyMember::new(
+                    BodyId::mint("synthetic:test:body#1").expect("valid identity"),
+                    cadmpeg_core::text::NonBlankString::new("body:18")
+                        .expect("valid body selection row"),
+                ),
+            ])
             .expect("valid body selection rows"),
         },
         BodySelection::historical(
@@ -1003,31 +1097,25 @@ fn body_selections_round_trip_through_json() {
                 .expect("valid identity"),
             vec![HistoricalBodyId::mint("synthetic:history-input:body#0").expect("valid identity")],
             "body:16".into(),
-            &cadmpeg_test_support::service_decode_context(),
         )
-        .expect("selection storage is admitted")
         .unwrap(),
         BodySelection::HistoricalSet {
             state: FeatureInputTopologyId::mint("synthetic:history-input:state#0")
                 .expect("valid identity"),
-            members: crate::features::BodyMembers::try_from_rows(
-                vec![
-                    crate::features::BodyMember::new(
-                        HistoricalBodyId::mint("synthetic:history-input:body#0")
-                            .expect("valid identity"),
-                        cadmpeg_core::text::NonBlankString::new("body:16")
-                            .expect("valid historical body selection row"),
-                    ),
-                    crate::features::BodyMember::new(
-                        HistoricalBodyId::mint("synthetic:history-input:body#1")
-                            .expect("valid identity"),
-                        cadmpeg_core::text::NonBlankString::new("body:17")
-                            .expect("valid historical body selection row"),
-                    ),
-                ],
-                &cadmpeg_test_support::service_decode_context(),
-            )
-            .expect("selection storage is admitted")
+            members: crate::features::BodyMembers::try_from_rows(vec![
+                crate::features::BodyMember::new(
+                    HistoricalBodyId::mint("synthetic:history-input:body#0")
+                        .expect("valid identity"),
+                    cadmpeg_core::text::NonBlankString::new("body:16")
+                        .expect("valid historical body selection row"),
+                ),
+                crate::features::BodyMember::new(
+                    HistoricalBodyId::mint("synthetic:history-input:body#1")
+                        .expect("valid identity"),
+                    cadmpeg_core::text::NonBlankString::new("body:17")
+                        .expect("valid historical body selection row"),
+                ),
+            ])
             .expect("valid historical body selection rows"),
         },
         BodySelection::Native("body:17,body:18".into()),
@@ -1084,10 +1172,7 @@ fn feature_result_topology_round_trips_without_current_model_bodies() {
         vec![cadmpeg_core::nonblank_literal!("face:3")],
         vec![cadmpeg_core::nonblank_literal!("edge:5")],
         vec![cadmpeg_core::nonblank_literal!("vertex:8")],
-        &cadmpeg_test_support::service_decode_context(),
-        "validate feature result members",
     )
-    .expect("result membership admission")
     .map(|members| {
         FeatureResultTopology::new(
             FeatureResultTopologyId::mint("synthetic:history-result:state#0")
@@ -1113,9 +1198,7 @@ fn combine_omits_the_default_keep_tools_flag_from_json() {
         operands: crate::features::CombineOperands::new(
             BodySelection::Native("body:17".into()),
             BodySelection::Native("body:18".into()),
-            &cadmpeg_test_support::service_decode_context(),
         )
-        .expect("operand admission")
         .unwrap(),
 
         op: BooleanKind::Join,
@@ -1637,4 +1720,22 @@ fn the_extrude_start_and_termination_unit_forms_reject_an_unknown_key() {
             .to_string();
         assert!(error.contains("zz_bogus"), "angular {kind}: {error}");
     }
+}
+
+#[test]
+fn sheet_metal_thickness_sides_name_themselves_on_the_wire() {
+    use crate::features::SheetMetalThicknessSide;
+
+    for (side, wire) in [
+        (SheetMetalThicknessSide::Forward, "forward"),
+        (SheetMetalThicknessSide::Reverse, "reverse"),
+        (SheetMetalThicknessSide::Symmetric, "symmetric"),
+    ] {
+        assert_eq!(serde_json::to_value(side).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<SheetMetalThicknessSide>(serde_json::json!(wire)).unwrap(),
+            side
+        );
+    }
+    assert!(serde_json::from_value::<SheetMetalThicknessSide>(serde_json::json!("both")).is_err());
 }

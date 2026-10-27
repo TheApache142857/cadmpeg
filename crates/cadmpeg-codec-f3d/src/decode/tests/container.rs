@@ -28,54 +28,6 @@ use crate::test_support::smbh_header_test::synthetic_smbh;
 use crate::F3dCodec;
 use cadmpeg_ir::geometry::SolvedSurfaceGeometry;
 
-fn with_docstruct_scan(
-    f: impl FnOnce(&cadmpeg_core::decode::DecodeArena, &crate::container::ContainerScan<'_>),
-) {
-    let bytes = f3d_without_brep("part-design", "part.f3d", &[]);
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let policy = cadmpeg_core::decode::DecodePolicy::default();
-    let (ctx, root) =
-        cadmpeg_core::decode::DecodeContext::from_root_bytes(&bytes, &arena, &policy).unwrap();
-    let scan = crate::container::scan(&ctx, root).unwrap();
-    f(&arena, &scan);
-}
-
-#[test]
-fn docstruct_type_attribute_refuses_collection_limit() {
-    with_docstruct_scan(|_arena, scan| {
-        let error = crate::test_support::resource_refusal_at(
-            cadmpeg_core::decode::ResourceDimension::CollectionItems,
-            "record F3D docstruct type",
-            0,
-            |ctx| {
-                super::super::annotate_docstruct(ctx, &mut std::collections::BTreeMap::new(), scan)
-            },
-        );
-        assert!(
-            matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-            if limit.operation == "record F3D docstruct type")
-        );
-    });
-}
-
-#[test]
-fn docstruct_subtype_attribute_refuses_collection_limit() {
-    with_docstruct_scan(|_arena, scan| {
-        let error = crate::test_support::resource_refusal_at(
-            cadmpeg_core::decode::ResourceDimension::CollectionItems,
-            "record F3D docstruct subtype",
-            0,
-            |ctx| {
-                super::super::annotate_docstruct(ctx, &mut std::collections::BTreeMap::new(), scan)
-            },
-        );
-        assert!(
-            matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-            if limit.operation == "record F3D docstruct subtype")
-        );
-    });
-}
-
 /// A document with no ASM BREP stream has no selected stream, so the geometry
 /// and topology losses must not name a decode failure of one. Stating a cause
 /// that was never reached misreports which carrier is missing.
@@ -198,7 +150,7 @@ fn a_text_carrier_with_geometry_decodes_through_the_shared_brep_path() {
     let mut source = zip::ZipArchive::new(Cursor::new(base)).unwrap();
     for i in 0..source.len() {
         let mut entry = source.by_index(i).unwrap();
-        let name = entry.name().to_owned();
+        let name = entry.name().expect("entry name").into_owned();
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
         zip.start_file(name, stored).unwrap();
@@ -247,7 +199,7 @@ fn ambiguous_brep_selection_reports_the_streams_that_are_present() {
         .decode(
             &mut Cursor::new(archive),
             &DecodeOptions {
-                container_only: true,
+                depth: cadmpeg_core::decode::DecodeDepth::Container,
                 ..DecodeOptions::default()
             },
         )
@@ -286,7 +238,7 @@ fn corrupt_kernel_carrier_is_reported_beside_valid_kernel_layer() {
     let mut source = zip::ZipArchive::new(Cursor::new(base)).unwrap();
     for index in 0..source.len() {
         let mut entry = source.by_index(index).unwrap();
-        let name = entry.name().to_owned();
+        let name = entry.name().expect("entry name").into_owned();
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
         zip.start_file(name, stored).unwrap();
@@ -315,7 +267,7 @@ fn corrupt_kernel_carrier_is_reported_beside_valid_kernel_layer() {
         .decode(
             &mut Cursor::new(archive),
             &DecodeOptions {
-                container_only: true,
+                depth: cadmpeg_core::decode::DecodeDepth::Container,
                 ..DecodeOptions::default()
             },
         )
@@ -396,12 +348,15 @@ fn docstruct_metadata_distinguishes_absent_and_empty_subtype() {
             .unwrap();
         zip.write_all(properties.as_bytes()).unwrap();
         let archive = zip.finish().unwrap().into_inner();
-        for container_only in [false, true] {
+        for depth in [
+            cadmpeg_core::decode::DecodeDepth::Full,
+            cadmpeg_core::decode::DecodeDepth::Container,
+        ] {
             let decoded = F3dCodec
                 .decode(
                     &mut Cursor::new(&archive),
                     &DecodeOptions {
-                        container_only,
+                        depth,
                         ..DecodeOptions::default()
                     },
                 )
@@ -481,84 +436,6 @@ fn decoded_text_brep_facts_keep_text_dialects_and_exclude_binary_routes() {
 }
 
 #[test]
-fn text_brep_parts_refuse_the_last_collection_item() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
-
-    let stream = concat!(
-        "21800 0 2 3\n",
-        "16 Autodesk Neutron 23 ASM 218.0.1.400 Unknown 9 Synthetic\n",
-        "1 0.000001 0.0000000001\n",
-        "asmheader $-1 -1 @11 218.0.1.400 #\n",
-        "body $-1 -1 $-1 $2 $-1 $-1 #\n",
-        "lump $-1 -1 $-1 $-1 $3 $1 #\n",
-        "shell $-1 -1 $-1 $-1 $-1 $4 $-1 $2 #\n",
-        "face $-1 -1 $-1 $-1 $-1 $3 $-1 $5 forward single #\n",
-        "sphere-surface $-1 -1 $-1 0 0 0 25 1 0 0 0 0 1 forward_v I I I I #\n",
-        "End-of-ASM-data\n",
-    );
-    let bytes = f3d_with_text_brep_stream(
-        &["FusionAssetName[Active]/Breps.BlobParts/BREP0.sat"],
-        stream.as_bytes(),
-    );
-    let arena = DecodeArena::new();
-    let policy = DecodePolicy::default();
-    let (ctx, root) = DecodeContext::from_root_bytes(&bytes, &arena, &policy).unwrap();
-    let scan = crate::container::scan(&ctx, root).unwrap();
-    let decode_with_limit = |limit| {
-        let mut policy = DecodePolicy::default();
-        policy.limits.max_collection_items = limit;
-        let (limited, _) = DecodeContext::from_root_bytes(&bytes, &arena, &policy).unwrap();
-        crate::decode::try_decode_text_model(&limited, &scan)
-    };
-    let mut admitted = 10_000;
-    assert!(decode_with_limit(admitted).unwrap().is_some());
-    let mut refused = 0;
-    while admitted - refused > 1 {
-        let candidate = refused + (admitted - refused) / 2;
-        match decode_with_limit(candidate) {
-            Ok(Some(_)) => admitted = candidate,
-            Err(cadmpeg_core::CodecError::ResourceLimit(_)) => refused = candidate,
-            _ => panic!("unexpected text B-rep limit result"),
-        }
-    }
-    let Err(error) = decode_with_limit(refused) else {
-        panic!("the item below the admission boundary must be refused");
-    };
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "collect F3D text B-rep parts")
-    );
-}
-
-#[test]
-fn text_brep_framing_propagates_sat_collection_limit() {
-    use cadmpeg_core::decode::ResourceDimension;
-
-    let entry = "FusionAssetName[Active]/Breps.BlobParts/BREP0.sat";
-    let archive = f3d_with_text_brep(&[entry]);
-    let error = cadmpeg_ir::DecodeFailure::Codec(cadmpeg_test_support::refusal::resource_limit_at(
-        ResourceDimension::CollectionItems,
-        "frame SAT primitive",
-        |cap| {
-            let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-            policy.limits.max_collection_items = cap;
-            cadmpeg_test_support::decode::full(&F3dCodec, &archive, &policy).map_err(|error| {
-                match error {
-                    cadmpeg_ir::DecodeFailure::Codec(error) => error,
-                    error => panic!("unexpected framing failure: {error}"),
-                }
-            })
-        },
-    ));
-    assert!(matches!(
-        error,
-        cadmpeg_ir::DecodeFailure::Codec(cadmpeg_core::CodecError::ResourceLimit(limit))
-            if limit.dimension == ResourceDimension::CollectionItems
-                && limit.operation == "frame SAT primitive"
-    ));
-}
-
-#[test]
 fn malformed_text_brep_returns_an_entry_named_error() {
     let entry = "FusionAssetName[Active]/Breps.BlobParts/BREP0.sat";
     let archive = f3d_with_text_brep_stream(&[entry], b"invalid SAT stream");
@@ -572,4 +449,69 @@ fn malformed_text_brep_returns_an_entry_named_error() {
     assert!(error
         .to_string()
         .contains(&format!("text BREP entry {entry} failed to parse:")));
+}
+
+#[test]
+fn empty_model_maps_do_not_decode_or_blame_a_sketch_snapshot() {
+    let snapshot = crate::test_support::smbh_geometry_test::synthetic_wire_body_smbh();
+    let archive = crate::test_support::body_map_test::f3d_with_empty_model_maps(&snapshot, &[]);
+    crate::test_support::zip_test::with_scan(&archive, |scan| {
+        let selection = crate::design::decode::body::design_model_selection(scan).unwrap();
+        assert!(selection.explicitly_empty);
+        assert!(selection.blob_names.is_empty());
+    });
+    let decoded = F3dCodec
+        .decode(&mut Cursor::new(archive), &DecodeOptions::default())
+        .unwrap();
+    assert!(decoded.ir().model.bodies.is_empty());
+    assert!(decoded.ir().model.curves.is_empty());
+    let geometry = decoded
+        .report()
+        .losses
+        .iter()
+        .find(|loss| loss.code == F3dLossCode::GeometryNotTransferred.kind())
+        .unwrap();
+    assert!(geometry
+        .message
+        .contains("No physical model BREP was selected"));
+    assert!(decoded
+        .report()
+        .losses
+        .iter()
+        .all(|loss| !loss.message.contains("not a decodable BinaryFile")
+            && loss.code != F3dLossCode::MissingGeometryStream.kind()));
+}
+
+#[test]
+fn model_brep_reports_distinguish_failed_and_successful_empty_decodes() {
+    use crate::test_support::smbh_header_test::smbh_header_prefix;
+    use crate::test_support::tokens_test::{push_u8_string, t_end, t_ident};
+
+    let mut empty = smbh_header_prefix();
+    t_ident(&mut empty, "asmheader");
+    push_u8_string(&mut empty, "231.6.3.65535");
+    t_end(&mut empty);
+    t_ident(&mut empty, "delta_state");
+    empty.extend_from_slice(&[0; 16]);
+    for (stream, expected) in [
+        (b"invalid header".to_vec(), "not a decodable BinaryFile"),
+        (empty, "decoded successfully"),
+    ] {
+        let archive = crate::test_support::zip_test::f3d_with_smbh(&stream);
+        let decoded = F3dCodec
+            .decode(&mut Cursor::new(archive), &DecodeOptions::default())
+            .unwrap();
+        let losses = &decoded.report().losses;
+        let geometry = losses
+            .iter()
+            .find(|loss| loss.code == F3dLossCode::GeometryNotTransferred.kind())
+            .unwrap();
+        assert!(geometry.message.contains(expected), "{}", geometry.message);
+        assert!(losses
+            .iter()
+            .any(|loss| loss.code == F3dLossCode::TopologyNotTransferred.kind()));
+        assert!(losses
+            .iter()
+            .all(|loss| loss.code != F3dLossCode::MissingGeometryStream.kind()));
+    }
 }

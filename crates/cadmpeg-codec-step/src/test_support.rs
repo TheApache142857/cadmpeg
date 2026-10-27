@@ -3,6 +3,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+pub(crate) mod box_brep;
+pub(crate) mod curve_bounded;
 pub(crate) mod exchange;
 
 use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
@@ -23,4 +25,17 @@ pub(crate) fn with_policy_context<T>(
     let (ctx, _) = DecodeContext::from_root_bytes(bytes, &arena, policy)
         .expect("fixture fits selected policy");
     use_context(bytes, &ctx)
+}
+
+/// Tokenize one complete clear-text exchange structure.
+pub(crate) fn lex(
+    input: &[u8],
+    ctx: &DecodeContext<'_>,
+) -> Result<Vec<crate::lex::Token>, crate::lex::LexError> {
+    let mut lexer = crate::lex::Lexer::new(input, ctx);
+    let mut tokens = Vec::new();
+    while let Some(token) = lexer.next_token()? {
+        tokens.push(token);
+    }
+    Ok(tokens)
 }

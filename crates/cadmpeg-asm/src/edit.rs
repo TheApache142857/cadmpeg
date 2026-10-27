@@ -155,12 +155,12 @@ impl AsmEditSet {
             &arena,
             &cadmpeg_core::decode::DecodePolicy::desktop(),
         )?;
-        let header = asm_header::parse(&ctx, bytes)?
+        let header = asm_header::parse(bytes)
             .ok_or_else(|| CodecError::Malformed("active BREP has no SAB record stream".into()))?;
         let start = asm_header::record_stream_start_with_header(bytes, &header)
             .ok_or_else(|| CodecError::Malformed("active BREP has no SAB record stream".into()))?;
-        let limit = asm_header::solved_record_limit_with_header(&ctx, bytes, &header)?
-            .unwrap_or(bytes.len());
+        let limit =
+            asm_header::solved_record_limit_with_header(bytes, &header).unwrap_or(bytes.len());
         let ref_width = header.width;
         let records =
             sab::frame(&ctx, bytes, start, limit, ref_width, None).map_err(|failure| {
@@ -245,6 +245,31 @@ impl AsmEditSet {
         let sab::Token::Double(value) = token else {
             return Err(CodecError::malformed(format_args!(
                 "{} record {} payload field {index} is not tag 0x06",
+                record.head(),
+                record.index
+            )));
+        };
+        Ok((offset, value))
+    }
+
+    /// Locate one vector payload and retain its decoded components.
+    pub fn required_payload_vector(
+        &self,
+        bytes: &[u8],
+        record: &Record,
+        index: usize,
+    ) -> Result<(usize, [f64; 3]), CodecError> {
+        let (offset, token) =
+            sab::payload_token(bytes, record, self.ref_width, index).ok_or_else(|| {
+                CodecError::malformed(format_args!(
+                    "{} record {} lacks payload field {index}",
+                    record.head(),
+                    record.index
+                ))
+            })?;
+        let sab::Token::Vector3(value) = token else {
+            return Err(CodecError::malformed(format_args!(
+                "{} record {} payload field {index} is not tag 0x14",
                 record.head(),
                 record.index
             )));
@@ -646,6 +671,19 @@ impl AsmEditSet {
         record: &Record,
         definition: &ProceduralCurveDefinition,
     ) -> Result<(), CodecError> {
+        // The decoder states the support contexts of a reversed cache on `-t`;
+        // the record stores them on the subtype parameter.
+        let mut stored;
+        let definition = if crate::brep::geometry::carrier_cache_reversed(&self.records, record) {
+            stored = definition.clone();
+            if stored.reverse_support_contexts().is_some() {
+                &stored
+            } else {
+                definition
+            }
+        } else {
+            definition
+        };
         match definition {
             ProceduralCurveDefinition::Helix(helix) => {
                 patch_helix_definition(bytes, self.ref_width, record, helix)
@@ -2325,14 +2363,12 @@ mod tests {
         let records =
             crate::test_support::sab::frame(&original, 0, original.len(), RefWidth::Eight).unwrap();
         let geometry = PcurveNurbs::from_lanes(
-            &cadmpeg_test_support::service_decode_context(),
             1,
             vec![0.0, 0.0, 1.0, 1.0],
             vec![Point2::new(0.0, 0.0), Point2::new(1.0, 1.0)],
             None,
             false,
         )
-        .expect("fixture pcurve construction admission")
         .unwrap();
         let base = super::InlinePcurveEdit::IntcurveCache {
             native_geometry: &geometry,

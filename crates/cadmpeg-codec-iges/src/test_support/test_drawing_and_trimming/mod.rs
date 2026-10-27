@@ -9,6 +9,8 @@ use crate::test_support::test_owned::{
     owned_test_file, owned_test_file_with_display, owned_test_file_with_global,
     owned_test_file_with_global_and_line_fonts, OwnedTestEntity,
 };
+pub(crate) mod test_boundary_direction;
+pub(crate) mod test_mixed_sense;
 pub(crate) mod test_surface_domains;
 
 pub(crate) fn dimension_forms_file() -> Vec<u8> {
@@ -1466,17 +1468,31 @@ pub(crate) fn explicit_multi_pcurve_loop_file() -> Vec<u8> {
 }
 
 pub(crate) fn explicit_multi_pcurve_loop_file_with_first_pcurve(first_pcurve: &str) -> Vec<u8> {
-    explicit_multi_pcurve_loop_file_with_carriers(first_pcurve, "110,0,0,0,1,0,0;")
+    explicit_multi_pcurve_loop_file_with_carriers(first_pcurve, "110,0,0,0,1,0,0;", true)
 }
 
 pub(crate) fn explicit_multi_pcurve_loop_file_with_first_edge(first_edge: &str) -> Vec<u8> {
     explicit_multi_pcurve_loop_file_with_carriers(
         "126,1,1,1,0,1,0,0,0,1,1,1,1,0,0,0,0.5,0,0,0,1,0,0,1;",
         first_edge,
+        true,
     )
 }
 
-fn explicit_multi_pcurve_loop_file_with_carriers(first_pcurve: &str, first_edge: &str) -> Vec<u8> {
+/// The multi-pcurve loop face used through a false Type 514 `OF` logical.
+pub(crate) fn reversed_face_use_multi_pcurve_loop_file() -> Vec<u8> {
+    explicit_multi_pcurve_loop_file_with_carriers(
+        "126,1,1,1,0,1,0,0,0,1,1,1,1,0,0,0,0.5,0,0,0,1,0,0,1;",
+        "110,0,0,0,1,0,0;",
+        false,
+    )
+}
+
+fn explicit_multi_pcurve_loop_file_with_carriers(
+    first_pcurve: &str,
+    first_edge: &str,
+    face_use_orientation: bool,
+) -> Vec<u8> {
     let mut entities = vec![
         OwnedTestEntity {
             entity_type: 116,
@@ -1566,7 +1582,7 @@ fn explicit_multi_pcurve_loop_file_with_carriers(first_pcurve: &str, first_edge:
             form: 2,
             label: "SHELL".into(),
             status: "00000000",
-            parameters: "514,1,25,1;".into(),
+            parameters: format!("514,1,25,{};", i32::from(face_use_orientation)),
         },
     ]);
     owned_test_file(&entities)
@@ -1737,65 +1753,12 @@ pub(crate) fn trimmed_plane_with_boundaries_and_inner(
     inner: &str,
     trimmed_parameters: &str,
 ) -> Vec<u8> {
-    let outer = "106,1,5,0,0,0,1,0,1,1,0,1,0,0;";
-    owned_test_file(&[
-        OwnedTestEntity {
-            entity_type: 108,
-            form: 0,
-            label: "PLANE".into(),
-            status: "00010000",
-            parameters: "108,0,0,1,0,0,0,0,0,0;".into(),
-        },
-        OwnedTestEntity {
-            entity_type: 106,
-            form: 63,
-            label: "OUTMODEL".into(),
-            status: "00010000",
-            parameters: outer.into(),
-        },
-        OwnedTestEntity {
-            entity_type: 106,
-            form: 63,
-            label: "OUTPCURV".into(),
-            status: "00010500",
-            parameters: outer_pcurve.into(),
-        },
-        OwnedTestEntity {
-            entity_type: 142,
-            form: 0,
-            label: "OUTBOUND".into(),
-            status: "00010000",
-            parameters: "142,0,1,5,3,3;".into(),
-        },
-        OwnedTestEntity {
-            entity_type: 106,
-            form: 63,
-            label: "INMODEL".into(),
-            status: "00010000",
-            parameters: inner.into(),
-        },
-        OwnedTestEntity {
-            entity_type: 106,
-            form: 63,
-            label: "INPCURVE".into(),
-            status: "00010500",
-            parameters: inner.into(),
-        },
-        OwnedTestEntity {
-            entity_type: 142,
-            form: 0,
-            label: "INBOUND".into(),
-            status: "00010000",
-            parameters: "142,0,1,11,9,3;".into(),
-        },
-        OwnedTestEntity {
-            entity_type: 144,
-            form: 0,
-            label: "ANNULUS".into(),
-            status: "00000000",
-            parameters: trimmed_parameters.into(),
-        },
-    ])
+    test_boundary_direction::trimmed_plane_with_outer_and_inner(
+        "106,1,5,0,0,0,1,0,1,1,0,1,0,0;",
+        outer_pcurve,
+        inner,
+        trimmed_parameters,
+    )
 }
 
 pub(crate) fn parameter_domain_trimmed_surface_file(trimmed_surface_parameters: &str) -> Vec<u8> {
@@ -1856,13 +1819,37 @@ fn subrange_nurbs_surface_boundary_file_with_source_precision_at(
     )
 }
 
+/// The trimmed-surface file of [`subrange_nurbs_surface_boundary_file_with_pcurve`]
+/// with `faces` Type 144 entities that all bound the support by the one
+/// curve on surface, so every face shares its parameter curve.
+pub(crate) fn subrange_nurbs_surfaces_sharing_pcurve_file(
+    preference: i64,
+    pcurve_parameters: &str,
+    faces: usize,
+) -> Vec<u8> {
+    subrange_nurbs_surface_boundary_faces_file(
+        preference,
+        pcurve_parameters,
+        b"1H,,1H;,7Hproduct,8Hpart.igs,7Hcadmpeg,3H0.1,64,38,6,308,15,0H,1.0,2,2HMM,1,1.0,15H20260714.000000,0.001,1000.0,6Hauthor,3Horg,11,0,0H,0H;",
+        faces,
+    )
+}
+
 fn subrange_nurbs_surface_boundary_file_with_global(
     preference: i64,
     pcurve_parameters: &str,
     global: &[u8],
 ) -> Vec<u8> {
-    owned_test_file_with_global(
-        &[
+    subrange_nurbs_surface_boundary_faces_file(preference, pcurve_parameters, global, 1)
+}
+
+fn subrange_nurbs_surface_boundary_faces_file(
+    preference: i64,
+    pcurve_parameters: &str,
+    global: &[u8],
+    faces: usize,
+) -> Vec<u8> {
+    let mut entities = vec![
         OwnedTestEntity {
             entity_type: 128,
             form: 0,
@@ -1893,16 +1880,15 @@ fn subrange_nurbs_surface_boundary_file_with_global(
             status: "00010000",
             parameters: format!("142,0,1,5,3,{preference};"),
         },
-        OwnedTestEntity {
-            entity_type: 144,
-            form: 0,
-            label: "TRIMMED".into(),
-            status: "00000000",
-            parameters: "144,1,1,0,7;".into(),
-        },
-        ],
-        global,
-    )
+    ];
+    entities.extend((0..faces).map(|_| OwnedTestEntity {
+        entity_type: 144,
+        form: 0,
+        label: "TRIMMED".into(),
+        status: "00000000",
+        parameters: "144,1,1,0,7;".into(),
+    }));
+    owned_test_file_with_global(&entities, global)
 }
 
 pub(crate) fn independent_boundary_entities_file(include_failing_owner: bool) -> Vec<u8> {

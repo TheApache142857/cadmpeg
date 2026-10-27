@@ -132,8 +132,42 @@ pub(crate) struct PmDcContentHeader {
     pub(crate) header_id: u16,
     pub(crate) next: PmDcReference,
     pub(crate) flags: u32,
+    /// The u32 that segment major versions from 28 store after `flags`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flags_extension"
+    )]
+    pub(crate) flags_extension: Option<u32>,
     pub(crate) context: PmDcReference,
     pub(crate) source_index: u32,
+    /// The i32 values after `source_index`: one in segment major version 23
+    /// and two from version 25, in records whose body does not start with a
+    /// state value.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) stamps: Vec<i32>,
+}
+cadmpeg_core::named_optional_field!(deserialize_flags_extension, u32, "flags_extension");
+
+/// Whether the `PmDc` record grammar covers a segment major version.
+pub(crate) const fn record_version_supported(version: u8) -> bool {
+    matches!(version, 15..=23 | 25 | 28..=31)
+}
+
+/// The zero u32 that segment major versions from 28 store after a record's `flags`.
+pub(crate) fn flags_extension(
+    cursor: &mut Cursor<'_>,
+    version: u8,
+) -> Result<Option<u32>, CodecError> {
+    if version < 28 {
+        return Ok(None);
+    }
+    match cursor.u32("flags extension")? {
+        0 => Ok(Some(0)),
+        value => Err(CodecError::malformed(format_args!(
+            "Inventor PmDc flags extension is {value}, not 0"
+        ))),
+    }
 }
 
 /// A reference list with metadata, carrying the marker its format prefixes it with.
@@ -176,6 +210,10 @@ struct PmDcReferenceListWire {
 }
 
 impl PmDcReferenceList {
+    pub(crate) fn marker(&self) -> u16 {
+        self.marker
+    }
+
     pub(crate) fn new(
         marker: u16,
         metadata: Option<PmDcListMetadata>,
@@ -322,6 +360,10 @@ struct PmDcU32ListWire {
 }
 
 impl PmDcU32List {
+    pub(crate) fn marker(&self) -> u16 {
+        self.marker
+    }
+
     pub(crate) fn new(
         marker: u16,
         metadata: Option<PmDcListMetadata>,
@@ -415,6 +457,10 @@ impl<'a> Cursor<'a> {
         Self { source }
     }
 
+    pub(crate) fn view(&self) -> View<'_> {
+        self.source
+    }
+
     pub(crate) fn into_view(self) -> View<'a> {
         self.source
     }
@@ -475,31 +521,43 @@ impl<'a> Cursor<'a> {
         })
     }
 
+    /// The admitted code-unit count of a counted string.
+    fn utf16_len(&mut self, field: &str) -> Result<usize, CodecError> {
+        let units = usize::try_from(self.u32("string length")?).map_err(|_| {
+            CodecError::Malformed("Inventor numeric value exceeds target range".into())
+        })?;
+        if units > 1_048_576 {
+            return Err(CodecError::malformed(format_args!(
+                "Inventor PmDc {field} UTF-16 length {units} exceeds 1048576"
+            )));
+        }
+        Ok(units)
+    }
+
     pub(crate) fn utf16(
         &mut self,
         ctx: &DecodeContext<'_>,
         field: &str,
     ) -> Result<String, CodecError> {
-        let units = usize::try_from(self.u32("string length")?).map_err(|_| {
-            CodecError::Malformed("Inventor numeric value exceeds target range".into())
-        })?;
-        if units > 1_048_576 {
-            if self
-                .source
-                .counted(cadmpeg_core::decode::u64_from_index(units), 2)
-                .is_none()
-            {
-                return Err(CodecError::malformed(format_args!(
-                    "Inventor PmDc {field} UTF-16 payload is truncated"
-                )));
-            }
-            return Err(ctx.refuse_codec_limit(
-                "Inventor PmDc UTF-16 code units",
-                1_048_576,
-                cadmpeg_core::decode::u64_from_index(units),
-            ));
-        }
+        let units = self.utf16_len(field)?;
         crate::reader::utf16_text(
+            ctx,
+            &mut self.source,
+            units,
+            "PmDc text",
+            "retain Inventor PmDc string",
+        )
+    }
+
+    /// A counted string that keeps its exact code units when they hold an
+    /// unpaired surrogate.
+    pub(crate) fn utf16_units(
+        &mut self,
+        ctx: &DecodeContext<'_>,
+        field: &str,
+    ) -> Result<(String, Option<Vec<u16>>), CodecError> {
+        let units = self.utf16_len(field)?;
+        crate::reader::utf16_text_units(
             ctx,
             &mut self.source,
             units,
@@ -524,26 +582,70 @@ impl<'a> Cursor<'a> {
     }
 }
 
-pub(crate) fn content_header(cursor: &mut Cursor<'_>) -> Result<PmDcContentHeader, CodecError> {
+/// The content header of a record whose body does not start with a state
+/// value. From segment major version 23 these headers end with stamps.
+pub(crate) fn content_header(
+    cursor: &mut Cursor<'_>,
+    version: u8,
+) -> Result<PmDcContentHeader, CodecError> {
+    let stamps = match version {
+        0..=22 => 0,
+        23..=24 => 1,
+        _ => 2,
+    };
+    header_with_stamps(cursor, version, stamps)
+}
+
+/// The content header of a record whose body starts with a state value. These
+/// headers store no stamps.
+pub(crate) fn state_content_header(
+    cursor: &mut Cursor<'_>,
+    version: u8,
+) -> Result<PmDcContentHeader, CodecError> {
+    header_with_stamps(cursor, version, 0)
+}
+
+fn header_with_stamps(
+    cursor: &mut Cursor<'_>,
+    version: u8,
+    stamp_count: usize,
+) -> Result<PmDcContentHeader, CodecError> {
+    let header_value = cursor.u32("content header value")?;
+    let header_id = cursor.u16("content header id")?;
+    let next = cursor.reference("content header next reference")?;
+    let flags = cursor.u32("content header flags")?;
+    let flags_extension = flags_extension(cursor, version)?;
+    let context = cursor.reference("content header context reference")?;
+    let source_index = cursor.u32("content header source index")?;
+    let mut stamps = Vec::with_capacity(stamp_count);
+    for _ in 0..stamp_count {
+        let stamp = cursor.i32("content header stamp")?;
+        if stamp < -1 {
+            return Err(CodecError::malformed(format_args!(
+                "Inventor PmDc content header stamp is {stamp}"
+            )));
+        }
+        stamps.push(stamp);
+    }
     Ok(PmDcContentHeader {
-        header_value: cursor.u32("content header value")?,
-        header_id: cursor.u16("content header id")?,
-        next: cursor.reference("content header next reference")?,
-        flags: cursor.u32("content header flags")?,
-        context: cursor.reference("content header context reference")?,
-        source_index: cursor.u32("content header source index")?,
+        header_value,
+        header_id,
+        next,
+        flags,
+        flags_extension,
+        context,
+        source_index,
+        stamps,
     })
 }
 
 pub(crate) fn reference_list(
-    ctx: &DecodeContext<'_>,
     cursor: &mut Cursor<'_>,
     marker: u16,
     field: &str,
 ) -> Result<PmDcReferenceList, CodecError> {
-    let (count, metadata) =
-        list_preamble(ctx, cursor, marker, field, "admit Inventor PmDc references")?;
-    let mut references = ctx.vector_storage(count, "admit Inventor PmDc references")?;
+    let (count, metadata) = list_preamble(cursor, marker, field)?;
+    let mut references = Vec::new();
     for _ in 0..count {
         references.push(cursor.reference("reference-list entry")?);
     }
@@ -552,12 +654,46 @@ pub(crate) fn reference_list(
     })
 }
 
-fn list_preamble(
+pub(crate) fn reference_list_with_context(
     ctx: &DecodeContext<'_>,
     cursor: &mut Cursor<'_>,
     marker: u16,
     field: &str,
-    admission: &'static str,
+) -> Result<PmDcReferenceList, CodecError> {
+    let (count, metadata) = list_preamble(cursor, marker, field)?;
+    let mut references = ctx.alloc_filled(
+        count,
+        PmDcReference::from_packed(0),
+        "read Inventor reference list",
+    )?;
+    for reference in &mut references {
+        *reference = cursor.reference("reference-list entry")?;
+    }
+    PmDcReferenceList::new(marker, metadata, references).ok_or_else(|| {
+        CodecError::malformed("Inventor PmDc reference list metadata disagrees with length")
+    })
+}
+
+pub(crate) fn u32_list_with_context(
+    ctx: &DecodeContext<'_>,
+    cursor: &mut Cursor<'_>,
+    marker: u16,
+    field: &str,
+) -> Result<PmDcU32List, CodecError> {
+    let (count, metadata) = list_preamble(cursor, marker, field)?;
+    let mut values = ctx.alloc_filled(count, 0, "read Inventor integer list")?;
+    for value in &mut values {
+        *value = cursor.u32("integer-list value")?;
+    }
+    PmDcU32List::new(marker, metadata, values).ok_or_else(|| {
+        CodecError::malformed("Inventor PmDc integer list metadata disagrees with length")
+    })
+}
+
+fn list_preamble(
+    cursor: &mut Cursor<'_>,
+    marker: u16,
+    field: &str,
 ) -> Result<(usize, Option<PmDcListMetadata>), CodecError> {
     let actual = [cursor.u16("list marker 0")?, cursor.u16("list marker 1")?];
     if actual != [marker, 0x3000] {
@@ -586,19 +722,16 @@ fn list_preamble(
         .ok_or_else(|| {
             CodecError::malformed("Inventor PmDc list count exceeds remaining payload")
         })?;
-    ctx.charge_collection_items(cadmpeg_core::decode::u64_from_index(count), admission)?;
     Ok((count, metadata))
 }
 
 pub(crate) fn u32_list(
-    ctx: &DecodeContext<'_>,
     cursor: &mut Cursor<'_>,
     marker: u16,
     field: &str,
 ) -> Result<PmDcU32List, CodecError> {
-    let (count, metadata) =
-        list_preamble(ctx, cursor, marker, field, "admit Inventor PmDc integers")?;
-    let mut values = ctx.vector_storage(count, "admit Inventor PmDc integers")?;
+    let (count, metadata) = list_preamble(cursor, marker, field)?;
+    let mut values = Vec::new();
     for _ in 0..count {
         values.push(cursor.u32("integer-list value")?);
     }
@@ -707,13 +840,12 @@ impl<V> TryFrom<PmDcPairedMapWire<V>> for PmDcPairedMap<V> {
 mod tests {
     use super::{content_header, reference_list, Cursor};
     use crate::test_support::truncation::displayed_truncation;
-    use cadmpeg_core::decode::ResourceDimension;
     use cadmpeg_core::decode::{DecodeArena, DecodePolicy};
     use cadmpeg_core::decode::{DecodeContext, View};
     use cadmpeg_core::CodecError;
 
     #[test]
-    fn pmdc_utf16_local_ceiling_refuses_resources_for_complete_payload() {
+    fn pmdc_utf16_local_ceiling_is_malformed_for_complete_payload() {
         let units = 1_048_577_u32;
         let mut bytes = units.to_le_bytes().to_vec();
         bytes.extend(std::iter::repeat_n(
@@ -726,9 +858,9 @@ mod tests {
         let error = Cursor::new(root)
             .utf16(&ctx, "name")
             .expect_err("local string ceiling");
-        assert!(matches!(error, CodecError::ResourceLimit(limit)
-            if limit.operation == "Inventor PmDc UTF-16 code units"
-                && limit.limit == 1_048_576 && Some(limit) == ctx.resource_refusal()));
+        assert!(matches!(&error, CodecError::Malformed(detail)
+            if detail.contains("UTF-16 length 1048577 exceeds 1048576")));
+        assert!(ctx.resource_refusal().is_none());
         let truncated = units.to_le_bytes();
         let (ctx, root) =
             DecodeContext::from_root_bytes(&truncated, &arena, &DecodePolicy::service())
@@ -784,72 +916,75 @@ mod tests {
     }
 
     #[test]
-    fn pmdc_counted_lists_prove_extent_before_admission() {
+    fn pmdc_counted_lists_prove_extent() {
         for marker in [2_u16, 8] {
             let mut bytes = Vec::new();
             bytes.extend_from_slice(&marker.to_le_bytes());
             bytes.extend_from_slice(&0x3000_u16.to_le_bytes());
             bytes.extend_from_slice(&1_000_000_u32.to_le_bytes());
             bytes.extend_from_slice(if marker == 8 { &[0; 4] } else { &[0; 8] });
-            crate::test_support::test_fixtures::parse(&bytes, |ctx, root| {
+            crate::test_support::test_fixtures::parse(&bytes, |_, root| {
                 assert!(matches!(
-                    reference_list(ctx, &mut Cursor::new(root), marker, "test"),
+                    reference_list(&mut Cursor::new(root), marker, "test"),
                     Err(CodecError::Malformed(_))
                 ));
                 assert!(matches!(
-                    super::u32_list(ctx, &mut Cursor::new(root), marker, "test"),
+                    super::u32_list(&mut Cursor::new(root), marker, "test"),
                     Err(CodecError::Malformed(_))
                 ));
             });
-            let arena = DecodeArena::new();
-            let mut policy = DecodePolicy::service();
-            policy.limits.max_collection_items = 0;
-            let (ctx, root) =
-                DecodeContext::from_root_bytes(&bytes, &arena, &policy).expect("test context");
-            assert!(matches!(
-                reference_list(&ctx, &mut Cursor::new(root), marker, "test"),
-                Err(CodecError::Malformed(_))
-            ));
-            assert!(matches!(
-                super::u32_list(&ctx, &mut Cursor::new(root), marker, "test"),
-                Err(CodecError::Malformed(_))
-            ));
         }
     }
 
     #[test]
-    fn pmdc_counted_lists_admit_retained_storage() {
+    fn context_lists_validate_the_extent_before_allocation() {
+        let mut bytes = vec![2, 0, 0, 0x30];
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&[0; 8]);
+        crate::test_support::test_fixtures::parse(&bytes, |ctx, source| {
+            assert!(matches!(
+                super::reference_list_with_context(ctx, &mut Cursor::new(source), 2, "test"),
+                Err(CodecError::Malformed(_))
+            ));
+            assert!(matches!(
+                super::u32_list_with_context(ctx, &mut Cursor::new(source), 2, "test"),
+                Err(CodecError::Malformed(_))
+            ));
+        });
+        bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        crate::test_support::test_fixtures::parse(&bytes, |ctx, source| {
+            let refs = super::reference_list_with_context(ctx, &mut Cursor::new(source), 2, "test")
+                .expect("one bounded list value");
+            assert_eq!(refs.references(), &[super::PmDcReference::from_packed(1)]);
+            let values = super::u32_list_with_context(ctx, &mut Cursor::new(source), 2, "test")
+                .expect("one bounded list value");
+            assert_eq!(values.values(), &[1]);
+        });
+    }
+
+    #[test]
+    fn pmdc_counted_lists_read_one_entry() {
         let bytes = [
             2_u8, 0, 0, 0x30, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
         ];
         let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_retained_bytes = 0;
-        let (ctx, root) =
-            DecodeContext::from_root_bytes(&bytes, &arena, &policy).expect("test context");
-        assert!(
-            matches!(reference_list(&ctx, &mut Cursor::new(root), 2, "test"), Err(CodecError::ResourceLimit(limit)) if limit.dimension == ResourceDimension::RetainedBytes)
+        let (_, root) = DecodeContext::from_root_bytes(&bytes, &arena, &DecodePolicy::service())
+            .expect("test context");
+        assert_eq!(
+            reference_list(&mut Cursor::new(root), 2, "test")
+                .expect("one reference")
+                .references()
+                .len(),
+            1
         );
-        assert!(
-            matches!(super::u32_list(&ctx, &mut Cursor::new(root), 2, "test"), Err(CodecError::ResourceLimit(limit)) if limit.dimension == ResourceDimension::RetainedBytes)
-        );
+        assert!(super::u32_list(&mut Cursor::new(root), 2, "test").is_ok());
     }
 
     #[test]
-    fn pmdc_utf16_refuses_exact_utf8_retained_limit_before_decode() {
+    fn pmdc_utf16_decodes() {
         let bytes = [1_u8, 0, 0, 0, 0xac, 0x20];
         let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_retained_bytes = 2;
-        let (ctx, root) = DecodeContext::from_root_bytes(&bytes, &arena, &policy)
-            .expect("PmDc string fits input cap");
-        assert!(matches!(
-            Cursor::new(root).utf16(&ctx, "name"),
-            Err(CodecError::ResourceLimit(limit))
-                if limit.dimension == ResourceDimension::RetainedBytes
-                    && limit.operation == "retain Inventor PmDc string"
-        ));
-
         let (ctx, root) = DecodeContext::from_root_bytes(&bytes, &arena, &DecodePolicy::service())
             .expect("PmDc string fits service policy");
         assert_eq!(
@@ -857,22 +992,6 @@ mod tests {
                 .utf16(&ctx, "name")
                 .expect("valid PmDc string"),
             "€"
-        );
-    }
-
-    #[test]
-    fn pmdc_utf16_needs_no_materialized_code_units() {
-        let bytes = [1_u8, 0, 0, 0, b'A', 0];
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_materialized_bytes = 0;
-        let (ctx, root) = DecodeContext::from_root_bytes(&bytes, &arena, &policy)
-            .expect("PmDc string fits input cap");
-        assert_eq!(
-            Cursor::new(root)
-                .utf16(&ctx, "name")
-                .expect("direct UTF-16 decode needs no temporary storage"),
-            "A"
         );
     }
 
@@ -934,7 +1053,7 @@ mod tests {
         bytes.extend_from_slice(&9_u16.to_le_bytes());
         let mut cursor = Cursor::new(View::over_retained(&bytes));
         assert_eq!(
-            displayed_truncation(content_header(&mut cursor)),
+            displayed_truncation(content_header(&mut cursor, 22)),
             "truncated input during content header next reference at space 0 offset 6"
         );
     }
@@ -946,9 +1065,9 @@ mod tests {
         bytes.extend_from_slice(&0x3000_u16.to_le_bytes());
         let arena = DecodeArena::new();
         let text = match DecodeContext::from_root_bytes(&bytes, &arena, &DecodePolicy::default()) {
-            Ok((ctx, root)) => {
+            Ok((_, root)) => {
                 let mut cursor = Cursor::new(root);
-                displayed_truncation(reference_list(&ctx, &mut cursor, 8, "sketch entity array"))
+                displayed_truncation(reference_list(&mut cursor, 8, "sketch entity array"))
             }
             Err(error) => error.to_string(),
         };

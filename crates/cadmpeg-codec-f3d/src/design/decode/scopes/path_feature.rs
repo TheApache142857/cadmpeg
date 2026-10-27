@@ -11,6 +11,7 @@ use crate::design::DesignFeatureFamily;
 use crate::layout::class_403_revolve_scope_frame as class_403_revolve;
 use crate::layout::compact_loft_operation_prefix as compact_loft;
 use crate::layout::marker_one_revolve_prologue as revolve;
+use crate::layout::referenced_angle_revolve_prologue as referenced_revolve;
 use crate::records::feature::extrude::DesignExtrudeOperation;
 use crate::records::feature::path_features;
 use crate::records::feature::path_features::DesignPathFeatureConstruction;
@@ -50,6 +51,32 @@ pub(super) fn exact_path_feature_construction(
                     operation_offset: u64::try_from(start + revolve::OPERATION).ok()?,
                     angle: cadmpeg_ir::scalar::PositiveAngle::new(angle.evaluated_value().get())?,
                     angle_record_index: angle.record_index(),
+                    angle_offset: angle.evaluated_value_offset(),
+                    opposite_angle: None,
+                },
+            ))
+        }
+        DesignFeatureFamily::Revolve
+            if scope.frame_length() == 365
+                && scope.reference_members().len() == 6
+                && bytes.get(start + referenced_revolve::MARKER) == Some(&1)
+                && View::u32_le_at(bytes, start + referenced_revolve::ZERO_VALUE) == Some(0)
+                && View::u32_le_at(bytes, start + referenced_revolve::EXTENT_KIND) == Some(2)
+                && bytes.get(start + referenced_revolve::DIRECTION_KIND) == Some(&0)
+                && bytes.get(start + referenced_revolve::FLAG) == Some(&1)
+                && View::u32_le_at(bytes, start + referenced_revolve::STRUCTURAL_CONSTANT)
+                    == Some(1) =>
+        {
+            let angle_record_index =
+                marked_record_reference(bytes, start + referenced_revolve::ANGLE_REFERENCE_MARKER)?;
+            let angle =
+                unique_revolve_angle_owner(scope, parameter_owners, Some(angle_record_index))?;
+            Some(DesignPathFeatureConstruction::Revolve(
+                path_features::DesignRevolveConstruction {
+                    operation: operation(start + referenced_revolve::OPERATION)?,
+                    operation_offset: u64::try_from(start + referenced_revolve::OPERATION).ok()?,
+                    angle: cadmpeg_ir::scalar::PositiveAngle::new(angle.evaluated_value().get())?,
+                    angle_record_index,
                     angle_offset: angle.evaluated_value_offset(),
                     opposite_angle: None,
                 },
@@ -212,7 +239,6 @@ pub(super) fn exact_path_feature_construction(
                 },
             ))
         }
-
         _ => None,
     }
 }

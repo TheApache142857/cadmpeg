@@ -25,8 +25,7 @@ fn act_guid_native_retained_limit_refuses_before_guid_clone() {
     use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
 
     let guid = ActGuid::new("f3d:native:act-guid#20".into(), 20, 3, GUID.into()).unwrap();
-    let needed =
-        "act_guids".len() + 4 * std::mem::size_of::<cadmpeg_ir::NativeRecord>() + "id".len();
+    let needed = serde_json::to_vec(&guid).unwrap().len();
     let arena = DecodeArena::new();
     let mut policy = DecodePolicy::service();
     policy.limits.max_retained_bytes = u64::try_from(needed).unwrap() - 1;
@@ -72,9 +71,7 @@ fn act_table_reference_native_retained_limit_refuses_before_id_clone() {
 
     let reference =
         ActTableReference::new("f3d:native:act-table-reference#20".into(), 3, 20, 7).unwrap();
-    let needed = "act_table_references".len()
-        + 4 * std::mem::size_of::<cadmpeg_ir::NativeRecord>()
-        + "id".len();
+    let needed = serde_json::to_vec(&reference).unwrap().len();
     let arena = DecodeArena::new();
     let mut policy = DecodePolicy::service();
     policy.limits.max_retained_bytes = u64::try_from(needed).unwrap() - 1;
@@ -140,9 +137,7 @@ fn act_registry_channel_native_retained_limit_refuses_before_name_clone() {
         GUID.into(),
     )
     .unwrap();
-    let needed = "act_registry_channels".len()
-        + 4 * std::mem::size_of::<cadmpeg_ir::NativeRecord>()
-        + "id".len();
+    let needed = serde_json::to_vec(&channel).unwrap().len();
     let arena = DecodeArena::new();
     let mut policy = DecodePolicy::service();
     policy.limits.max_retained_bytes = u64::try_from(needed).unwrap() - 1;
@@ -339,7 +334,7 @@ fn act_channels_reject_unpaired_keys_and_preserve_split_wire_maps() {
 }
 
 #[test]
-fn act_class_tail_requires_nonpadding_bytes_and_a_bounded_offset() {
+fn act_stream_residue_requires_nonpadding_bytes_and_a_bounded_offset() {
     let wire = serde_json::json!({
         "id": "stream:act-entity#7", "record_index": 7, "entity_id": "0_1",
         "in_table": false, "channel_class_tag": "261", "channel_record_index_offset": 100,
@@ -434,7 +429,8 @@ fn act_root_layout_derives_utf16_offsets_and_bounds_padding() {
     assert_eq!(layout.registry_flag_offset(), 153);
     assert_eq!(layout.display_name_offset(), 161);
     assert_eq!(layout.components_root_record_offset(), 174);
-    for padding in [0, 9, u64::MAX] {
+    assert!(ActRootLayout::new(0, "0_3".into(), String::new(), 0).is_ok());
+    for padding in [9, u64::MAX] {
         assert!(ActRootLayout::new(0, "0_3".into(), String::new(), padding).is_err());
     }
     assert!(ActRootLayout::new(u64::MAX - 63, "0_3".into(), String::new(), 1).is_ok());

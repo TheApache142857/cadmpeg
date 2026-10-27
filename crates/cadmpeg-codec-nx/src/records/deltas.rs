@@ -7,7 +7,7 @@ use crate::deltas::pmark_state::PmarkState;
 use crate::deltas::section::{MapEntry, MapRead, SectionKind, TerminalWord};
 use crate::deltas::transmit_state::TransmitState;
 use crate::framing::xmt_reference::NonNullXmt;
-use cadmpeg_core::decode::{u64_from_index, DecodeContext, ScopedReservation, View};
+use cadmpeg_core::decode::View;
 use cadmpeg_core::CodecError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -130,12 +130,9 @@ struct Header {
     maximum: u16,
 }
 
-fn header(
-    ctx: &DecodeContext<'_>,
-    view: &mut View<'_>,
-) -> Result<Result<Header, StopReason>, CodecError> {
+fn header(view: &mut View<'_>) -> Result<Header, StopReason> {
     if view.take(2) != Some(b"PS") {
-        return Ok(Err(StopReason::MissingHeader));
+        return Err(StopReason::MissingHeader);
     }
     let Some((description, schema, embedded, maximum, user_fields)) = (|| {
         let length = usize::try_from(view.u32_be()?).ok()?;
@@ -157,32 +154,29 @@ fn header(
         let user_fields = view.u32_be()?;
         Some((description, schema, embedded, maximum, user_fields))
     })() else {
-        return Ok(Err(StopReason::InvalidHeader));
+        return Err(StopReason::InvalidHeader);
     };
     if schema.rsplit('_').next() != Some("13006") {
-        return Ok(Err(StopReason::UnsupportedBase));
+        return Err(StopReason::UnsupportedBase);
     }
     if maximum < 4 || user_fields != 0 {
-        return Ok(Err(StopReason::InvalidHeader));
+        return Err(StopReason::InvalidHeader);
     }
-    ctx.charge_work(u64_from_index(view.position()), "read NX Deltas header")?;
-    let state = TransmitState::new(
-        ctx.copy_retained_text(description, "NX Deltas description")?,
-        ctx.copy_retained_text(schema, "NX Deltas schema token")?,
+    TransmitState::new(
+        description.to_owned(),
+        schema.to_owned(),
         maximum,
         user_fields,
-    );
-    Ok(state
-        .map(|state| Header {
-            state,
-            embedded,
-            maximum,
-        })
-        .map_err(|_| StopReason::InvalidHeader))
+    )
+    .map(|state| Header {
+        state,
+        embedded,
+        maximum,
+    })
+    .map_err(|_| StopReason::InvalidHeader)
 }
 
 fn first_definition(
-    ctx: &DecodeContext<'_>,
     view: &mut View<'_>,
     kind: u16,
     embedded: bool,
@@ -192,10 +186,10 @@ fn first_definition(
         let Some(count) = view.u8() else {
             return Ok(None);
         };
-        read_definition(ctx, view, BaseVersion::V13006, kind, count)?
+        read_definition(view, BaseVersion::V13006, kind, count)?
     } else {
         base::fields(BaseVersion::V13006, kind)
-            .map(|fields| own_definition(ctx, kind, fields))
+            .map(|fields| own_definition(kind, fields))
             .transpose()?
     };
     if let Some(plan) = plan {
@@ -206,10 +200,6 @@ fn first_definition(
         {
             return Ok(None);
         }
-        ctx.charge_retained(
-            u64_from_index(std::mem::size_of::<SchemaPlan>() + 2 * std::mem::size_of::<usize>()),
-            "NX Deltas shared plan",
-        )?;
         Ok(Some(Definition {
             declaration: start..view.position(),
             plan: Rc::new(plan),
@@ -233,7 +223,6 @@ fn matches_base(plan: &SchemaPlan) -> bool {
 }
 
 fn prefix(
-    ctx: &DecodeContext<'_>,
     view: &mut View<'_>,
     embedded: bool,
 ) -> Result<Option<(PartitionPrefixState, [Definition; 2])>, CodecError> {
@@ -241,7 +230,7 @@ fn prefix(
     if view.u16_be() != Some(3) {
         return Ok(None);
     }
-    let Some(partition) = first_definition(ctx, view, 3, embedded, start)? else {
+    let Some(partition) = first_definition(view, 3, embedded, start)? else {
         return Ok(None);
     };
     if !matches_base(&partition.plan) {
@@ -258,7 +247,7 @@ fn prefix(
     if view.u16_be() != Some(4) {
         return Ok(None);
     }
-    let Some(pmark) = first_definition(ctx, view, 4, embedded, start)? else {
+    let Some(pmark) = first_definition(view, 4, embedded, start)? else {
         return Ok(None);
     };
     if !matches_base(&pmark.plan) {
@@ -306,59 +295,35 @@ enum Expect {
     MapOrEnd,
 }
 
-struct OpenSection<'c> {
+struct OpenSection {
     state: NodeState,
     start: usize,
     events: Vec<Event>,
     definitions: Vec<Rc<Definition>>,
-    slots: ScopedReservation<'c>,
-    payload: ScopedReservation<'c>,
 }
 
-impl<'c> OpenSection<'c> {
-    fn new(ctx: &'c DecodeContext<'_>, state: NodeState, start: usize) -> Result<Self, CodecError> {
-        Ok(Self {
+impl OpenSection {
+    fn new(state: NodeState, start: usize) -> Self {
+        Self {
             state,
             start,
             events: Vec::new(),
             definitions: Vec::new(),
-            slots: ctx.reserve_scoped(0, "NX Deltas staged slots")?,
-            payload: ctx.reserve_scoped(0, "NX Deltas section transaction")?,
-        })
+        }
     }
 
-    fn push(&mut self, ctx: &DecodeContext<'_>, event: Event) -> Result<(), CodecError> {
-        self.slots.with_storage(|| {
-            ctx.reserve_capacity(&mut self.events, 1, "NX Deltas staged events")
-        })?;
+    fn push(&mut self, event: Event) {
         self.events.push(event);
-        Ok(())
     }
 
-    fn first_use(
-        &mut self,
-        ctx: &DecodeContext<'_>,
-        definition: Definition,
-    ) -> Result<Rc<Definition>, CodecError> {
-        self.payload.with_storage(|| {
-            ctx.charge_retained(
-                u64_from_index(
-                    std::mem::size_of::<Definition>() + 2 * std::mem::size_of::<usize>(),
-                ),
-                "NX Deltas schema plan",
-            )
-        })?;
+    fn first_use(&mut self, definition: Definition) -> Rc<Definition> {
         let definition = Rc::new(definition);
-        self.slots.with_storage(|| {
-            ctx.reserve_capacity(&mut self.definitions, 1, "NX Deltas staged definitions")
-        })?;
         self.definitions.push(Rc::clone(&definition));
-        Ok(definition)
+        definition
     }
 
     fn read_node(
         &mut self,
-        ctx: &DecodeContext<'_>,
         view: &mut View<'_>,
         embedded: bool,
         established: &BTreeMap<u16, Rc<Definition>>,
@@ -368,21 +333,13 @@ impl<'c> OpenSection<'c> {
         let existing = if let Some(definition) = established.get(&kind) {
             Some(Rc::clone(definition))
         } else {
-            let mut found = None;
-            for definition in &self.definitions {
-                ctx.charge_work(1, "look up staged NX Deltas schema")?;
-                if definition.plan.kind == kind {
-                    found = Some(Rc::clone(definition));
-                    break;
-                }
-            }
-            found
+            self.definitions
+                .iter()
+                .find(|definition| definition.plan.kind == kind)
+                .map(Rc::clone)
         };
         let new = if existing.is_none() {
-            match self
-                .payload
-                .with_storage(|| first_definition(ctx, view, kind, embedded, start))?
-            {
+            match first_definition(view, kind, embedded, start)? {
                 Some(definition) => Some(definition),
                 None => return Ok(Err(StopReason::InvalidDeclaration)),
             }
@@ -398,24 +355,18 @@ impl<'c> OpenSection<'c> {
                 "missing established NX Deltas schema".into(),
             ));
         };
-        let Some(data) = self
-            .payload
-            .with_storage(|| read_status_instance(ctx, view, plan))?
-        else {
+        let Some(data) = read_status_instance(view, plan) else {
             return Ok(Err(StopReason::InvalidInstance));
         };
         let definition = match (existing, new) {
             (Some(definition), _) => definition,
-            (_, Some(definition)) => self.first_use(ctx, definition)?,
+            (_, Some(definition)) => self.first_use(definition),
             _ => return Err(CodecError::Malformed("missing NX Deltas definition".into())),
         };
-        self.push(
-            ctx,
-            Event {
-                range: start..view.position(),
-                content: EventContent::Instance(Instance { definition, data }),
-            },
-        )?;
+        self.push(Event {
+            range: start..view.position(),
+            content: EventContent::Instance(Instance { definition, data }),
+        });
         if self.state == NodeState::PmarkHead {
             self.state = NodeState::PmarkNodes;
         }
@@ -423,35 +374,25 @@ impl<'c> OpenSection<'c> {
     }
 }
 
-fn read_map(
-    ctx: &DecodeContext<'_>,
-    view: &mut View<'_>,
-    maximum: u16,
-) -> Result<Result<Metadata, StopReason>, CodecError> {
+fn read_map(view: &mut View<'_>, maximum: u16) -> Result<Metadata, StopReason> {
     let mut entries = Vec::new();
     loop {
-        ctx.charge_work(1, "read NX Deltas map entry")?;
         match MapEntry::read(view, maximum) {
-            Some(MapRead::Entry(entry)) => {
-                ctx.push_vec(&mut entries, entry, "NX Deltas map entries")?;
-            }
+            Some(MapRead::Entry(entry)) => entries.push(entry),
             Some(MapRead::End) => break,
-            None => return Ok(Err(StopReason::InvalidMap)),
+            None => return Err(StopReason::InvalidMap),
         }
     }
     if view.u16_be() != Some(0) {
-        return Ok(Err(StopReason::InvalidMap));
+        return Err(StopReason::InvalidMap);
     }
-    let Some(word) = view.u16_be() else {
-        return Ok(Err(StopReason::InvalidMap));
-    };
-    let Ok(terminal_word) = TerminalWord::try_from(word) else {
-        return Ok(Err(StopReason::UnresolvedMapWordWidth));
-    };
-    Ok(Ok(Metadata::Map {
+    let word = view.u16_be().ok_or(StopReason::InvalidMap)?;
+    let terminal_word =
+        TerminalWord::try_from(word).map_err(|_| StopReason::UnresolvedMapWordWidth)?;
+    Ok(Metadata::Map {
         entries,
         terminal_word,
-    }))
+    })
 }
 
 impl<'s> DeltasRecords<'s> {
@@ -477,8 +418,7 @@ impl<'s> DeltasRecords<'s> {
         crate::deltas::census::Census::new(self)
     }
 
-    pub(crate) fn read(ctx: &DecodeContext<'_>, source: &'s [u8]) -> Result<Self, CodecError> {
-        ctx.charge_work(0, "read NX Deltas owner")?;
+    pub(crate) fn read(source: &'s [u8]) -> Result<Self, CodecError> {
         let mut result = Self {
             source,
             definitions: Vec::new(),
@@ -486,50 +426,35 @@ impl<'s> DeltasRecords<'s> {
             end: DeltasEnd::Complete,
         };
         let mut view = View::over_retained(source);
-        let mut header_storage = ctx.reserve_scoped(0, "NX Deltas header transaction")?;
-        let header = match header_storage.with_storage(|| header(ctx, &mut view))? {
+        let header = match header(&mut view) {
             Ok(header) => header,
             Err(reason) => {
                 result.end = DeltasEnd::Stopped { offset: 0, reason };
                 return Ok(result);
             }
         };
-        header_storage.commit()?;
-        ctx.push_vec(
-            &mut result.events,
-            Event {
-                range: 0..view.position(),
-                content: EventContent::Header(header.state),
-            },
-            "NX Deltas events",
-        )?;
+        result.events.push(Event {
+            range: 0..view.position(),
+            content: EventContent::Header(header.state),
+        });
         let start = view.position();
-        let mut storage = ctx.reserve_scoped(0, "NX Deltas prefix transaction")?;
-        let Some((state, definitions)) =
-            storage.with_storage(|| prefix(ctx, &mut view, header.embedded))?
-        else {
+        let Some((state, definitions)) = prefix(&mut view, header.embedded)? else {
             result.end = DeltasEnd::Stopped {
                 offset: start,
                 reason: StopReason::UnsupportedPacket,
             };
             return Ok(result);
         };
-        storage.commit()?;
         let mut established = BTreeMap::new();
         for definition in definitions {
-            result.establish(ctx, &mut established, definition)?;
+            result.establish(&mut established, definition);
         }
-        ctx.push_vec(
-            &mut result.events,
-            Event {
-                range: start..view.position(),
-                content: EventContent::PartitionPrefix(state),
-            },
-            "NX Deltas events",
-        )?;
-        let mut section = OpenSection::new(ctx, NodeState::Leading, view.position())?;
+        result.events.push(Event {
+            range: start..view.position(),
+            content: EventContent::PartitionPrefix(state),
+        });
+        let mut section = OpenSection::new(NodeState::Leading, view.position());
         loop {
-            ctx.charge_work(1, "read NX Deltas event")?;
             let at = view.position();
             let outcome = match view.u16_be() {
                 None => Err(StopReason::UnclosedSection),
@@ -539,37 +464,18 @@ impl<'s> DeltasRecords<'s> {
                         let expect = section.state.after();
                         let closes = section.state.kind();
                         let section_start = section.start;
-                        section.payload.commit()?;
                         for definition in &section.definitions {
-                            ctx.insert_btree_map(
-                                &mut established,
-                                definition.plan.kind,
-                                Rc::clone(definition),
-                                "NX Deltas schema index",
-                            )?;
+                            established.insert(definition.plan.kind, Rc::clone(definition));
                         }
-                        ctx.append_vec(
-                            &mut result.definitions,
-                            &mut section.definitions,
-                            "NX Deltas schema definitions",
-                        )?;
-                        ctx.append_vec(
-                            &mut result.events,
-                            &mut section.events,
-                            "NX Deltas events",
-                        )?;
-                        ctx.push_vec(
-                            &mut result.events,
-                            Event {
-                                range: at..view.position(),
-                                content: EventContent::Metadata(Metadata::Terminator {
-                                    closes,
-                                    section_start,
-                                }),
-                            },
-                            "NX Deltas events",
-                        )?;
-                        drop(section.slots);
+                        result.definitions.append(&mut section.definitions);
+                        result.events.append(&mut section.events);
+                        result.events.push(Event {
+                            range: at..view.position(),
+                            content: EventContent::Metadata(Metadata::Terminator {
+                                closes,
+                                section_start,
+                            }),
+                        });
                         let start = view.position();
                         match expect {
                             Expect::MapOrEnd if view.is_empty() => break,
@@ -581,18 +487,12 @@ impl<'s> DeltasRecords<'s> {
                                     };
                                     break;
                                 }
-                                section = OpenSection::new(ctx, NodeState::Map, start)?;
-                                let map = section
-                                    .payload
-                                    .with_storage(|| read_map(ctx, &mut view, header.maximum))?;
-                                match map {
-                                    Ok(map) => section.push(
-                                        ctx,
-                                        Event {
-                                            range: start..view.position(),
-                                            content: EventContent::Metadata(map),
-                                        },
-                                    )?,
+                                section = OpenSection::new(NodeState::Map, start);
+                                match read_map(&mut view, header.maximum) {
+                                    Ok(map) => section.push(Event {
+                                        range: start..view.position(),
+                                        content: EventContent::Metadata(map),
+                                    }),
                                     Err(reason) => {
                                         result.end = DeltasEnd::Stopped {
                                             offset: start,
@@ -604,16 +504,10 @@ impl<'s> DeltasRecords<'s> {
                             }
                             Expect::PmarkOrFinal => {
                                 if view.unread() == [0, 1, 0, 1] {
-                                    ctx.push_vec(
-                                        &mut result.events,
-                                        Event {
-                                            range: start..source.len(),
-                                            content: EventContent::Metadata(
-                                                Metadata::FinalTerminator,
-                                            ),
-                                        },
-                                        "NX Deltas events",
-                                    )?;
+                                    result.events.push(Event {
+                                        range: start..source.len(),
+                                        content: EventContent::Metadata(Metadata::FinalTerminator),
+                                    });
                                     break;
                                 }
                                 if view.is_empty() {
@@ -630,7 +524,7 @@ impl<'s> DeltasRecords<'s> {
                                     };
                                     break;
                                 }
-                                section = OpenSection::new(ctx, NodeState::PmarkHead, start)?;
+                                section = OpenSection::new(NodeState::PmarkHead, start);
                                 let Some(state) = PmarkState::read(&mut view) else {
                                     result.end = DeltasEnd::Stopped {
                                         offset: start,
@@ -638,13 +532,10 @@ impl<'s> DeltasRecords<'s> {
                                     };
                                     break;
                                 };
-                                section.push(
-                                    ctx,
-                                    Event {
-                                        range: start..view.position(),
-                                        content: EventContent::Metadata(Metadata::Pmark(state)),
-                                    },
-                                )?;
+                                section.push(Event {
+                                    range: start..view.position(),
+                                    content: EventContent::Metadata(Metadata::Pmark(state)),
+                                });
                             }
                         }
                         continue;
@@ -654,20 +545,17 @@ impl<'s> DeltasRecords<'s> {
                 Some(4) if section.state == NodeState::PmarkHead => {
                     match PmarkState::read(&mut view) {
                         Some(state) => {
-                            section.push(
-                                ctx,
-                                Event {
-                                    range: at..view.position(),
-                                    content: EventContent::Metadata(Metadata::Pmark(state)),
-                                },
-                            )?;
+                            section.push(Event {
+                                range: at..view.position(),
+                                content: EventContent::Metadata(Metadata::Pmark(state)),
+                            });
                             Ok(())
                         }
                         None => Err(StopReason::InvalidPmark),
                     }
                 }
                 Some(kind) if (kind == 2 || kind > 4) && kind <= header.maximum => {
-                    section.read_node(ctx, &mut view, header.embedded, &established, kind, at)?
+                    section.read_node(&mut view, header.embedded, &established, kind, at)?
                 }
                 Some(_) => Err(StopReason::UnsupportedPacket),
             };
@@ -684,27 +572,12 @@ impl<'s> DeltasRecords<'s> {
 
     fn establish(
         &mut self,
-        ctx: &DecodeContext<'_>,
         established: &mut BTreeMap<u16, Rc<Definition>>,
         definition: Definition,
-    ) -> Result<Rc<Definition>, CodecError> {
-        ctx.charge_retained(
-            u64_from_index(std::mem::size_of::<Definition>() + 2 * std::mem::size_of::<usize>()),
-            "NX Deltas schema plan",
-        )?;
+    ) {
         let definition = Rc::new(definition);
-        ctx.insert_btree_map(
-            established,
-            definition.plan.kind,
-            Rc::clone(&definition),
-            "NX Deltas schema index",
-        )?;
-        ctx.push_vec(
-            &mut self.definitions,
-            Rc::clone(&definition),
-            "NX Deltas schema definitions",
-        )?;
-        Ok(definition)
+        established.insert(definition.plan.kind, Rc::clone(&definition));
+        self.definitions.push(definition);
     }
 }
 

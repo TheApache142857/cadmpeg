@@ -5,49 +5,36 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use cadmpeg_core::decode::DecodeContext;
 use cadmpeg_core::CodecError;
 
 use crate::decode::Scan;
 use crate::intersection::{self, CurveScan};
 use crate::parasolid::{Stream, StreamKind};
-use crate::raw_origin::{RawSource, RawStreamOrdinal};
 use crate::topology::{BlendSurface, Graph, OffsetSurface, SurfaceCurve, TrimmedCurve};
 
 struct TopologyStream<'a> {
-    source: RawSource<'a>,
+    source: &'a [u8],
     deltas: Option<crate::records::DeltasRecords<'a>>,
 }
 
 #[cfg(test)]
-pub(crate) fn topology_streams<'a>(
-    ctx: &DecodeContext<'_>,
-    scan: &'a Scan<'_>,
-) -> Result<Vec<&'a [u8]>, CodecError> {
-    let semantic = prepare_topology_streams(ctx, scan)?;
-    let mut bytes = ctx.collection_vec(semantic.len(), "nx topology byte views")?;
-    for stream in semantic {
-        bytes.push(stream.source.bytes());
-    }
-    Ok(bytes)
+pub(crate) fn topology_streams<'a>(scan: &'a Scan<'_>) -> Result<Vec<&'a [u8]>, CodecError> {
+    Ok(prepare_topology_streams(scan)?
+        .into_iter()
+        .map(|stream| stream.source)
+        .collect())
 }
 
-fn prepare_topology_streams<'a>(
-    ctx: &DecodeContext<'_>,
-    scan: &'a Scan<'_>,
-) -> Result<Vec<TopologyStream<'a>>, CodecError> {
-    let mut semantic = ctx.collection_vec(scan.streams.len(), "nx prepared topology streams")?;
-    for (ordinal, stream) in scan.streams.iter().enumerate() {
-        let (source, deltas) = if stream.kind() == StreamKind::Deltas {
+fn prepare_topology_streams<'a>(scan: &'a Scan<'_>) -> Result<Vec<TopologyStream<'a>>, CodecError> {
+    let mut semantic = Vec::with_capacity(scan.streams.len());
+    for stream in &scan.streams {
+        let (source, deltas): (&[u8], _) = if stream.kind() == StreamKind::Deltas {
             (
-                RawSource::default(),
-                Some(crate::records::DeltasRecords::read(ctx, &stream.inflated)?),
+                &[],
+                Some(crate::records::DeltasRecords::read(&stream.inflated)?),
             )
         } else {
-            (
-                RawSource::raw(RawStreamOrdinal::new(ordinal), &stream.inflated),
-                None,
-            )
+            (&stream.inflated, None)
         };
         semantic.push(TopologyStream { source, deltas });
     }
@@ -58,49 +45,33 @@ fn prepare_topology_streams<'a>(
 /// same schema. `eligible_deltas`, when `Some`, restricts pairing to those delta
 /// ordinals; when `None`, every delta stream is eligible.
 pub(super) fn pair_stream_indices(
-    ctx: &DecodeContext<'_>,
     streams: &[Stream],
     eligible_deltas: Option<&BTreeSet<usize>>,
-) -> Result<BTreeMap<usize, Vec<usize>>, CodecError> {
+) -> BTreeMap<usize, Vec<usize>> {
     let mut pairs = BTreeMap::<usize, Vec<usize>>::new();
-    for (delta, stream) in streams.iter().enumerate() {
+    // The latest partition seen so far for each schema is the nearest preceding one.
+    let mut latest_partition = BTreeMap::new();
+    for (ordinal, stream) in streams.iter().enumerate() {
+        if stream.kind() == StreamKind::Partition {
+            latest_partition.insert(stream.schema_token(), ordinal);
+            continue;
+        }
         if stream.kind() != StreamKind::Deltas
-            || eligible_deltas.is_some_and(|eligible| !eligible.contains(&delta))
+            || eligible_deltas.is_some_and(|eligible| !eligible.contains(&ordinal))
         {
             continue;
         }
-        let mut partition = None;
-        for (ordinal, candidate) in streams[..delta].iter().enumerate().rev() {
-            ctx.charge_work(1, "nx delta partition scan")?;
-            if candidate.kind() == StreamKind::Partition
-                && candidate.schema_token() == stream.schema_token()
-            {
-                partition = Some(ordinal);
-                break;
-            }
-        }
-        if let Some(partition) = partition {
-            if !pairs.contains_key(&partition) {
-                ctx.charge_collection_items(1, "nx delta pair partitions")?;
-                ctx.charge_retained(
-                    cadmpeg_core::decode::u64_from_index(
-                        std::mem::size_of::<(usize, Vec<usize>)>()
-                    ),
-                    "nx delta pair partitions",
-                )?;
-            }
-            let deltas = pairs.entry(partition).or_default();
-            ctx.reserve_vec(deltas, 1, "nx delta pair members")?;
-            deltas.push(delta);
+        if let Some(&partition) = latest_partition.get(&stream.schema_token()) {
+            pairs.entry(partition).or_default().push(ordinal);
         }
     }
-    Ok(pairs)
+    pairs
 }
 
 /// Cached primary topology and geometry. Deltas streams retain an empty view.
 pub(crate) struct StreamView<'a> {
-    /// Original stream bytes and their raw origin; empty for Deltas streams.
-    pub(crate) source: RawSource<'a>,
+    /// Original stream bytes; empty for Deltas streams.
+    pub(crate) source: &'a [u8],
     /// Topology record graph.
     pub(crate) graph: Rc<Graph>,
     /// Type-60 offset surfaces.
@@ -116,7 +87,7 @@ pub(crate) struct StreamView<'a> {
 }
 
 impl<'a> StreamView<'a> {
-    fn without_geometry(source: RawSource<'a>) -> Self {
+    fn without_geometry(source: &'a [u8]) -> Self {
         StreamView {
             source,
             graph: Rc::new(Graph::default()),
@@ -130,28 +101,21 @@ impl<'a> StreamView<'a> {
 
     /// Parse cached primary families from their original stream bytes.
     fn parse_uniform(
-        ctx: &DecodeContext<'_>,
         bytes: &'a [u8],
         point_layout: Option<crate::intersection::ChartPointLayout>,
-        ordinal: RawStreamOrdinal,
     ) -> Result<Self, CodecError> {
-        let graph = Rc::new(Graph::parse(ctx, bytes)?);
-        let offset_surfaces = graph.offset_surfaces(ctx)?;
-        let blend_surfaces = graph.blend_surfaces(ctx)?;
-        let trimmed_curves = graph.trimmed_curves(ctx)?;
-        let surface_curves = graph.surface_curves(ctx)?;
-        let intersections = match point_layout {
-            Some(layout) => intersection::scan_with_graph(ctx, bytes, &graph, layout)?,
-            None => CurveScan::default(),
-        };
+        let graph = Rc::new(Graph::parse(bytes));
         Ok(StreamView {
-            source: RawSource::raw(ordinal, bytes),
+            source: bytes,
+            offset_surfaces: graph.offset_surfaces(),
+            blend_surfaces: graph.blend_surfaces(),
+            trimmed_curves: graph.trimmed_curves(),
+            surface_curves: graph.surface_curves(),
+            intersections: match point_layout {
+                Some(layout) => intersection::scan_with_graph(bytes, &graph, layout)?,
+                None => CurveScan::default(),
+            },
             graph,
-            offset_surfaces,
-            blend_surfaces,
-            trimmed_curves,
-            surface_curves,
-            intersections,
         })
     }
 }
@@ -162,33 +126,24 @@ struct StreamParse<'a> {
     deltas: Option<crate::records::DeltasRecords<'a>>,
 }
 
-/// Every expensive per-stream Parasolid parse, once per distinct byte view,
-/// indexed by stream ordinal. NURBS parsing remains deferred until requested.
+/// Every expensive per-stream Parasolid parse, once per stream, indexed by
+/// stream ordinal. NURBS parsing remains deferred until requested.
 pub(crate) struct ParsedStreams<'a> {
     streams: Vec<StreamParse<'a>>,
 }
 
 impl<'a> ParsedStreams<'a> {
     /// Parse primary geometry once and retain the Deltas owner for native consumers.
-    pub(crate) fn parse(ctx: &DecodeContext<'_>, scan: &'a Scan) -> Result<Self, CodecError> {
-        let mut topology = prepare_topology_streams(ctx, scan)?;
-        let mut streams = ctx.collection_vec(scan.streams.len(), "nx parsed stream records")?;
+    pub(crate) fn parse(scan: &'a Scan) -> Result<Self, CodecError> {
+        let mut topology = prepare_topology_streams(scan)?;
+        let mut streams = Vec::with_capacity(scan.streams.len());
         for (ordinal, stream) in scan.streams.iter().enumerate() {
-            let source = std::mem::take(&mut topology[ordinal].source);
-            ctx.charge_retained(
-                cadmpeg_core::decode::u64_from_index(std::mem::size_of::<StreamView>()),
-                "nx parsed stream view",
-            )?;
+            let source = topology[ordinal].source;
             let view = match &stream.body {
                 crate::parasolid::StreamBody::Parasolid { subtype, .. }
                     if stream.kind() != StreamKind::Deltas =>
                 {
-                    StreamView::parse_uniform(
-                        ctx,
-                        &stream.inflated,
-                        subtype.chart_point_layout(),
-                        RawStreamOrdinal::new(ordinal),
-                    )?
+                    StreamView::parse_uniform(&stream.inflated, subtype.chart_point_layout())?
                 }
                 _ => StreamView::without_geometry(source),
             };
@@ -204,15 +159,11 @@ impl<'a> ParsedStreams<'a> {
         self.streams.get(ordinal)?.deltas.as_ref()
     }
 
-    pub(super) fn take_deltas(
-        &mut self,
-        ctx: &DecodeContext<'_>,
-    ) -> Result<Vec<Option<crate::records::DeltasRecords<'a>>>, CodecError> {
-        let mut owners = ctx.collection_vec(self.streams.len(), "nx Deltas owner slots")?;
-        for stream in &mut self.streams {
-            owners.push(stream.deltas.take());
-        }
-        Ok(owners)
+    pub(super) fn take_deltas(&mut self) -> Vec<Option<crate::records::DeltasRecords<'a>>> {
+        self.streams
+            .iter_mut()
+            .map(|stream| stream.deltas.take())
+            .collect()
     }
 
     /// The cached parses of the stream at `ordinal`.
@@ -228,21 +179,16 @@ impl<'a> ParsedStreams<'a> {
             .map(|(ordinal, stream)| (ordinal, &stream.view))
     }
 
-    /// Parse NURBS geometry for the selected semantic stream when requested.
-    pub(crate) fn parse_nurbs(
-        &self,
-        ctx: &DecodeContext<'_>,
-        ordinal: usize,
-    ) -> Result<crate::nurbs::Parsed, CodecError> {
+    /// Parse NURBS geometry for the selected primary stream when requested.
+    pub(crate) fn parse_nurbs(&self, ordinal: usize) -> crate::nurbs::Parsed {
         let stream = &self.streams[ordinal];
-        crate::nurbs::parse_with_graph(ctx, stream.view.source.bytes(), &stream.view.graph)
+        crate::nurbs::parse_with_graph(stream.view.source, &stream.view.graph)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::test_support::test_deltas::bspline_partition_stream;
-    use cadmpeg_core::decode::{DecodeContext, ResourceDimension};
 
     use super::{topology_streams, ParsedStreams};
 
@@ -265,189 +211,8 @@ mod tests {
         ]
     }
 
-    fn scan_with_streams(streams: Vec<crate::parasolid::Stream>) -> crate::decode::Scan<'static> {
-        crate::decode::Scan {
-            container: crate::container::Container {
-                data: Vec::new().into(),
-                physical_size: 0,
-                layout: crate::container::test_modern_layout(0x06),
-                entries: Vec::new(),
-                fastload_table: None,
-                indexed_section_layouts: std::sync::OnceLock::new(),
-                om_section_cache: std::sync::OnceLock::new(),
-            },
-            streams,
-        }
-    }
-
-    fn with_collection_limit<T>(
-        max_collection_items: u64,
-        f: impl FnOnce(&DecodeContext<'_>) -> T,
-    ) -> T {
-        crate::test_support::with_decode_context_over(
-            &[],
-            |policy| {
-                policy.limits.max_collection_items = max_collection_items;
-            },
-            |ctx| f(ctx),
-        )
-    }
-
     #[test]
-    fn topology_preparation_refuses_stream_slots_at_collection_limit() {
-        let scan = scan_with_streams(vec![crate::parasolid::Stream {
-            file_offset: 0,
-            consumed: 0,
-            inflated: Vec::new(),
-            body: crate::parasolid::StreamBody::Preview,
-        }]);
-        let error = with_collection_limit(0, |ctx| topology_streams(ctx, &scan))
-            .expect_err("the prepared stream needs one collection item");
-        assert!(matches!(
-            error,
-            cadmpeg_core::CodecError::ResourceLimit(limit)
-                if limit.dimension == ResourceDimension::CollectionItems
-                    && limit.operation == "nx prepared topology streams"
-        ));
-    }
-
-    #[test]
-    fn topology_preparation_refuses_stream_slots_at_retained_limit() {
-        let scan = scan_with_streams(vec![crate::parasolid::Stream {
-            file_offset: 0,
-            consumed: 0,
-            inflated: Vec::new(),
-            body: crate::parasolid::StreamBody::Preview,
-        }]);
-
-        crate::test_support::with_decode_context_over(
-            &[],
-            |policy| {
-                policy.limits.max_retained_bytes =
-                    cadmpeg_core::decode::u64_from_index(std::mem::size_of::<
-                        super::TopologyStream<'_>,
-                    >()) - 1;
-            },
-            |ctx| {
-                let error = topology_streams(ctx, &scan)
-                    .expect_err("one prepared stream exceeds the retained limit");
-                assert!(matches!(
-                    error,
-                    cadmpeg_core::CodecError::ResourceLimit(limit)
-                        if limit.dimension == ResourceDimension::RetainedBytes
-                            && limit.operation == "nx prepared topology streams"
-                ));
-            },
-        );
-    }
-
-    #[test]
-    fn topology_views_refuse_output_slots_at_collection_limit() {
-        let scan = scan_with_streams(vec![crate::parasolid::Stream {
-            file_offset: 0,
-            consumed: 0,
-            inflated: Vec::new(),
-            body: crate::parasolid::StreamBody::Preview,
-        }]);
-        let error = with_collection_limit(1, |ctx| topology_streams(ctx, &scan))
-            .expect_err("the output view needs a second collection item");
-        assert!(matches!(
-            error,
-            cadmpeg_core::CodecError::ResourceLimit(limit)
-                if limit.dimension == ResourceDimension::CollectionItems
-                    && limit.operation == "nx topology byte views"
-        ));
-    }
-
-    #[test]
-    fn parsed_streams_refuse_record_slots_at_collection_limit() {
-        let scan = scan_with_streams(vec![crate::parasolid::Stream {
-            file_offset: 0,
-            consumed: 0,
-            inflated: Vec::new(),
-            body: crate::parasolid::StreamBody::Preview,
-        }]);
-        let error = with_collection_limit(1, |ctx| ParsedStreams::parse(ctx, &scan))
-            .err()
-            .expect("the parsed record needs a second collection item");
-        assert!(matches!(
-            error,
-            cadmpeg_core::CodecError::ResourceLimit(limit)
-                if limit.dimension == ResourceDimension::CollectionItems
-                    && limit.operation == "nx parsed stream records"
-        ));
-    }
-
-    #[test]
-    fn delta_census_transfer_refuses_slots_at_collection_limit() {
-        let scan = scan_with_streams(vec![crate::parasolid::Stream {
-            file_offset: 0,
-            consumed: 0,
-            inflated: Vec::new(),
-            body: crate::parasolid::StreamBody::Preview,
-        }]);
-        let error = with_collection_limit(2, |ctx| {
-            let mut parsed = ParsedStreams::parse(ctx, &scan)
-                .expect("topology and parsed record use the two available slots");
-            parsed.take_deltas(ctx)
-        })
-        .expect_err("census transfer needs a third collection item");
-        assert!(matches!(
-            error,
-            cadmpeg_core::CodecError::ResourceLimit(limit)
-                if limit.dimension == ResourceDimension::CollectionItems
-                    && limit.operation == "nx Deltas owner slots"
-        ));
-    }
-
-    fn pair_under_limits(collection_items: u64, work_units: u64) -> cadmpeg_core::CodecError {
-        let streams = one_delta_pair();
-
-        crate::test_support::with_decode_context_over(
-            &[],
-            |policy| {
-                policy.limits.max_collection_items = collection_items;
-                policy.limits.max_work_units = work_units;
-            },
-            |ctx| {
-                super::pair_stream_indices(ctx, &streams, None)
-                    .expect_err("one delta pair exceeds the selected limit")
-            },
-        )
-    }
-
-    #[test]
-    fn delta_pairing_refuses_partition_map_at_collection_limit() {
-        assert!(matches!(
-            pair_under_limits(0, u64::MAX),
-            cadmpeg_core::CodecError::ResourceLimit(limit)
-                if limit.dimension == ResourceDimension::CollectionItems
-                    && limit.operation == "nx delta pair partitions"
-        ));
-    }
-
-    #[test]
-    fn delta_pairing_refuses_nested_member_at_collection_limit() {
-        assert!(matches!(
-            pair_under_limits(1, u64::MAX),
-            cadmpeg_core::CodecError::ResourceLimit(limit)
-                if limit.dimension == ResourceDimension::CollectionItems
-                    && limit.operation == "nx delta pair members"
-        ));
-    }
-
-    #[test]
-    fn delta_pairing_refuses_partition_scan_at_work_limit() {
-        assert!(matches!(
-            pair_under_limits(u64::MAX, 0),
-            cadmpeg_core::CodecError::ResourceLimit(limit)
-                if limit.dimension == ResourceDimension::WorkUnits
-                    && limit.operation == "nx delta partition scan"
-        ));
-    }
-
-    #[test]
-    fn delta_pairing_charges_only_examined_partitions() {
+    fn delta_pairing_matches_the_nearest_preceding_partition() {
         let mut streams = vec![crate::parasolid::Stream {
             file_offset: 10,
             consumed: 0,
@@ -456,146 +221,9 @@ mod tests {
         }];
         streams.extend(one_delta_pair());
 
-        crate::test_support::with_decode_context_over(
-            &[],
-            |policy| {
-                policy.limits.max_work_units = 1;
-            },
-            |ctx| {
-                let pairs = super::pair_stream_indices(ctx, &streams, None)
-                    .expect("the preceding partition matches within one work unit");
-                assert_eq!(pairs, std::collections::BTreeMap::from([(1, vec![2])]));
-            },
-        );
-    }
-
-    #[test]
-    fn unchanged_stream_views_borrow_the_inflated_bytes() {
-        let scan = crate::decode::Scan {
-            container: crate::container::Container {
-                data: Vec::new().into(),
-                physical_size: 0,
-                layout: crate::container::test_modern_layout(0x06),
-                entries: Vec::new(),
-                fastload_table: None,
-                indexed_section_layouts: std::sync::OnceLock::new(),
-                om_section_cache: std::sync::OnceLock::new(),
-            },
-            streams: vec![crate::parasolid::Stream {
-                file_offset: 0,
-                consumed: 3,
-                inflated: vec![1, 2, 3],
-                body: crate::parasolid::StreamBody::Parasolid {
-                    subtype: crate::parasolid::ParasolidSubtype::Partition,
-                    schema: Some(
-                        cadmpeg_parasolid::OwnedSchemaToken::try_from("SCH_TEST_1_9999")
-                            .expect("the fixture text is a schema token"),
-                    ),
-                },
-            }],
-        };
-
-        let topology = crate::test_support::with_decode_context(|ctx| {
-            topology_streams(ctx, &scan).expect("test topology streams")
-        });
-        let parsed = crate::test_support::with_decode_context(|ctx| {
-            ParsedStreams::parse(ctx, &scan).expect("test parsed streams")
-        });
-
-        assert!(std::ptr::eq(
-            topology[0],
-            scan.streams[0].inflated.as_slice()
-        ));
-        assert!(std::ptr::eq(
-            parsed.streams[0].view.source.bytes(),
-            scan.streams[0].inflated.as_slice()
-        ));
-    }
-
-    #[test]
-    fn nurbs_geometry_is_parsed_for_the_selected_semantic_stream() {
-        let stream = |file_offset| {
-            let inflated = bspline_partition_stream();
-            crate::parasolid::Stream {
-                file_offset,
-                consumed: u64::try_from(inflated.len()).expect("test stream length fits u64"),
-                inflated,
-                body: crate::parasolid::StreamBody::Parasolid {
-                    subtype: crate::parasolid::ParasolidSubtype::Partition,
-                    schema: Some(
-                        cadmpeg_parasolid::OwnedSchemaToken::try_from("SCH_TEST_1_9999")
-                            .expect("the fixture text is a schema token"),
-                    ),
-                },
-            }
-        };
-        let scan = crate::decode::Scan {
-            container: crate::container::Container {
-                data: Vec::new().into(),
-                physical_size: 0,
-                layout: crate::container::test_modern_layout(0x06),
-                entries: Vec::new(),
-                fastload_table: None,
-                indexed_section_layouts: std::sync::OnceLock::new(),
-                om_section_cache: std::sync::OnceLock::new(),
-            },
-            streams: vec![stream(0), stream(1)],
-        };
-
-        let parsed = crate::test_support::with_decode_context(|ctx| {
-            ParsedStreams::parse(ctx, &scan).expect("test parsed streams")
-        });
-
-        let expected = crate::test_support::with_decode_context(|ctx| {
-            crate::nurbs::parse_with_graph(
-                ctx,
-                parsed.streams[1].view.source.bytes(),
-                &parsed.streams[1].view.graph,
-            )
-        })
-        .unwrap();
-        let actual =
-            crate::test_support::with_decode_context(|ctx| parsed.parse_nurbs(ctx, 1)).unwrap();
-        assert_eq!(actual.surfaces.len(), expected.surfaces.len());
-        assert_eq!(actual.curves.len(), expected.curves.len());
-        assert_eq!(actual.pcurves.len(), expected.pcurves.len());
-        assert!(!actual.surfaces.is_empty());
-        assert!(!actual.curves.is_empty());
         assert_eq!(
-            actual
-                .surfaces
-                .iter()
-                .map(|surface| surface.pos)
-                .collect::<Vec<_>>(),
-            expected
-                .surfaces
-                .iter()
-                .map(|surface| surface.pos)
-                .collect::<Vec<_>>(),
-        );
-        assert_eq!(
-            actual
-                .curves
-                .iter()
-                .map(|curve| curve.pos)
-                .collect::<Vec<_>>(),
-            expected
-                .curves
-                .iter()
-                .map(|curve| curve.pos)
-                .collect::<Vec<_>>(),
-        );
-        assert_eq!(
-            actual
-                .pcurves
-                .iter()
-                .map(|pcurve| pcurve.pos)
-                .collect::<Vec<_>>(),
-            expected
-                .pcurves
-                .iter()
-                .map(|pcurve| pcurve.pos)
-                .collect::<Vec<_>>(),
+            super::pair_stream_indices(&streams, None),
+            std::collections::BTreeMap::from([(1, vec![2])])
         );
     }
 
@@ -651,11 +279,127 @@ mod tests {
         ];
         let eligible = BTreeSet::from([2usize, 5]);
         assert_eq!(
-            crate::test_support::with_decode_context(|ctx| {
-                super::pair_stream_indices(ctx, &streams, Some(&eligible))
-                    .expect("test delta pairing")
-            }),
+            super::pair_stream_indices(&streams, Some(&eligible)),
             std::collections::BTreeMap::from([(0, vec![2]), (3, vec![5])])
+        );
+    }
+
+    #[test]
+    fn unchanged_stream_views_borrow_the_inflated_bytes() {
+        let scan = crate::decode::Scan {
+            container: crate::container::Container {
+                data: Vec::new().into(),
+                physical_size: 0,
+                layout: crate::container::test_modern_layout(0x06),
+                entries: Vec::new(),
+                fastload_table: None,
+                indexed_section_layouts: std::sync::OnceLock::new(),
+                om_section_cache: std::sync::OnceLock::new(),
+            },
+            streams: vec![crate::parasolid::Stream {
+                file_offset: 0,
+                consumed: 3,
+                inflated: vec![1, 2, 3],
+                body: crate::parasolid::StreamBody::Parasolid {
+                    subtype: crate::parasolid::ParasolidSubtype::Partition,
+                    schema: Some(
+                        cadmpeg_parasolid::OwnedSchemaToken::try_from("SCH_TEST_1_9999")
+                            .expect("the fixture text is a schema token"),
+                    ),
+                },
+            }],
+        };
+
+        let topology = topology_streams(&scan).expect("test topology streams");
+        let parsed = ParsedStreams::parse(&scan).expect("test parsed streams");
+
+        assert!(std::ptr::eq(
+            topology[0],
+            scan.streams[0].inflated.as_slice()
+        ));
+        assert!(std::ptr::eq(
+            parsed.streams[0].view.source,
+            scan.streams[0].inflated.as_slice()
+        ));
+    }
+
+    #[test]
+    fn nurbs_geometry_is_parsed_for_the_selected_semantic_stream() {
+        let stream = |file_offset| {
+            let inflated = bspline_partition_stream();
+            crate::parasolid::Stream {
+                file_offset,
+                consumed: u64::try_from(inflated.len()).expect("test stream length fits u64"),
+                inflated,
+                body: crate::parasolid::StreamBody::Parasolid {
+                    subtype: crate::parasolid::ParasolidSubtype::Partition,
+                    schema: Some(
+                        cadmpeg_parasolid::OwnedSchemaToken::try_from("SCH_TEST_1_9999")
+                            .expect("the fixture text is a schema token"),
+                    ),
+                },
+            }
+        };
+        let scan = crate::decode::Scan {
+            container: crate::container::Container {
+                data: Vec::new().into(),
+                physical_size: 0,
+                layout: crate::container::test_modern_layout(0x06),
+                entries: Vec::new(),
+                fastload_table: None,
+                indexed_section_layouts: std::sync::OnceLock::new(),
+                om_section_cache: std::sync::OnceLock::new(),
+            },
+            streams: vec![stream(0), stream(1)],
+        };
+
+        let parsed = ParsedStreams::parse(&scan).expect("test parsed streams");
+
+        let expected = crate::nurbs::parse_with_graph(
+            parsed.streams[1].view.source,
+            &parsed.streams[1].view.graph,
+        );
+        let actual = parsed.parse_nurbs(1);
+        assert_eq!(actual.surfaces.len(), expected.surfaces.len());
+        assert_eq!(actual.curves.len(), expected.curves.len());
+        assert_eq!(actual.pcurves.len(), expected.pcurves.len());
+        assert!(!actual.surfaces.is_empty());
+        assert!(!actual.curves.is_empty());
+        assert_eq!(
+            actual
+                .surfaces
+                .iter()
+                .map(|surface| surface.pos)
+                .collect::<Vec<_>>(),
+            expected
+                .surfaces
+                .iter()
+                .map(|surface| surface.pos)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            actual
+                .curves
+                .iter()
+                .map(|curve| curve.pos)
+                .collect::<Vec<_>>(),
+            expected
+                .curves
+                .iter()
+                .map(|curve| curve.pos)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            actual
+                .pcurves
+                .iter()
+                .map(|pcurve| pcurve.pos)
+                .collect::<Vec<_>>(),
+            expected
+                .pcurves
+                .iter()
+                .map(|pcurve| pcurve.pos)
+                .collect::<Vec<_>>(),
         );
     }
 }

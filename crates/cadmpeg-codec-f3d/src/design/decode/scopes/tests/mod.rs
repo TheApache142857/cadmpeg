@@ -12,8 +12,10 @@ mod combine;
 mod component_pattern;
 mod copy_paste_bodies;
 mod derived_instance;
+mod fixed_extrude_lanes;
 mod fixed_kind_operations;
 mod fixed_kind_tail;
+mod fixed_scalar_frames;
 mod flange;
 mod history_admission;
 mod legacy_class_397;
@@ -25,6 +27,7 @@ mod scale;
 mod surfaces;
 mod thicken;
 mod thread;
+mod typed_references;
 
 mod fixed_kind_path_operations;
 mod fixed_kind_tail_operations;

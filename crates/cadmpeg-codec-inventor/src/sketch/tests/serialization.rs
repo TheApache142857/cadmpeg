@@ -24,6 +24,7 @@ fn point_tail_borrowed_wire_refuses_retained_limit_before_clone() {
             vec![PmDcReference::new(3, false).expect("test reference index fits 31 bits")],
         )
         .expect("paired point associations"),
+        links: None,
     };
     let wire = PointTailWire::from(tail.clone());
     assert_eq!(
@@ -57,8 +58,10 @@ fn transform_payload_streams_flat_matrix_under_retained_limit() {
             header_id: 18,
             next: reference,
             flags: 0,
+            flags_extension: None,
             context: reference,
             source_index: 1,
+            stamps: Vec::new(),
         },
         prefix_present: true,
         matrix: CompactMatrix::try_from_rows(0, 0, [[2.0; 4]; 4]).expect("finite compact matrix"),

@@ -6,11 +6,8 @@
     clippy::uninlined_format_args
 )]
 
-use cadmpeg_core::decode::u64_from_index;
-
 use std::io::{Cursor, Write};
 
-use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
 use zip::CompressionMethod;
 
 use super::{
@@ -330,17 +327,8 @@ fn parameter_variants_have_exact_string_and_scalar_boundaries() {
     let mut sheet_metal =
         parameter_record(Some(301), "50.00 mm", "FlangeHeight", Some("mm"), "d2", 5.0);
     sheet_metal[22..30].copy_from_slice(&6u64.to_le_bytes());
-    let (_, expression_end) = crate::test_support::with_decode_context(|ctx| {
-        crate::bytes::lp_utf16_bounded_charged(
-            ctx,
-            &sheet_metal,
-            46,
-            1..=256,
-            "retain F3D UTF-16 string",
-        )
-        .unwrap()
-    })
-    .expect("sheet-metal expression");
+    let (_, expression_end) =
+        crate::bytes::lp_utf16_bounded(&sheet_metal, 46, 1..=256).expect("sheet-metal expression");
     sheet_metal.insert(expression_end + 9, 0);
     let tail = sheet_metal.len() - 12;
     sheet_metal[tail + 2] = 16;
@@ -379,11 +367,8 @@ fn duplicate_parameter_index_keeps_the_first_serialized_frame() {
     zip.write_all(&bulk).unwrap();
     let archive = zip.finish().unwrap().into_inner();
 
-    let parameters = with_scan(&archive, |scan| {
-        decode_parameters(&cadmpeg_test_support::service_decode_context(), scan)
-    })
-    .unwrap();
-    let [parameter] = parameters.as_slice() else {
+    let parameters = with_scan(&archive, decode_parameters).unwrap();
+    let [parameter] = parameters.parameters.as_slice() else {
         panic!("expected one canonical parameter");
     };
     assert_eq!(parameter.record_index, 71);
@@ -632,6 +617,18 @@ fn parameter_owner_requires_its_complete_structural_suffix() {
 }
 
 #[test]
+fn parameter_owner_flag_byte_after_the_variant_is_zero_or_one() {
+    let mut frame = parameter_owner_frame();
+    frame[80] = 1;
+    let owner = parse_parameter_owner(&frame).expect("owner frame with a set flag byte");
+    assert_eq!(owner.variant, Some(1));
+    assert_eq!(owner.companion_record_index, 46);
+
+    frame[80] = 2;
+    assert!(parse_parameter_owner(&frame).is_none());
+}
+
+#[test]
 fn compact_parameter_owner_omits_the_variant_slot() {
     let parsed =
         parse_parameter_owner(&compact_parameter_owner_frame()).expect("compact parameter owner");
@@ -699,16 +696,20 @@ fn legacy_parameter_owner_68_uses_parameter_scalar_and_zero_scope() {
     );
     assert_eq!(parsed.evaluated_value().get(), 0.0);
 
-    for class_tag in ["268", "282", "289", "297", "299", "325", "336"] {
-        assert!(parse_legacy_parameter_owner_68(
-            &legacy_parameter_owner_68_frame(class_tag),
-            crate::records::identity::Located {
-                value: 1.25,
-                offset: 700
-            },
-            0
-        )
-        .is_some());
+    for class_tag in ["268", "282", "289", "292", "297", "299", "325", "336"] {
+        assert!(
+            parse_legacy_parameter_owner_68(
+                &legacy_parameter_owner_68_frame(class_tag),
+                crate::records::identity::Located {
+                    value: 1.25,
+                    offset: 700
+                },
+                0
+            )
+            .and_then(|parsed| parsed.into_record("Design/BulkStream.dat", 0))
+            .is_some(),
+            "class {class_tag}"
+        );
     }
 }
 
@@ -735,6 +736,29 @@ fn legacy_parameter_owner_68_requires_its_admitted_class_and_shape() {
         0
     )
     .is_none());
+
+    // Class tags are dynamic: a frame of the parameter-owner type is admitted
+    // under any class tag, and keeps the shape requirements.
+    let evaluated = crate::records::identity::Located {
+        value: 1.0,
+        offset: 700,
+    };
+    let typed = super::parse_admitted_legacy_parameter_owner_68(
+        &legacy_parameter_owner_68_frame("318"),
+        evaluated,
+        0,
+        true,
+    )
+    .and_then(|parsed| parsed.into_record("Design/BulkStream.dat", 0))
+    .expect("owner-typed legacy frame");
+    assert_eq!(typed.class_tag().as_str(), "318");
+    assert!(
+        super::parse_admitted_legacy_parameter_owner_68(&malformed, evaluated, 0, true).is_none()
+    );
+    let wire = serde_json::to_value(&typed).unwrap();
+    assert!(
+        serde_json::from_value::<crate::records::parameters::DesignParameterOwner>(wire).is_ok()
+    );
 }
 
 #[test]
@@ -857,6 +881,43 @@ fn tagged_scalar_parameter_owner_can_carry_a_variant_slot() {
     assert_eq!(parsed.companion_record_index, 46);
 }
 
+/// Ends a frame's scope lane at its variant byte by dropping the zero byte
+/// that follows it.
+fn without_variant_padding(mut frame: Vec<u8>) -> Vec<u8> {
+    frame.remove(frame.len() - 24);
+    frame
+}
+
+#[test]
+fn every_parsed_parameter_owner_frame_is_a_valid_owner_record() {
+    let frames = [
+        parameter_owner_frame(),
+        compact_parameter_owner_frame(),
+        compact_variant_parameter_owner_frame(),
+        counted_parameter_owner_frame(),
+        compact_typed_counted_parameter_owner_frame(),
+        compact_counted_parameter_owner_frame(),
+        tagged_scalar_parameter_owner_frame(),
+        tagged_scalar_variant_parameter_owner_frame(),
+        without_variant_padding(parameter_owner_frame()),
+        without_variant_padding(counted_parameter_owner_frame()),
+        without_variant_padding(tagged_scalar_variant_parameter_owner_frame()),
+    ];
+    for frame in frames {
+        let parsed = parse_parameter_owner(&frame).expect("owner frame");
+        let (length, variant) = (parsed.frame_length, parsed.variant);
+        let super::FrameRelative(value_offset) = parsed.evaluated_value_offset;
+        let owner = parsed
+            .into_record("Design/BulkStream.dat", 1000)
+            .unwrap_or_else(|| panic!("{length}-byte owner with variant {variant:?}"));
+        assert_eq!(owner.frame_length(), length);
+        assert_eq!(
+            i128::from(owner.evaluated_value_offset()),
+            1000 + value_offset
+        );
+    }
+}
+
 #[test]
 fn compact_scalar_parameter_owner_can_carry_a_two_byte_variant_slot() {
     let parsed = parse_parameter_owner(&compact_variant_parameter_owner_frame())
@@ -899,7 +960,7 @@ fn parameter_companion_prefix_has_owner_backlink_and_timestamp() {
 }
 
 #[test]
-fn parameter_companion_decode_refuses_index_output_and_identifier_limits() {
+fn parameter_companion_decode_emits_one_identified_companion() {
     const STREAM: &str = "FusionAssetName[Active]/Design1/BulkStream.dat";
     let mut prefix = vec![0; 58];
     prefix[0..4].copy_from_slice(&3u32.to_le_bytes());
@@ -942,111 +1003,8 @@ fn parameter_companion_decode_refuses_index_output_and_identifier_limits() {
     zip.write_all(&prefix).unwrap();
     let archive = zip.finish().unwrap().into_inner();
     with_scan(&archive, |scan| {
-        let scope_len = u64_from_index(crate::ids::native_scope(STREAM).len());
-        for (items, retained, dimension, operation) in [
-            (
-                0,
-                u64::MAX,
-                ResourceDimension::CollectionItems,
-                "f3d parameter companion headers",
-            ),
-            (
-                1,
-                u64::MAX,
-                ResourceDimension::CollectionItems,
-                "f3d parameter companions",
-            ),
-            (
-                u64::MAX,
-                0,
-                ResourceDimension::RetainedBytes,
-                "f3d native stream key",
-            ),
-            (
-                u64::MAX,
-                scope_len,
-                ResourceDimension::RetainedBytes,
-                "f3d parameter companion identifier",
-            ),
-        ] {
-            let arena = DecodeArena::new();
-            let mut policy = DecodePolicy::default();
-            policy.limits.max_collection_items = items;
-            policy.limits.max_retained_bytes = retained;
-            let refusal_cap = match cadmpeg_test_support::refusal::resource_limit_at(
-                dimension,
-                operation,
-                |cap| {
-                    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-                    match dimension {
-                        cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                            policy.limits.max_retained_bytes = cap;
-                        }
-                        cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-                            policy.limits.max_collection_items = cap;
-                        }
-                        cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-                            policy.limits.max_materialized_bytes = cap;
-                        }
-                        cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-                            policy.limits.max_work_units = cap;
-                        }
-                        cadmpeg_core::decode::ResourceDimension::RecursionDepth => {
-                            policy.limits.max_recursion_depth = cap;
-                        }
-                        dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-                    }
-                    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-                    (super::decode_parameter_companions(
-                        &ctx,
-                        scan,
-                        &[owner.clone()],
-                        &[header.clone()],
-                    ))
-                    .map(|_| ())
-                },
-            ) {
-                cadmpeg_core::CodecError::ResourceLimit(limit) => limit.limit,
-                error => panic!("unexpected refusal: {error:?}"),
-            };
-            policy.limits = cadmpeg_core::decode::DecodePolicy::service().limits;
-            match dimension {
-                cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                    policy.limits.max_retained_bytes = refusal_cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-                    policy.limits.max_collection_items = refusal_cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-                    policy.limits.max_materialized_bytes = refusal_cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-                    policy.limits.max_work_units = refusal_cap;
-                }
-                cadmpeg_core::decode::ResourceDimension::RecursionDepth => {
-                    policy.limits.max_recursion_depth = refusal_cap;
-                }
-                dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-            }
-            let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            let result =
-                super::decode_parameter_companions(&ctx, scan, &[owner.clone()], &[header.clone()]);
-            assert!(
-                matches!(
-                    &result,
-                    Err(cadmpeg_core::CodecError::ResourceLimit(failure))
-                        if failure.dimension == dimension && failure.operation == operation
-                ),
-                "item limit {items}, retained limit {retained}: {result:?}"
-            );
-        }
-        let decoded = super::decode_parameter_companions(
-            &cadmpeg_test_support::service_decode_context(),
-            scan,
-            &[owner.clone()],
-            &[header.clone()],
-        )
-        .unwrap();
+        let decoded =
+            super::decode_parameter_companions(scan, &[owner.clone()], &[header.clone()]).unwrap();
         assert_eq!(decoded.len(), 1);
         assert_eq!(
             decoded[0].id(),
@@ -1119,136 +1077,123 @@ fn parameter_owner_uses_the_paired_same_index_header_as_its_boundary() {
     let mut exact = parameter_owner_frame();
     exact.extend_from_slice(&paired_header());
     let owners = with_scan(&archive(stream, &exact), |scan| {
-        crate::design::test_support::with_test_decode_context(|ctx| {
-            crate::design::decode::parameters::decode_parameter_owners(
-                ctx,
-                scan,
-                std::slice::from_ref(&parameter),
-                std::slice::from_ref(&header),
-            )
-        })
+        crate::design::decode::parameters::decode_parameter_owners(
+            scan,
+            std::slice::from_ref(&parameter),
+            std::slice::from_ref(&header),
+        )
     })
     .expect("exact owner frame");
-    let [owner] = owners.as_slice() else {
+    let [owner] = owners.owners.as_slice() else {
         panic!("expected one parameter owner");
     };
     assert_eq!(owner.frame_length(), 104);
+    assert!(owners.unparsed.is_empty());
+    assert_eq!(owner.evaluated_value_offset(), 40);
+
+    let mut compact = without_variant_padding(parameter_owner_frame());
+    compact.extend_from_slice(&paired_header());
+    let owners = with_scan(&archive(stream, &compact), |scan| {
+        crate::design::decode::parameters::decode_parameter_owners(
+            scan,
+            std::slice::from_ref(&parameter),
+            std::slice::from_ref(&header),
+        )
+    })
+    .expect("owner frame whose variant ends its scope lane");
+    let [owner] = owners.owners.as_slice() else {
+        panic!("expected one compact parameter owner");
+    };
+    assert_eq!(owner.frame_length(), 103);
+    assert!(owners.unparsed.is_empty());
     assert_eq!(owner.evaluated_value_offset(), 40);
 
     let unresolved = with_scan(&archive(stream, &[]), |scan| {
-        crate::design::test_support::with_test_decode_context(|ctx| {
-            crate::design::decode::parameters::decode_parameter_owners(
-                ctx,
-                scan,
-                std::slice::from_ref(&parameter),
-                &[],
-            )
-        })
+        crate::design::decode::parameters::decode_parameter_owners(
+            scan,
+            std::slice::from_ref(&parameter),
+            &[],
+        )
     })
     .expect("missing owner frame is retained as an unresolved binding");
-    assert!(unresolved.is_empty());
+    assert!(unresolved.owners.is_empty());
+    assert!(unresolved.unparsed.is_empty());
+
+    let mut lone = paired_header().to_vec();
+    lone.extend_from_slice(&[0; 19]);
+    let lone_owners = with_scan(&archive(stream, &lone), |scan| {
+        crate::design::decode::parameters::decode_parameter_owners(
+            scan,
+            std::slice::from_ref(&parameter),
+            std::slice::from_ref(&header),
+        )
+    })
+    .expect("the lone paired record of an omitted owner frame is not an owner");
+    assert!(lone_owners.owners.is_empty());
+    assert!(lone_owners.unparsed.is_empty());
 
     let mut extended = parameter_owner_frame();
     extended.push(0);
     extended.extend_from_slice(&paired_header());
-    let error = with_scan(&archive(stream, &extended), |scan| {
-        crate::design::test_support::with_test_decode_context(|ctx| {
-            crate::design::decode::parameters::decode_parameter_owners(
-                ctx,
-                scan,
-                std::slice::from_ref(&parameter),
-                std::slice::from_ref(&header),
-            )
-        })
+    let unsupported = with_scan(&archive(stream, &extended), |scan| {
+        crate::design::decode::parameters::decode_parameter_owners(
+            scan,
+            std::slice::from_ref(&parameter),
+            std::slice::from_ref(&header),
+        )
     })
-    .expect_err("an owner-shaped prefix must not shorten the exact frame");
-    assert!(matches!(error, cadmpeg_core::CodecError::Malformed(_)));
-}
+    .expect("unsupported owner bindings do not prevent decoding");
+    assert!(unsupported.owners.is_empty());
+    assert_eq!(unsupported.unparsed, [parameter.id.clone()]);
 
-#[test]
-fn parameter_owner_maps_and_output_refuse_collection_limit() {
-    fn paired_header() -> [u8; 11] {
-        let mut header = [0; 11];
-        header[0..4].copy_from_slice(&3u32.to_le_bytes());
-        header[4..7].copy_from_slice(b"293");
-        header[7..11].copy_from_slice(&44u32.to_le_bytes());
-        header
-    }
-    fn archive(stream: &str, bulk: &[u8]) -> Vec<u8> {
-        let stored = crate::zip_write::file_options(CompressionMethod::Stored);
-        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        write_synthetic_manifests(&mut zip, stored);
-        zip.start_file(stream, stored).unwrap();
-        zip.write_all(bulk).unwrap();
-        zip.finish().unwrap().into_inner()
-    }
-
-    let stream = "FusionAssetName[Active]/Design1/BulkStream.dat";
-    let parameter = crate::records::parameters::DesignParameter::try_from(
-        crate::records::parameters::DesignParameterDraft {
-            id: crate::ids::native_design_parameter_id(stream, 200),
-            byte_offset: 200,
-            class_tag: crate::records::references::DesignClassTag::try_from("305".to_owned())
-                .unwrap(),
-            record_index: 45,
-            source_ordinal: 0,
-            source: crate::records::parameters::DesignParameterSource::new(
-                "Distance".into(),
-                Some(44),
-                Some(crate::records::identity::Located {
-                    value: crate::records::parameters::DesignParameterDiscriminator::Code0,
-                    offset: 222,
-                }),
-            )
-            .unwrap(),
-            expression: "6 cm".into(),
-            expression_offset: 240,
-            source_kind_offset: 260,
-
-            unit: Some(crate::records::identity::RecordedValue {
-                value: "cm".into(),
-                offset: 280,
-            }),
-            name: "distance".into(),
-            name_offset: 300,
-            evaluated_value: 6.0,
-            evaluated_value_offset: 320,
-        },
-    )
+    let supported_at = u64::try_from(extended.len()).unwrap();
+    let mut supported_frame = parameter_owner_frame();
+    supported_frame[7..11].copy_from_slice(&54u32.to_le_bytes());
+    supported_frame[49..53].copy_from_slice(&55u32.to_le_bytes());
+    supported_frame[82..86].copy_from_slice(&56u32.to_le_bytes());
+    extended.extend_from_slice(&supported_frame);
+    let mut supported_pair = paired_header();
+    supported_pair[7..11].copy_from_slice(&54u32.to_le_bytes());
+    extended.extend_from_slice(&supported_pair);
+    let supported_parameter = parse_design_parameter_record(&compact_owned_parameter_record(
+        54,
+        1,
+        "6 cm",
+        "Distance",
+        Some("cm"),
+        "span",
+        6.0,
+    ))
     .unwrap();
-    let header = crate::records::decal::DesignRecordHeader {
-        id: crate::ids::native_design_record_header_id(stream, 0),
-        record_index: 44,
-        class_tag: crate::records::references::DesignClassTag::try_from("292".to_owned()).unwrap(),
-        byte_offset: 0,
+    let supported_header = crate::records::decal::DesignRecordHeader {
+        id: crate::ids::native_design_record_header_id(stream, supported_at),
+        record_index: 54,
+        class_tag: header.class_tag.clone(),
+        byte_offset: supported_at,
     };
-
-    let mut exact = parameter_owner_frame();
-    exact.extend_from_slice(&paired_header());
-    let bytes = archive(stream, &exact);
-    for limit in [0, 1, 2, 6] {
-        let result = with_scan(&bytes, |scan| {
-            let arena = cadmpeg_core::decode::DecodeArena::new();
-            let mut policy = cadmpeg_core::decode::DecodePolicy::default();
-            policy.limits.max_collection_items = limit;
-            let (ctx, _) =
-                cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            crate::design::decode::parameters::decode_parameter_owners(
-                &ctx,
-                scan,
-                std::slice::from_ref(&parameter),
-                std::slice::from_ref(&header),
-            )
-        });
-        assert!(
-            matches!(
-                result,
-                Err(cadmpeg_core::CodecError::ResourceLimit(refusal))
-                    if refusal.dimension == cadmpeg_core::decode::ResourceDimension::CollectionItems
-            ),
-            "collection limit {limit}"
-        );
-    }
+    let native_parameters = [parameter, supported_parameter];
+    let decoded = with_scan(&archive(stream, &extended), |scan| {
+        crate::design::decode::parameters::decode_parameter_owners(
+            scan,
+            &native_parameters,
+            &[header, supported_header],
+        )
+    })
+    .expect("a supported owner after an unsupported owner still decodes");
+    assert_eq!(decoded.unparsed, [native_parameters[0].id.clone()]);
+    let projected = super::parameters_for_projection(&native_parameters, &decoded.unparsed);
+    assert_eq!(native_parameters.len(), 2);
+    assert_eq!(projected.len(), 1);
+    assert_eq!(projected[0].record_index, 55);
+    assert_eq!(projected[0].id, native_parameters[1].id);
+    assert!(matches!(
+        super::parameters_for_projection(&native_parameters, &[]),
+        std::borrow::Cow::Borrowed(_)
+    ));
+    assert_eq!(decoded.owners.len(), 1);
+    assert_eq!(decoded.owners[0].record_index(), 54);
+    assert_eq!(decoded.owners[0].parameter_record_index(), 55);
+    assert_eq!(decoded.owners[0].evaluated_value().get(), 6.0);
 }
 
 #[test]
@@ -1308,7 +1253,8 @@ fn parameter_companion_orders_recipes_by_payload_byte_offset() {
         22,
         21,
         std::num::NonZeroU64::new(1).unwrap(),
-        50,
+        // The timestamp sits 42 bytes into the plain companion prefix.
+        52,
     );
     let recipe = |record_index, byte_offset| ConstructionRecipe {
         id: format!("{stream}:construction-recipe#{record_index}"),
@@ -1324,7 +1270,6 @@ fn parameter_companion_orders_recipes_by_payload_byte_offset() {
     let recipes = [recipe(31, 100), recipe(30, 80)];
 
     let bound = super::bind_parameter_companion_payloads(
-        &cadmpeg_test_support::service_decode_context(),
         vec![companion],
         &super::ParameterCompanionInputs {
             parameters: std::slice::from_ref(&parameter),
@@ -1351,7 +1296,7 @@ fn parameter_companion_orders_recipes_by_payload_byte_offset() {
 }
 
 #[test]
-fn parameter_companion_binding_refuses_output_recipe_and_id_limits() {
+fn parameter_companion_binding_owns_its_recipe() {
     let companion = DesignParameterCompanion::unbound(
         "f3d:native:design-parameter-companion#0".into(),
         0,
@@ -1379,101 +1324,7 @@ fn parameter_companion_binding_refuses_output_recipe_and_id_limits() {
         recipes: std::slice::from_ref(&recipe),
         stream_lengths: &lengths,
     };
-    for (items, retained, dimension, operation) in [
-        (
-            0,
-            u64::MAX,
-            ResourceDimension::CollectionItems,
-            "f3d bound parameter companions",
-        ),
-        (
-            1,
-            u64::MAX,
-            ResourceDimension::CollectionItems,
-            "f3d companion owned recipes",
-        ),
-        (
-            2,
-            u64::MAX,
-            ResourceDimension::CollectionItems,
-            "f3d companion owned recipe identifiers",
-        ),
-        (
-            u64::MAX,
-            0,
-            ResourceDimension::RetainedBytes,
-            "f3d companion owned recipe identifier",
-        ),
-    ] {
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::default();
-        policy.limits.max_collection_items = items;
-        policy.limits.max_retained_bytes = retained;
-        let refusal_cap =
-            match cadmpeg_test_support::refusal::resource_limit_at(dimension, operation, |cap| {
-                let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-                match dimension {
-                    cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                        policy.limits.max_retained_bytes = cap;
-                    }
-                    cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-                        policy.limits.max_collection_items = cap;
-                    }
-                    cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-                        policy.limits.max_materialized_bytes = cap;
-                    }
-                    cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-                        policy.limits.max_work_units = cap;
-                    }
-                    cadmpeg_core::decode::ResourceDimension::RecursionDepth => {
-                        policy.limits.max_recursion_depth = cap;
-                    }
-                    dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-                }
-                let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-                (super::bind_parameter_companion_payloads(&ctx, vec![companion.clone()], &inputs))
-                    .map(|_| ())
-            }) {
-                cadmpeg_core::CodecError::ResourceLimit(limit) => limit.limit,
-                error => panic!("unexpected refusal: {error:?}"),
-            };
-        policy.limits = cadmpeg_core::decode::DecodePolicy::service().limits;
-        match dimension {
-            cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                policy.limits.max_retained_bytes = refusal_cap;
-            }
-            cadmpeg_core::decode::ResourceDimension::CollectionItems => {
-                policy.limits.max_collection_items = refusal_cap;
-            }
-            cadmpeg_core::decode::ResourceDimension::MaterializedBytes => {
-                policy.limits.max_materialized_bytes = refusal_cap;
-            }
-            cadmpeg_core::decode::ResourceDimension::WorkUnits => {
-                policy.limits.max_work_units = refusal_cap;
-            }
-            cadmpeg_core::decode::ResourceDimension::RecursionDepth => {
-                policy.limits.max_recursion_depth = refusal_cap;
-            }
-            dimension => panic!("unsupported refusal dimension: {dimension:?}"),
-        }
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let result =
-            super::bind_parameter_companion_payloads(&ctx, vec![companion.clone()], &inputs);
-        assert!(
-            matches!(
-                &result,
-                Err(cadmpeg_core::CodecError::ResourceLimit(failure))
-                    if failure.dimension == dimension && failure.operation == operation
-            ),
-            "item limit {items}, retained limit {retained}: {result:?}"
-        );
-    }
-    let bound = super::bind_parameter_companion_payloads(
-        &cadmpeg_test_support::service_decode_context(),
-        vec![companion],
-        &inputs,
-    )
-    .unwrap();
+    let bound = super::bind_parameter_companion_payloads(vec![companion], &inputs).unwrap();
     assert_eq!(bound[0].payload().unwrap().owned_recipe_ids(), [recipe.id]);
 }
 
@@ -1572,100 +1423,351 @@ fn frame_relative_offsets_refuse_to_saturate_at_the_end_of_the_address_space() {
 
     let payload = parameter_record(None, "1", "User Parameter", None, "p", 1.0);
     let stream = "FusionAssetName[Active]/Design1/BulkStream.dat";
-    assert!(super::parse_design_parameter(
-        &cadmpeg_test_support::service_decode_context(),
-        &payload
-    )
-    .unwrap()
-    .expect("parsed parameter")
-    .into_record(stream, u64::MAX)
-    .is_none());
+    assert!(super::parse_design_parameter(&payload)
+        .unwrap()
+        .expect("parsed parameter")
+        .into_record(stream, u64::MAX)
+        .is_none());
 
-    let parsed =
-        super::parse_design_parameter(&cadmpeg_test_support::service_decode_context(), &payload)
-            .unwrap()
-            .expect("parsed parameter");
+    let parsed = super::parse_design_parameter(&payload)
+        .unwrap()
+        .expect("parsed parameter");
     let error = super::locate_design_parameter(parsed, stream, usize::MAX)
         .expect_err("a frame at the end of the address space cannot be located");
     assert!(matches!(error, cadmpeg_core::CodecError::Malformed(_)));
 }
 
 #[test]
-fn design_parameter_text_fields_refuse_each_retained_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-
+fn design_parameter_text_fields_keep_the_name() {
     let payload = parameter_record(Some(44), "1", "AlongDistance", Some("mm"), "d71", 1.0);
-    let mut charged = 0usize;
-    for field in ["1", "AlongDistance", "mm", "d71"] {
-        charged += field.len();
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_retained_bytes = u64::try_from(charged - 1).unwrap();
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let error = super::parse_design_parameter(&ctx, &payload).err().unwrap();
-        assert!(
-            matches!(error, cadmpeg_core::CodecError::ResourceLimit(refusal)
-            if refusal.dimension == ResourceDimension::RetainedBytes
-                && refusal.operation == "f3d Design UTF-16 text")
-        );
-    }
-    let parsed =
-        super::parse_design_parameter(&cadmpeg_test_support::service_decode_context(), &payload)
-            .unwrap()
-            .unwrap();
+    let parsed = super::parse_design_parameter(&payload).unwrap().unwrap();
     assert_eq!(parsed.name, "d71");
+}
 
-    let legacy = class_287_parameter_record("HoleDepth", "d20");
-    let mut charged = 0usize;
-    for field in ["0.4375 in", "HoleDepth", "in", "d20"] {
-        charged += field.len();
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        policy.limits.max_retained_bytes = u64::try_from(charged - 1).unwrap();
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let error = super::parse_design_parameter(&ctx, &legacy).err().unwrap();
-        assert!(
-            matches!(error, cadmpeg_core::CodecError::ResourceLimit(refusal)
-            if refusal.dimension == ResourceDimension::RetainedBytes
-                && refusal.operation == "f3d Design UTF-16 text")
-        );
-    }
+const TYPED_PARAMETER_TAIL_TYPE: &str = "B0556F58-EE09-46A7-B18F-E296F48E5B13";
+const TYPED_OWNER_TYPE: &str = "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0";
+const TYPED_SCOPE_TYPE: &str = "11111111-2222-3333-4444-555555555555";
+
+fn typed_reference(out: &mut Vec<u8>, target: u64, guid: &str) {
+    out.push(1);
+    out.extend_from_slice(&target.to_le_bytes());
+    out.extend_from_slice(&36u32.to_le_bytes());
+    out.extend_from_slice(guid.as_bytes());
+    out.extend_from_slice(&[0, 0]);
+}
+
+/// A typed compact parameter: owned through a typed owner reference, or a
+/// document parameter with the null owner reference.
+fn typed_parameter_record(record_index: u32, owner: Option<u32>, source_kind: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&3u32.to_le_bytes());
+    out.extend_from_slice(b"331");
+    out.extend_from_slice(&record_index.to_le_bytes());
+    out.extend_from_slice(&[0; 15]);
+    out.extend_from_slice(&8u32.to_le_bytes());
+    let trailer: [u8; 5] = match owner {
+        Some(owner) => {
+            typed_reference(&mut out, u64::from(owner), TYPED_OWNER_TYPE);
+            [0; 5]
+        }
+        None => {
+            out.push(0);
+            [0, 0, 0, 0, 1]
+        }
+    };
+    lp_utf16(&mut out, "3 mm");
+    out.extend_from_slice(&trailer);
+    lp_utf16(&mut out, source_kind);
+    lp_utf16(&mut out, "mm");
+    lp_utf16(&mut out, "d1");
+    out.extend_from_slice(&0.3f64.to_le_bytes());
+    out.push(0);
+    typed_reference(&mut out, 167, TYPED_PARAMETER_TAIL_TYPE);
+    out
 }
 
 #[test]
-fn decoded_parameter_records_refuse_each_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
+fn typed_compact_parameters_read_owned_and_document_forms() {
+    let owned = typed_parameter_record(537, Some(536), "AlongDistance");
+    let parameter = parse_design_parameter_record(&owned).expect("typed owned parameter");
+    assert_eq!(parameter.record_index, 537);
+    assert_eq!(parameter.source_ordinal, 8);
+    assert_eq!(parameter.owner_record_index(), Some(536));
+    assert_eq!(parameter.family_discriminator(), None);
+    assert_eq!(parameter.expression(), "3 mm");
+    assert_eq!(parameter.expression_offset(), 85);
+    assert_eq!(parameter.unit().map(|unit| unit.value.as_str()), Some("mm"));
+    assert_eq!(parameter.name(), "d1");
+    assert_eq!(parameter.evaluated_value().get(), 0.3);
+    assert_eq!(
+        parameter.evaluated_value_offset(),
+        u64::try_from(owned.len() - 60).unwrap()
+    );
 
+    // The owner reference can omit its inline type GUID.
+    let mut plain = owned[..30].to_vec();
+    plain.push(1);
+    plain.extend_from_slice(&536u64.to_le_bytes());
+    plain.extend_from_slice(&[0, 0]);
+    plain.extend_from_slice(&owned[81..]);
+    let parameter = parse_design_parameter_record(&plain).expect("plain-owner typed parameter");
+    assert_eq!(parameter.owner_record_index(), Some(536));
+    assert_eq!(parameter.expression_offset(), 45);
+
+    let document = typed_parameter_record(242, None, "User Parameter");
+    let parameter = parse_design_parameter_record(&document).expect("typed document parameter");
+    assert_eq!(parameter.owner_record_index(), None);
+    assert_eq!(
+        parameter.source(),
+        &crate::records::parameters::DesignParameterSource::User {
+            family_discriminator: None
+        }
+    );
+    assert_eq!(parameter.expression_offset(), 35);
+
+    // Owner presence must agree with the document source kind, and the tail
+    // must name the typed parameter-tail type.
+    assert!(
+        parse_design_parameter_record(&typed_parameter_record(537, None, "AlongDistance"))
+            .is_none()
+    );
+    assert!(parse_design_parameter_record(&typed_parameter_record(
+        537,
+        Some(536),
+        "User Parameter"
+    ))
+    .is_none());
+    let mut other_tail = owned;
+    let guid_at = other_tail.len() - 38;
+    other_tail[guid_at] = b'C';
+    assert!(parse_design_parameter_record(&other_tail).is_none());
+}
+
+#[test]
+fn decode_reports_typed_parameter_frames_that_match_no_grammar() {
     let stream = "FusionAssetName[Active]/Design1/BulkStream.dat";
-    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut bulk = typed_parameter_record(537, Some(536), "AlongDistance");
+    let mut rejected = typed_parameter_record(541, Some(540), "AlongDistance");
+    rejected[81 + 4 + 2 * "3 mm".len()] = 7;
+    bulk.extend_from_slice(&rejected);
     let stored = crate::zip_write::file_options(CompressionMethod::Stored);
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     write_synthetic_manifests(&mut zip, stored);
     zip.start_file(stream, stored).unwrap();
-    zip.write_all(&parameter_record(
-        Some(44),
-        "1",
-        "AlongDistance",
-        Some("mm"),
-        "d71",
-        1.0,
-    ))
-    .unwrap();
+    zip.write_all(&bulk).unwrap();
     let archive = zip.finish().unwrap().into_inner();
-    with_scan(&archive, |scan| {
-        for (limit, operation) in [
-            (0, "f3d parameter record index"),
-            (1, "f3d decoded parameter records"),
-        ] {
-            let arena = DecodeArena::new();
-            let mut policy = DecodePolicy::service();
-            policy.limits.max_collection_items = limit;
-            let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-            let error = decode_parameters(&ctx, scan).err().unwrap();
-            assert!(
-                matches!(error, cadmpeg_core::CodecError::ResourceLimit(refusal)
-                if refusal.dimension == ResourceDimension::CollectionItems
-                    && refusal.operation == operation)
-            );
-        }
-    });
+    let decoded = with_scan(&archive, decode_parameters).unwrap();
+    let [parameter] = decoded.parameters.as_slice() else {
+        panic!("expected the one well-formed typed parameter");
+    };
+    assert_eq!(parameter.record_index, 537);
+    let [unparsed] = decoded.unparsed.as_slice() else {
+        panic!("expected one stream with unparsed typed parameter frames");
+    };
+    assert_eq!(unparsed.stream, stream);
+    assert_eq!(unparsed.count, 1);
+}
+
+/// A scalar owner frame whose five references all use the typed spelling.
+fn typed_owner_frame(repeated_scope_tail: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&3u32.to_le_bytes());
+    frame.extend_from_slice(b"378");
+    frame.extend_from_slice(&536u32.to_le_bytes());
+    frame.extend_from_slice(&[0; 8]);
+    frame.extend_from_slice(&[1, 1, 0, 0, 0]);
+    typed_reference(&mut frame, 226, TYPED_SCOPE_TYPE);
+    frame.extend_from_slice(&2u32.to_le_bytes());
+    frame.push(0);
+    frame.extend_from_slice(&0.3f64.to_le_bytes());
+    typed_reference(&mut frame, 537, TYPED_OWNER_TYPE);
+    frame.extend_from_slice(&1u32.to_le_bytes());
+    frame.extend_from_slice(&[0; 4]);
+    typed_reference(&mut frame, 226, TYPED_SCOPE_TYPE);
+    frame.extend_from_slice(repeated_scope_tail);
+    typed_reference(&mut frame, 538, TYPED_OWNER_TYPE);
+    frame.push(0);
+    typed_reference(&mut frame, 226, TYPED_SCOPE_TYPE);
+    frame
+}
+
+#[test]
+fn typed_owner_frame_widens_every_reference_and_keeps_the_scalar_envelope() {
+    let frame = typed_owner_frame(&[0, 0]);
+    assert_eq!(frame.len(), 303);
+    let parsed = parse_parameter_owner(&frame).expect("typed scalar owner");
+    assert_eq!(parsed.scope_record_index, 226);
+    assert_eq!(parsed.local_ordinal, 2);
+    assert_eq!(parsed.evaluated_value.get(), 0.3);
+    assert_eq!(parsed.parameter_record_index, 537);
+    assert_eq!(parsed.owned_ordinal, 1);
+    assert_eq!(parsed.variant, None);
+    assert_eq!(parsed.companion_record_index, 538);
+    let owner = parsed.into_record("Design1", 1000).expect("typed owner");
+    assert_eq!(owner.evaluated_value_offset(), 1080);
+
+    let variant = typed_owner_frame(&[1, 0, 0]);
+    let parsed = parse_parameter_owner(&variant).expect("typed variant owner");
+    assert_eq!(parsed.frame_length, 304);
+    assert_eq!(parsed.variant, Some(0));
+    assert!(parsed.into_record("Design1", 0).is_some());
+
+    // One plain reference among typed ones is not an owner frame.
+    let mut mixed = frame;
+    mixed.truncate(mixed.len() - 51);
+    mixed.push(1);
+    mixed.extend_from_slice(&226u64.to_le_bytes());
+    mixed.extend_from_slice(&[0, 0]);
+    assert!(parse_parameter_owner(&mixed).is_none());
+}
+
+#[test]
+fn wide_discriminated_parameter_stores_four_zero_bytes_before_its_discriminator() {
+    // The current discriminated family: discriminator 6 and the `00 01 10` tail.
+    let mut narrow = parameter_record(Some(305), "10 mm", "AlongDistance", Some("mm"), "d3", 1.0);
+    narrow[22..30].copy_from_slice(&6u64.to_le_bytes());
+    let tail = narrow.len() - 10;
+    narrow[tail] = 0x10;
+    let expected = parse_design_parameter_record(&narrow).expect("narrow discriminated parameter");
+    assert_eq!(
+        expected.family_discriminator().map(|field| field.offset),
+        Some(22)
+    );
+
+    let mut wide = narrow.clone();
+    wide.splice(22..22, [0; 4]);
+    let parameter = parse_design_parameter_record(&wide).expect("wide discriminated parameter");
+    assert_eq!(parameter.owner_record_index(), Some(305));
+    assert_eq!(parameter.expression(), "10 mm");
+    assert_eq!(parameter.name(), "d3");
+    assert_eq!(parameter.evaluated_value().get(), 1.0);
+    let discriminator = parameter.family_discriminator().expect("discriminator");
+    assert_eq!((discriminator.value.code(), discriminator.offset), (6, 26));
+
+    // The four bytes before the discriminator are zero.
+    let mut nonzero = wide.clone();
+    nonzero[24] = 1;
+    assert!(parse_design_parameter_record(&nonzero).is_none());
+}
+
+#[test]
+fn discriminated_parameter_with_the_00_01_11_tail_has_discriminator_6() {
+    let mut frame = parameter_record(
+        Some(2553),
+        "-65.0 deg",
+        "alignAngle",
+        Some("deg"),
+        "d1",
+        -1.134,
+    );
+    frame[22..30].copy_from_slice(&6u64.to_le_bytes());
+    let tail = frame.len() - 10;
+    frame[tail] = 0x11;
+    let parameter = parse_design_parameter_record(&frame).expect("tail 0x11 parameter");
+    assert_eq!(parameter.name(), "d1");
+    assert_eq!(parameter.evaluated_value().get(), -1.134);
+    assert_eq!(
+        parameter
+            .family_discriminator()
+            .map(|field| field.value.code()),
+        Some(6)
+    );
+
+    // The 00 01 11 tail belongs to discriminator 6 only.
+    frame[22..30].copy_from_slice(&0u64.to_le_bytes());
+    assert!(parse_design_parameter_record(&frame).is_none());
+}
+
+#[test]
+fn typed_companion_prefix_moves_the_timestamp_after_the_wide_owner_reference() {
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&3u32.to_le_bytes());
+    frame.extend_from_slice(b"408");
+    frame.extend_from_slice(&538u32.to_le_bytes());
+    frame.extend_from_slice(&[0; 20]);
+    typed_reference(&mut frame, 536, TYPED_OWNER_TYPE);
+    frame.extend_from_slice(&1_500_000_000_000_000u64.to_le_bytes());
+    frame.extend_from_slice(&[0; 8]);
+    assert_eq!(frame.len(), 98);
+    frame.extend_from_slice(&[7; 12]);
+    let parsed = parse_parameter_companion(&frame).expect("typed companion");
+    assert_eq!(parsed.record_index, 538);
+    assert_eq!(parsed.owner_record_index, 536);
+    assert_eq!(parsed.timestamp_micros.get(), 1_500_000_000_000_000);
+    let record = parsed
+        .into_record("Design/BulkStream.dat", 1000)
+        .expect("typed companion record");
+    assert_eq!(record.timestamp_micros_offset(), 1082);
+    assert_eq!(record.payload_byte_offset(), Some(1098));
+
+    // A nonzero byte in the zero run after the timestamp is not a prefix.
+    frame[95] = 1;
+    assert!(parse_parameter_companion(&frame).is_none());
+}
+
+/// A wide discriminated document parameter whose expression is followed by
+/// nine zero bytes and `u8 1`.
+#[test]
+fn document_parameter_admits_the_ten_byte_expression_trailer() {
+    let frame = |trailer: &[u8]| {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&3u32.to_le_bytes());
+        frame.extend_from_slice(b"317");
+        frame.extend_from_slice(&202u32.to_le_bytes());
+        frame.extend_from_slice(&[0; 15]);
+        frame.extend_from_slice(&6u64.to_le_bytes());
+        frame.push(0);
+        frame.extend_from_slice(&1u32.to_le_bytes());
+        frame.push(0);
+        lp_utf16(&mut frame, "20 mm");
+        frame.extend_from_slice(trailer);
+        lp_utf16(&mut frame, "User Parameter");
+        frame.extend_from_slice(&0u32.to_le_bytes());
+        lp_utf16(&mut frame, "mm");
+        lp_utf16(&mut frame, "W1");
+        frame.extend_from_slice(&2.0f64.to_le_bytes());
+        frame.extend_from_slice(&[0, 1, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        frame
+    };
+    let parameter = parse_design_parameter_record(&frame(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 1]))
+        .expect("document parameter with the ten-byte trailer");
+    assert_eq!(parameter.kind(), DesignParameterKind::User);
+    assert_eq!(parameter.owner_record_index(), None);
+    assert_eq!(parameter.name(), "W1");
+    assert_eq!(parameter.expression(), "20 mm");
+    assert_eq!(parameter.evaluated_value().get(), 2.0);
+    assert!(parse_design_parameter_record(&frame(&[0, 0, 0, 0, 0, 0, 0, 0, 1])).is_some());
+    assert!(parse_design_parameter_record(&frame(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])).is_none());
+    // The `01 00 01` document trailer belongs to the earlier family only.
+    assert!(parse_design_parameter_record(&frame(&[0, 0, 0, 0, 0, 0, 1, 0, 1])).is_none());
+}
+
+/// The earlier discriminated family stores a document parameter with
+/// discriminator 4, the expression trailer six zero bytes and `01 00 01`, and
+/// the `00 01 13` tail.
+#[test]
+fn earlier_family_document_parameter_admits_its_trailer() {
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&3u32.to_le_bytes());
+    frame.extend_from_slice(b"282");
+    frame.extend_from_slice(&182u32.to_le_bytes());
+    frame.extend_from_slice(&[0; 11]);
+    frame.extend_from_slice(&4u64.to_le_bytes());
+    frame.push(0);
+    frame.extend_from_slice(&5u32.to_le_bytes());
+    frame.push(0);
+    lp_utf16(&mut frame, "45 deg");
+    frame.extend_from_slice(&[0, 0, 0, 0, 0, 0, 1, 0, 1]);
+    lp_utf16(&mut frame, "User Parameter");
+    frame.extend_from_slice(&0u32.to_le_bytes());
+    lp_utf16(&mut frame, "deg");
+    lp_utf16(&mut frame, "ClipAngle");
+    frame.extend_from_slice(&std::f64::consts::FRAC_PI_4.to_le_bytes());
+    frame.extend_from_slice(&[0, 1, 0x13, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let parameter =
+        parse_design_parameter_record(&frame).expect("earlier-family document parameter");
+    assert_eq!(parameter.kind(), DesignParameterKind::User);
+    assert_eq!(parameter.owner_record_index(), None);
+    assert_eq!(parameter.name(), "ClipAngle");
+    assert_eq!(parameter.expression(), "45 deg");
 }

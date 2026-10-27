@@ -2,8 +2,7 @@
 
 use super::{positive, DataType, SchemaPlan};
 use crate::framing::xmt_reference::NonNullXmt;
-use cadmpeg_core::decode::{u64_from_index, DecodeContext, View};
-use cadmpeg_core::CodecError;
+use cadmpeg_core::decode::View;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use std::ops::Range;
@@ -138,22 +137,16 @@ pub(super) struct StatusInstance {
 }
 
 pub(super) fn read_status_instance(
-    ctx: &DecodeContext<'_>,
     view: &mut View<'_>,
     plan: &SchemaPlan,
-) -> Result<Option<StatusInstance>, CodecError> {
-    let Some((variable_length, identity_at, xmt)) = (|| {
-        let variable_length = if plan.fields.iter().any(|field| field.n_elements == 1) {
-            Some(view.u32_be()?)
-        } else {
-            None
-        };
-        let identity_at = view.position();
-        let xmt = NonNullXmt::try_from(positive(view)?.checked_add(1)?).ok()?;
-        Some((variable_length, identity_at, xmt))
-    })() else {
-        return Ok(None);
+) -> Option<StatusInstance> {
+    let variable_length = if plan.fields.iter().any(|field| field.n_elements == 1) {
+        Some(view.u32_be()?)
+    } else {
+        None
     };
+    let identity_at = view.position();
+    let xmt = NonNullXmt::try_from(positive(view)?.checked_add(1)?).ok()?;
     let mut fields = Vec::new();
     for field in &plan.fields {
         let start = view.position();
@@ -164,26 +157,20 @@ pub(super) fn read_status_instance(
         } else {
             field.n_elements.max(1)
         };
-        let Some(count) = usize::try_from(count)
+        let count = usize::try_from(count)
             .ok()
-            .filter(|count| *count <= view.remaining())
-        else {
-            return Ok(None);
-        };
-        ctx.charge_work(u64_from_index(count), "read NX Deltas field elements")?;
+            .filter(|count| *count <= view.remaining())?;
         for _ in 0..count {
-            if FieldValue::read(field.data_type, view).is_none() {
-                return Ok(None);
-            }
+            FieldValue::read(field.data_type, view)?;
         }
-        ctx.push_vec(&mut fields, start..view.position(), "NX Deltas field spans")?;
+        fields.push(start..view.position());
     }
-    Ok(Some(StatusInstance {
+    Some(StatusInstance {
         identity_at,
         xmt,
         variable_length,
         fields,
-    }))
+    })
 }
 
 #[cfg(test)]

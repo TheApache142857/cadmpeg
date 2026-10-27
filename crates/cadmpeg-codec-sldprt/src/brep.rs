@@ -38,7 +38,7 @@ const EPS_BREP_UNIT_LENGTH_E9: f64 = 1.0e-9;
 const EPS_BREP_ORTHONORMAL_E9: f64 = 1.0e-9;
 const EPS_BREP_VALID_CARRIER_SCALARS_E9: f64 = 1.0e-9;
 
-mod attrib;
+pub(crate) mod attrib;
 mod blend;
 pub(crate) mod entity;
 pub(crate) mod evaluation;
@@ -111,6 +111,9 @@ mod tag {
 const COMPACT_REF_COUNT: usize = 5;
 const DELTAS_REF_STRIDE: usize = 3;
 const DELTAS_MARKER_OFFSET: usize = analytic::REFS + COMPACT_REF_COUNT * DELTAS_REF_STRIDE;
+/// Orientation marker of a compact analytic curve whose stored edge direction
+/// runs against the curve parameter.
+const MARKER_AGAINST_EDGES: u8 = 0x2b;
 
 /// f64 count for each analytic tag; `None` if the tag is not an analytic carrier.
 fn analytic_value_count(tt: u8) -> Option<usize> {
@@ -184,6 +187,9 @@ pub(crate) struct CurveCarrier {
     pub(crate) end: usize,
     pub(crate) geometry: CurveGeometry,
     parameter_range: Option<cadmpeg_ir::units::FiniteVector<2>>,
+    /// Whether the stored direction of an edge on this compact analytic
+    /// carrier runs against the curve parameter.
+    pub(crate) runs_against_edges: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -196,7 +202,7 @@ pub(crate) struct SurfaceCarrier {
 }
 
 fn analytic_marker_candidates(body: &[u8], hdr: usize) -> Option<Vec<usize>> {
-    let mut candidates = Vec::with_capacity(2);
+    let mut candidates = Vec::new();
 
     let partition_marker = hdr.checked_add(analytic::MARKER)?;
     if matches!(body.get(partition_marker), Some(0x2b | 0x2d)) {
@@ -246,7 +252,8 @@ fn parse_carrier_at_marker(
         return None;
     }
 
-    decode_carrier_values(tt, vals, attr, off, end)
+    let runs_against_edges = body.get(marker_at) == Some(&MARKER_AGAINST_EDGES);
+    decode_carrier_values(tt, vals, attr, (off, end), runs_against_edges)
 }
 
 /// Try to parse a compact analytic carrier whose tag byte pair `00 TT` begins at
@@ -278,8 +285,8 @@ fn decode_carrier_values(
     tt: u8,
     v: &[f64],
     attr: u16,
-    offset: usize,
-    end: usize,
+    (offset, end): (usize, usize),
+    runs_against_edges: bool,
 ) -> Option<Carrier> {
     let curve = |geometry| {
         Carrier::Curve(CurveCarrier {
@@ -288,6 +295,7 @@ fn decode_carrier_values(
             end,
             geometry,
             parameter_range: None,
+            runs_against_edges,
         })
     };
     let surface = |geometry| {
@@ -378,15 +386,9 @@ pub(crate) fn curve_by_attr(
     attr: u16,
 ) -> Result<Option<CurveGeometry>, cadmpeg_core::CodecError> {
     let carriers = scan_carriers(ctx, body)?;
-    carriers
+    Ok(carriers
         .curve(attr)
-        .map(|indexed| {
-            indexed
-                .carrier()
-                .geometry
-                .try_clone_for_decode(ctx, "SLDPRT patch curve geometry copy")
-        })
-        .transpose()
+        .map(|indexed| indexed.carrier().geometry.clone()))
 }
 
 /// Replace the scalar run of one compact analytic carrier.
@@ -410,10 +412,6 @@ pub(crate) fn patch_compact_values(
     let Some(bytes) = body.get_mut(start..carrier.end) else {
         return Ok(false);
     };
-    ctx.charge_work(
-        cadmpeg_core::decode::u64_from_index(size),
-        "patch SLDPRT compact values",
-    )?;
     for (slot, value) in bytes.chunks_exact_mut(8).zip(values) {
         slot.copy_from_slice(&value.to_be_bytes());
     }
@@ -435,7 +433,7 @@ pub(crate) fn patch_nurbs_by_attr(
     let Some(SolvedCurveGeometry::Nurbs(old)) = carrier.geometry.solved() else {
         return Ok(false);
     };
-    Ok(patch_nurbs_curve(ctx, body, carrier.offset, old, new, 0.001)?.is_some())
+    Ok(patch_nurbs_curve(body, carrier.offset, old, new, 0.001)?.is_some())
 }
 
 #[cfg(test)]
@@ -844,6 +842,3 @@ mod tests {
         assert!(parse_carrier(&bytes, 0).is_none());
     }
 }
-
-#[cfg(test)]
-mod patch_tests;

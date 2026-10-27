@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::printable_string::PrintableString;
-use cadmpeg_core::decode::{DecodeContext, View};
+use cadmpeg_core::decode::View;
 use cadmpeg_core::CodecError;
 use serde::{Deserialize, Serialize};
 
@@ -264,14 +264,13 @@ fn descriptor<'a>(view: &mut View<'a>) -> Option<BorrowedField<'a>> {
 }
 
 fn read_definition(
-    ctx: &DecodeContext<'_>,
     view: &mut View<'_>,
     version: BaseVersion,
     kind: u16,
     count: u8,
 ) -> Result<Option<SchemaPlan>, CodecError> {
     let original = base::fields(version, kind);
-    let mut scratch = ctx.reserve_scoped(0, "NX schema edit fields")?;
+
     let mut fields = Vec::new();
     let mut custom = None;
     if count == 255 {
@@ -279,12 +278,11 @@ fn read_definition(
             return Ok(None);
         };
         for field in original {
-            ctx.push_scoped_vec(&mut scratch, &mut fields, *field, "NX schema edit fields")?;
+            fields.push(*field);
         }
     } else if let Some(original) = original {
         let mut cursor = 0;
         loop {
-            ctx.charge_work(1, "read NX schema edit")?;
             let Some(opcode) = view.u8() else {
                 return Ok(None);
             };
@@ -317,7 +315,7 @@ fn read_definition(
                 if fields.len() == usize::from(count) {
                     return Ok(None);
                 }
-                ctx.push_scoped_vec(&mut scratch, &mut fields, field, "NX schema edit fields")?;
+                fields.push(field);
             }
         }
         if fields.len() != usize::from(count) {
@@ -335,39 +333,30 @@ fn read_definition(
             let Some(field) = descriptor(view) else {
                 return Ok(None);
             };
-            ctx.push_scoped_vec(&mut scratch, &mut fields, field, "NX schema edit fields")?;
+            fields.push(field);
         }
     }
-    let mut plan = own_definition(ctx, kind, &fields)?;
+    let mut plan = own_definition(kind, &fields)?;
     if let Some((name, description)) = custom {
-        plan.custom_name = Some(ctx.copy_retained_text(name, "NX schema type name")?);
-        plan.custom_description =
-            Some(ctx.copy_retained_text(description, "NX schema type description")?);
+        plan.custom_name = Some(name.to_owned());
+        plan.custom_description = Some(description.to_owned());
     }
     Ok(Some(plan))
 }
 
-fn own_definition(
-    ctx: &DecodeContext<'_>,
-    kind: u16,
-    fields: &[BorrowedField<'_>],
-) -> Result<SchemaPlan, CodecError> {
+fn own_definition(kind: u16, fields: &[BorrowedField<'_>]) -> Result<SchemaPlan, CodecError> {
     let mut owned = Vec::new();
     for field in fields {
-        let name = ctx.copy_retained_text(field.name, "NX schema field name")?;
+        let name = (field.name).to_owned();
         let name = PrintableString::new(name)
             .map_err(|_| CodecError::Malformed("invalid NX schema field name".into()))?;
-        ctx.push_vec(
-            &mut owned,
-            SchemaField {
-                name,
-                data_type: field.data_type,
-                pointer_class: field.pointer_class,
-                n_elements: field.n_elements,
-                transmit: field.transmit,
-            },
-            "NX effective schema fields",
-        )?;
+        owned.push(SchemaField {
+            name,
+            data_type: field.data_type,
+            pointer_class: field.pointer_class,
+            n_elements: field.n_elements,
+            transmit: field.transmit,
+        });
     }
     Ok(SchemaPlan {
         kind,

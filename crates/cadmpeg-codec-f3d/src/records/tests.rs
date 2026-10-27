@@ -636,20 +636,11 @@ fn parameter_source_preserves_wire_and_rejects_inconsistent_ownership() {
                 .as_object_mut()
                 .unwrap()
                 .remove("family_discriminator_offset");
-            if kind == "user" {
-                assert!(
-                    serde_json::from_value::<crate::records::parameters::DesignParameter>(
-                        no_discriminator
-                    )
-                    .unwrap_err()
-                    .to_string()
-                    .contains("family_discriminator")
-                );
-            } else {
-                let parameter: crate::records::parameters::DesignParameter =
-                    serde_json::from_value(no_discriminator.clone()).unwrap();
-                assert_eq!(serde_json::to_value(parameter).unwrap(), no_discriminator);
-            }
+            // Typed compact document parameters and compact owned parameters
+            // both store no family discriminator.
+            let parameter: crate::records::parameters::DesignParameter =
+                serde_json::from_value(no_discriminator.clone()).unwrap();
+            assert_eq!(serde_json::to_value(parameter).unwrap(), no_discriminator);
         }
     }
     assert!(
@@ -1251,15 +1242,9 @@ fn timeline_frame_rejects_invalid_source_spans() {
                 .to_string();
         assert!(error.contains(diagnostic), "{field}: {error}");
     }
-    let empty = crate::records::entity_header::DesignTimelineFrame::new(
-        crate::records::admission::RecordAdmission::Admitted,
-        200,
-        44,
-        220,
-        240,
-        Vec::new(),
-    )
-    .unwrap();
+    let empty =
+        crate::records::entity_header::DesignTimelineFrame::new(200, 44, 220, 240, Vec::new())
+            .unwrap();
     assert!(empty.items().is_empty());
 }
 
@@ -1272,8 +1257,8 @@ fn sketch_relation_definition_preserves_masks_and_rejects_mismatched_payloads() 
         (
             0x1000_0000,
             Some(Kind::Circular {
-                angle_parameter: 2,
-                count_parameter: 3,
+                angle_parameter: Some(2),
+                count_parameter: Some(3),
                 evaluated_angle: cadmpeg_ir::scalar::FiniteReal::new(1.5).unwrap(),
                 evaluated_count: crate::records::sketch_relations::SketchPatternCount::try_from(2)
                     .unwrap(),
@@ -1284,8 +1269,8 @@ fn sketch_relation_definition_preserves_masks_and_rejects_mismatched_payloads() 
             Some(Kind::Rectangular {
                 directions: std::array::from_fn(|_| {
                     crate::records::sketch_relations::SketchPatternDirection {
-                        count_parameter: 2,
-                        distance_parameter: 3,
+                        count_parameter: Some(2),
+                        distance_parameter: Some(3),
                         evaluated_count:
                             crate::records::sketch_relations::SketchPatternCount::try_from(2)
                                 .unwrap(),
@@ -1341,18 +1326,9 @@ fn sketch_relation_runs_reject_partial_resolution_and_preserve_atomic_binding() 
     use crate::records::sketch_relations::{
         SketchRelationMembers, SketchRelationOperand, SketchRelationReturnMembers,
     };
-    let unresolved = SketchRelationMembers::from_indices(
-        &cadmpeg_test_support::service_decode_context(),
-        [(1, 25, 3), (2, 40, 5)],
-    )
-    .unwrap();
+    let unresolved = SketchRelationMembers::from_indices([(1, 25, 3), (2, 40, 5)]).unwrap();
     let mut resolved = unresolved.clone();
-    resolved
-        .resolve(
-            &cadmpeg_test_support::service_decode_context(),
-            |record_index| SketchRelationOperand::Record { record_index },
-        )
-        .unwrap();
+    resolved.resolve(|record_index| SketchRelationOperand::Record { record_index });
     for (row, (index, offset, ordinal)) in resolved.iter().zip([(1, 25, 3), (2, 40, 5)]) {
         assert_eq!(row.reference.record_index(), index);
         assert_eq!(
@@ -1369,18 +1345,9 @@ fn sketch_relation_runs_reject_partial_resolution_and_preserve_atomic_binding() 
     assert!(
         SketchRelationMembers::try_from(vec![resolved[0].clone(), unresolved[1].clone()]).is_err()
     );
-    let unresolved_return = SketchRelationReturnMembers::from_indices(
-        &cadmpeg_test_support::service_decode_context(),
-        [(2, 60), (1, 75)],
-    )
-    .unwrap();
+    let unresolved_return = SketchRelationReturnMembers::from_indices([(2, 60), (1, 75)]).unwrap();
     let mut resolved_return = unresolved_return.clone();
-    resolved_return
-        .resolve(
-            &cadmpeg_test_support::service_decode_context(),
-            |record_index| SketchRelationOperand::Record { record_index },
-        )
-        .unwrap();
+    resolved_return.resolve(|record_index| SketchRelationOperand::Record { record_index });
     assert!(SketchRelationReturnMembers::try_from(vec![
         unresolved_return[0].clone(),
         resolved_return[1].clone()
@@ -1393,29 +1360,19 @@ fn sketch_relation_runs_reject_partial_resolution_and_preserve_atomic_binding() 
     .is_err());
     let mut interrupted = unresolved.clone();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        interrupted
-            .resolve(
-                &cadmpeg_test_support::service_decode_context(),
-                |record_index| {
-                    assert_ne!(record_index, 2, "interrupt the second resolution");
-                    SketchRelationOperand::Record { record_index }
-                },
-            )
-            .unwrap();
+        interrupted.resolve(|record_index| {
+            assert_ne!(record_index, 2, "interrupt the second resolution");
+            SketchRelationOperand::Record { record_index }
+        });
     }));
     assert!(result.is_err());
     assert_eq!(interrupted, unresolved);
     let mut interrupted_return = unresolved_return.clone();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        interrupted_return
-            .resolve(
-                &cadmpeg_test_support::service_decode_context(),
-                |record_index| {
-                    assert_ne!(record_index, 1, "interrupt the second resolution");
-                    SketchRelationOperand::Record { record_index }
-                },
-            )
-            .unwrap();
+        interrupted_return.resolve(|record_index| {
+            assert_ne!(record_index, 1, "interrupt the second resolution");
+            SketchRelationOperand::Record { record_index }
+        });
     }));
     assert!(result.is_err());
     assert_eq!(interrupted_return, unresolved_return);

@@ -4,8 +4,6 @@ use crate::document::CadIr;
 use crate::products::{Occurrence, OccurrenceParent, PrototypeReference};
 use crate::report::check::Finding;
 use crate::transform::Transform;
-use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-use cadmpeg_core::CodecError;
 
 fn occurrence(id: &str, parent: Option<&str>, ordinal: u32) -> Occurrence {
     Occurrence {
@@ -27,35 +25,11 @@ fn occurrence(id: &str, parent: Option<&str>, ordinal: u32) -> Occurrence {
     }
 }
 
-fn refuses(ir: &CadIr) {
-    for dimension in [
-        ResourceDimension::MaterializedBytes,
-        ResourceDimension::CollectionItems,
-        ResourceDimension::WorkUnits,
-        ResourceDimension::RetainedBytes,
-    ] {
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        match dimension {
-            ResourceDimension::MaterializedBytes => policy.limits.max_materialized_bytes = 0,
-            ResourceDimension::CollectionItems => policy.limits.max_collection_items = 0,
-            ResourceDimension::WorkUnits => policy.limits.max_work_units = 0,
-            ResourceDimension::RetainedBytes => policy.limits.max_retained_bytes = 0,
-            _ => panic!("test dimension"),
-        }
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let mut findings = Vec::new();
-        let Err(CodecError::ResourceLimit(limit)) =
-            super::super::check_products(&ctx, ir, &mut findings)
-        else {
-            panic!("product checker must refuse");
-        };
-        assert_eq!(limit.dimension, dimension);
-        assert!(findings.is_empty());
-        assert!(
-            matches!(ctx.finish_session(), Err(CodecError::ResourceLimit(original)) if original == limit)
-        );
-    }
+fn reports(ir: &CadIr) {
+    let ctx = cadmpeg_test_support::service_decode_context();
+    let mut findings = Vec::new();
+    super::super::check_products(&ctx, ir, &mut findings).unwrap();
+    assert!(!findings.is_empty());
 }
 
 fn missing_body(ir: &mut CadIr) {
@@ -81,6 +55,7 @@ fn missing_joint(ir: &mut CadIr) {
                 operand: JointOperand {
                     container: OperandContainer::Occurrence {
                         occurrence: "test:model:occurrence#absent".try_into().unwrap(),
+                        occurrence_path: Vec::new(),
                     },
                     object: "first".into(),
                     subelements: Vec::new(),
@@ -99,24 +74,24 @@ fn missing_joint(ir: &mut CadIr) {
 }
 
 #[test]
-fn product_body_validation_preserves_index_walk_and_finding_refusals() {
+fn product_body_validation_reports_a_finding() {
     let mut ir = CadIr::empty();
     missing_body(&mut ir);
-    refuses(&ir);
+    reports(&ir);
 }
 
 #[test]
-fn product_sibling_ordinal_validation_preserves_all_refusals() {
+fn product_sibling_ordinal_validation_reports_a_finding() {
     let mut ir = CadIr::empty();
     ir.model.occurrences = vec![
         occurrence("test:model:occurrence#first", None, 0),
         occurrence("test:model:occurrence#second", None, 0),
     ];
-    refuses(&ir);
+    reports(&ir);
 }
 
 #[test]
-fn product_auxiliary_definition_validation_preserves_all_refusals() {
+fn product_auxiliary_definition_validation_reports_a_finding() {
     let mut ir = CadIr::empty();
     let mut row = occurrence("test:model:occurrence#link", None, 0);
     row.link = crate::products::LinkState::new(
@@ -126,11 +101,11 @@ fn product_auxiliary_definition_validation_preserves_all_refusals() {
         None,
     );
     ir.model.occurrences.push(row);
-    refuses(&ir);
+    reports(&ir);
 }
 
 #[test]
-fn product_copy_source_and_group_validation_preserves_all_refusals() {
+fn product_copy_source_and_group_validation_reports_a_finding() {
     for source in [true, false] {
         let mut ir = CadIr::empty();
         let mut row = occurrence("test:model:occurrence#copy", None, 0);
@@ -149,22 +124,22 @@ fn product_copy_source_and_group_validation_preserves_all_refusals() {
             }),
         );
         ir.model.occurrences.push(row);
-        refuses(&ir);
+        reports(&ir);
     }
 }
 
 #[test]
-fn product_joint_validation_preserves_index_walk_and_finding_refusals() {
+fn product_joint_validation_reports_a_finding() {
     let mut ir = CadIr::empty();
     ir.model
         .occurrences
         .push(occurrence("test:model:occurrence#present", None, 0));
     missing_joint(&mut ir);
-    refuses(&ir);
+    reports(&ir);
 }
 
 #[test]
-fn product_sibling_orders_distinguish_parent_groups_and_release_scopes() {
+fn product_sibling_orders_distinguish_parent_groups() {
     let mut ir = CadIr::empty();
     ir.model.occurrences = vec![
         occurrence("test:model:occurrence#a", None, 0),
@@ -180,25 +155,15 @@ fn product_sibling_orders_distinguish_parent_groups_and_release_scopes() {
             0,
         ),
     ];
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_materialized_bytes = 32768;
-    policy.limits.max_retained_bytes = 0;
-    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
+    let ctx = cadmpeg_test_support::service_decode_context();
     let mut findings = Vec::new();
     super::super::check_products(&ctx, &ir, &mut findings).unwrap();
-    assert!(findings.is_empty());
-    drop(
-        ctx.reserve_scoped(32768, "product scopes released")
-            .unwrap(),
-    );
-    ctx.finish_session().unwrap();
+    assert!(findings.is_empty(), "{findings:?}");
     ir.model.occurrences.push(occurrence(
         "test:model:occurrence#duplicate",
         Some("test:model:occurrence#a"),
         0,
     ));
-    let ctx = cadmpeg_test_support::service_decode_context();
     super::super::check_products(&ctx, &ir, &mut findings).unwrap();
     assert_eq!(findings.len(), 1);
     assert_eq!(
@@ -248,4 +213,71 @@ fn product_validation_keeps_definition_graph_occurrence_joint_finding_order() {
             "invalid assembly joint operands, frames, or limits"
         ]
     );
+}
+
+#[test]
+fn product_sketch_references_exist_and_have_one_definition() {
+    let mut ir = CadIr::empty();
+    let sketch = "test:model:sketch#one";
+    ir.model.sketches.push(
+        serde_json::from_value(serde_json::json!({
+            "id": sketch, "placement": {"kind": "unresolved"}
+        }))
+        .unwrap(),
+    );
+    ir.model.product_definitions.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "test:model:product#one", "kind": "part", "sketches": [sketch]
+        }))
+        .unwrap(),
+    );
+    let ctx = cadmpeg_test_support::service_decode_context();
+    let mut findings = Vec::new();
+    super::super::check_products(&ctx, &ir, &mut findings).unwrap();
+    assert!(findings.is_empty());
+    ir.model.product_definitions.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "test:model:product#two", "kind": "part", "sketches": [sketch]
+        }))
+        .unwrap(),
+    );
+    super::super::check_products(&ctx, &ir, &mut findings).unwrap();
+    assert!(findings
+        .iter()
+        .any(|finding| finding.message == "sketch has multiple product definitions"));
+    findings.clear();
+    ir.model.product_definitions.pop();
+    ir.model.sketches.clear();
+    super::super::check_products(&ctx, &ir, &mut findings).unwrap();
+    assert!(findings
+        .iter()
+        .any(|finding| finding.message == "invalid product sketch reference"));
+}
+
+#[test]
+fn product_sketch_reference_cannot_repeat_in_one_definition() {
+    let mut ir = CadIr::empty();
+    let sketch = "test:model:sketch#one";
+    ir.model.sketches.push(
+        serde_json::from_value(serde_json::json!({
+            "id": sketch, "placement": {"kind": "unresolved"}
+        }))
+        .unwrap(),
+    );
+    ir.model.product_definitions.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "test:model:product#one", "kind": "part", "sketches": [sketch, sketch, sketch]
+        }))
+        .unwrap(),
+    );
+    let ctx = cadmpeg_test_support::service_decode_context();
+    let mut findings = Vec::new();
+    super::super::check_products(&ctx, &ir, &mut findings).unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].message, "duplicate product sketch reference");
+    assert_eq!(
+        findings[0].entity.as_deref(),
+        Some("test:model:product#one")
+    );
+    assert_eq!(findings[0].severity, crate::report::Severity::Error);
 }

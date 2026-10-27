@@ -28,8 +28,7 @@ fn owned_definitions_are_shared_and_instances_retain_exact_source_ranges() {
     assert_eq!(later["inflated_offset"], second);
     assert_eq!(later["byte_len"], ordinary.len());
     assert_eq!(first["fields"].as_array().unwrap().len(), 36);
-    let owner =
-        with_decode_context(|ctx| crate::records::DeltasRecords::read(ctx, &bytes)).unwrap();
+    let owner = with_decode_context(|_ctx| crate::records::DeltasRecords::read(&bytes)).unwrap();
     assert_eq!(
         owner
             .events()
@@ -100,27 +99,6 @@ fn region_projection_uses_the_same_owned_fields_as_generic_native_values() {
 }
 
 #[test]
-fn native_materialization_propagates_resource_refusal() {
-    let streams = [owned_deltas::stream(test_pmarks::complete(
-        owned_deltas::body_stream(36),
-    ))];
-    for dimension in [
-        cadmpeg_core::decode::ResourceDimension::CollectionItems,
-        cadmpeg_core::decode::ResourceDimension::RetainedBytes,
-    ] {
-        crate::test_support::resource_refusal_at(
-            &[],
-            dimension,
-            "NX Deltas native values",
-            |ctx| {
-                let owner = crate::records::DeltasRecords::read(ctx, &streams[0].inflated)?;
-                super::super::parasolid_deltas_events_from_records(ctx, &streams, vec![Some(owner)])
-            },
-        );
-    }
-}
-
-#[test]
 fn two_streams_join_instances_to_their_own_aggregate_schema_indices() {
     let mut region = test_pmarks::prefix(1);
     region.extend(owned_deltas::region(7, 8, b'S'));
@@ -143,29 +121,5 @@ fn two_streams_join_instances_to_their_own_aggregate_schema_indices() {
             .unwrap();
         assert_eq!(schema["stream_ordinal"], ordinal);
         assert_eq!(schema["definition"]["kind"], expected_kind);
-    }
-}
-
-#[test]
-fn map_materialization_refusals_remain_typed_and_sticky() {
-    let mut bytes = test_pmarks::prefix(1);
-    bytes.extend(test_pmarks::TERMINATOR);
-    bytes.extend([0, 7, 0, 19, 0, 1, 0, 0, 0, 0]);
-    bytes.extend(test_pmarks::TERMINATOR);
-    bytes.extend(test_pmarks::TERMINATOR);
-    let streams = [owned_deltas::stream(bytes)];
-    for dimension in [
-        cadmpeg_core::decode::ResourceDimension::CollectionItems,
-        cadmpeg_core::decode::ResourceDimension::RetainedBytes,
-    ] {
-        crate::test_support::resource_refusal_at(
-            &[],
-            dimension,
-            "NX Deltas native map entries",
-            |ctx| {
-                let owner = crate::records::DeltasRecords::read(ctx, &streams[0].inflated)?;
-                super::super::parasolid_deltas_events_from_records(ctx, &streams, vec![Some(owner)])
-            },
-        );
     }
 }

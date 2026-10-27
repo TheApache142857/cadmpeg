@@ -10,42 +10,6 @@ fn selection_group() -> super::DesignExtrudeSelectionGroup {
     selection_group_wire().try_into().unwrap()
 }
 
-#[test]
-fn extrude_selection_member_index_refuses_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 1;
-    let ctx = DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .unwrap()
-        .0;
-    let error = super::DesignExtrudeSelectionGroup::from_wire_charged(&ctx, selection_group_wire())
-        .unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "index F3D extrude selection members")
-    );
-}
-
-#[test]
-fn extrude_selection_member_run_refuses_collection_limit() {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy};
-
-    let arena = DecodeArena::new();
-    let mut policy = DecodePolicy::service();
-    policy.limits.max_collection_items = 3;
-    let ctx = DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .unwrap()
-        .0;
-    let error = super::DesignExtrudeSelectionGroup::from_wire_charged(&ctx, selection_group_wire())
-        .unwrap_err();
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(limit)
-        if limit.operation == "admit F3D extrude selection members")
-    );
-}
-
 fn selection_member() -> super::DesignExtrudeSelectionMember {
     let wire = serde_json::json!({
         "id": "member", "group_record_index": 9, "group_member_ordinal": 0,
@@ -176,4 +140,33 @@ fn extrude_group_rejects_invalid_run_and_scalar_admission() {
         assert!(changed.try_set_members(members).is_err());
         assert_eq!(changed, group);
     }
+}
+
+/// The typed-reference group widens the scope reference, every member, and
+/// the three references after the opaque lane by forty bytes each, and it
+/// stores no variant byte.
+#[test]
+fn typed_selection_group_offsets_use_the_wide_reference_stride() {
+    let mut wire = selection_group_wire();
+    wire.typed_references = true;
+    wire.variant = None;
+    wire.member_count_offset = 72;
+    wire.member_offsets = vec![77, 128];
+    wire.opaque_index_offset = 178;
+    wire.opaque_scalar_offset = 182;
+    wire.paired_byte_offset = 350;
+    let group = super::DesignExtrudeSelectionGroup::try_from(wire.clone()).expect("typed group");
+    assert!(group.typed_references);
+    assert_eq!(group.variant, None);
+    let round_trip = serde_json::to_value(&group).unwrap();
+    assert_eq!(round_trip["typed_references"], true);
+    assert!(round_trip.get("variant").is_none());
+
+    // The plain stride or a variant byte does not fit the typed form.
+    let mut plain_stride = wire.clone();
+    plain_stride.member_offsets = vec![77, 88];
+    assert!(super::DesignExtrudeSelectionGroup::try_from(plain_stride).is_err());
+    let mut with_variant = wire;
+    with_variant.variant = Some(false);
+    assert!(super::DesignExtrudeSelectionGroup::try_from(with_variant).is_err());
 }

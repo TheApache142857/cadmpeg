@@ -8,10 +8,11 @@ use super::{
     CurveProjectionDirectionState, DecalMapping, DesignConfiguration, DesignParameter,
     DimensionDisplay, FeatureCircularArc, FeatureCoordinateFrame, FeatureEllipticArc,
     FeatureImageBounds, FeatureInputTopology, FeatureLineSegment, FeatureResultMembers,
-    FeatureResultTopology, FeatureTreeNodeRole, FeatureUnitPlaneFrame, FlexForm, FlexMode,
-    FuzzyTolerance, GeometryImportFormat, HelicalSweepLaw, HelicalSweepTravel,
-    HelixConstructionStyle, HelixShape, InnerWireTaper, NoGeneratedSection, ParameterPmi,
-    PmiDimensionSubtype, PolygonSideCount, PrincipalPlane, RevolutionFuseOrder, RibDraft, RibSide,
+    FeatureResultTopology, FeatureTreeNodeRole, FeatureUnitPlaneFrame,
+    FilledSurfaceBoundaryCondition, FlexForm, FlexMode, FuzzyTolerance, GeometryImportFormat,
+    HelicalSweepLaw, HelicalSweepTravel, HelixConstructionStyle, HelixShape,
+    HistoricalEdgeGeometry, InnerWireTaper, NoGeneratedSection, ParameterPmi, PmiDimensionSubtype,
+    PolygonSideCount, PrincipalPlane, RevolutionFuseOrder, RibDraft, RibSide,
     RuledCurveOrientation, RuledSurfaceCorner, ScaleFactors, SheetMetalBendPosition,
     SheetMetalHeightDatum, SheetMetalHemBendPosition, SheetMetalHemDirection,
     SheetMetalThicknessSide, ShellJoin, ShellMode, SolidSweepOperation, SurfaceContinuity,
@@ -42,7 +43,8 @@ rewrite_scalar!(FeatureCircularArc);
 rewrite_scalar!(FeatureCoordinateFrame);
 rewrite_scalar!(FeatureEllipticArc);
 rewrite_scalar!(FeatureImageBounds);
-rewrite_record!(FeatureInputTopology, []; {id, input_of, bodies, faces, edges, vertices, native_ref});
+rewrite_record!(FeatureInputTopology, []; {id, input_of, bodies, faces, edges, vertices, edge_geometry, native_ref});
+rewrite_record!(HistoricalEdgeGeometry, []; {edge, interior, tangent, start, end, faces});
 rewrite_scalar!(FeatureLineSegment);
 rewrite_record!(FeatureResultMembers, []; {bodies, faces, edges, vertices});
 rewrite_record!(FeatureResultTopology, []; {id, output_of, members, native_ref});
@@ -95,3 +97,10 @@ rewrite_scalar!(UnresolvedFamily);
 rewrite_scalar!(WrapMode);
 
 rewrite_scalar!(super::SweepCircularRegion);
+
+rewrite_scalar!(FilledSurfaceBoundaryCondition);
+
+rewrite_scalar!(super::SheetMetalReliefForm);
+rewrite_scalar!(super::SheetMetalTransitionForm);
+rewrite_record!(super::SheetMetalRelief, []; {form, width, depth, minimum_remnant, seam_gap});
+rewrite_record!(super::SheetMetalTransition, []; {form, radius});

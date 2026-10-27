@@ -2,8 +2,6 @@
 //! Counts and coverage borrowed from the sequential Deltas owner.
 
 use crate::records::deltas::{DeltasRecords, EventContent};
-use cadmpeg_core::decode::DecodeContext;
-use cadmpeg_core::CodecError;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
@@ -32,10 +30,7 @@ impl<'r, 's> Census<'r, 's> {
         self.records.definitions().len()
     }
 
-    pub(crate) fn full_counts(
-        self,
-        ctx: &DecodeContext<'_>,
-    ) -> Result<BTreeMap<&'static str, usize>, CodecError> {
+    pub(crate) fn full_counts(self) -> BTreeMap<&'static str, usize> {
         let mut counts = BTreeMap::new();
         for event in self.records.events() {
             let EventContent::Instance(instance) = event.content() else {
@@ -44,9 +39,8 @@ impl<'r, 's> Census<'r, 's> {
             let family =
                 super::record_kind::RecordKind::try_from(instance.definition().plan().kind)
                     .map_or("CUSTOM", |kind| kind.name());
-            ctx.admit_btree_entry(&counts, &family, "NX Deltas instance count families")?;
             *counts.entry(family).or_default() += 1;
         }
-        Ok(counts)
+        counts
     }
 }

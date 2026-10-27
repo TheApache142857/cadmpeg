@@ -21,6 +21,10 @@ use cadmpeg_ir::{report::export::WritePath, CadIr, SourceFidelity};
 
 use crate::F3dCodec;
 
+pub(crate) mod sketch_relations;
+pub(crate) mod sketch_text;
+pub(crate) mod verification;
+
 pub(crate) fn with_decode_context<T>(
     f: impl FnOnce(&cadmpeg_core::decode::DecodeContext<'_>) -> T,
 ) -> T {
@@ -35,35 +39,6 @@ pub(crate) fn with_decode_policy<T>(
     let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, policy)
         .expect("test decode context");
     f(&ctx)
-}
-
-/// Admit earlier requests until the selected operation refuses at its boundary.
-/// `skip` selects a later request when an operation labels multiple records.
-pub(crate) fn resource_refusal_at<T>(
-    dimension: cadmpeg_core::decode::ResourceDimension,
-    operation: &str,
-    skip: usize,
-    decode: impl Fn(&cadmpeg_core::decode::DecodeContext<'_>) -> Result<T, CodecError>,
-) -> CodecError {
-    use cadmpeg_core::decode::{DecodeArena, DecodeContext, DecodePolicy, ResourceDimension};
-    cadmpeg_test_support::refusal::resource_limit_at_nth(dimension, operation, skip, |cap| {
-        let arena = DecodeArena::new();
-        let mut policy = DecodePolicy::service();
-        match dimension {
-            ResourceDimension::CollectionItems => policy.limits.max_collection_items = cap,
-            ResourceDimension::RetainedBytes => policy.limits.max_retained_bytes = cap,
-            ResourceDimension::WorkUnits => policy.limits.max_work_units = cap,
-            ResourceDimension::MaterializedBytes => policy.limits.max_materialized_bytes = cap,
-            _ => panic!("unsupported refusal dimension"),
-        }
-        let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &policy).unwrap();
-        let result = decode(&ctx);
-        if let Err(CodecError::ResourceLimit(refusal)) = &result {
-            assert_eq!(refusal.dimension, dimension);
-            assert_eq!(ctx.resource_refusal().as_ref(), Some(refusal));
-        }
-        result
-    })
 }
 
 /// Plans an inherited write through the sealed encoder and writes its bytes.
@@ -206,5 +181,21 @@ pub(crate) mod zip_test;
 pub(crate) mod assembly_test;
 
 pub(crate) mod procedural_test;
+
+pub(crate) mod history;
+
+pub(crate) mod history_stream;
+
+pub(crate) mod body_map_test;
+
+pub(crate) mod component_insert_test;
+
+pub(crate) mod lost_edge_test;
+
+pub(crate) mod step_conversion;
+
+pub(crate) mod body_reference_tail_test;
+
+pub(crate) mod placement_construction;
 
 pub(crate) mod pipe;

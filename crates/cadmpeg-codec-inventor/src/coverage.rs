@@ -36,6 +36,8 @@ pub(crate) const PRESENTATION_RECORD_ISSUES: CoverageKey =
 pub(crate) const PM_DC_PARAMETERS: CoverageKey = CoverageKey::new("pm_dc_parameters");
 pub(crate) const PM_DC_EXPRESSIONS: CoverageKey = CoverageKey::new("pm_dc_expressions");
 pub(crate) const PM_DC_UNITS: CoverageKey = CoverageKey::new("pm_dc_units");
+pub(crate) const PM_DC_PARAMETER_TABLES: CoverageKey = CoverageKey::new("pm_dc_parameter_tables");
+pub(crate) const PM_DC_MODEL_ROOTS: CoverageKey = CoverageKey::new("pm_dc_model_roots");
 pub(crate) const DESIGN_PARAMETERS_TRANSFERRED: CoverageKey =
     CoverageKey::new("design_parameters_transferred");
 pub(crate) const DESIGN_RECORD_ISSUES: CoverageKey = CoverageKey::new("design_record_issues");
@@ -52,6 +54,10 @@ pub(crate) const PM_DC_FEATURE_TERMINATORS: CoverageKey =
     CoverageKey::new("pm_dc_feature_terminators");
 pub(crate) const PM_DC_FEATURE_PROPERTIES: CoverageKey =
     CoverageKey::new("pm_dc_feature_properties");
+pub(crate) const PM_DC_SHEET_METAL_STYLES: CoverageKey =
+    CoverageKey::new("pm_dc_sheet_metal_styles");
+pub(crate) const PM_DC_SHEET_METAL_FLANGES: CoverageKey =
+    CoverageKey::new("pm_dc_sheet_metal_flanges");
 pub(crate) const PM_DC_FEATURE_LABELS: CoverageKey = CoverageKey::new("pm_dc_feature_labels");
 pub(crate) const PM_DC_ENTITY_STYLE_LINKS: CoverageKey =
     CoverageKey::new("pm_dc_entity_style_links");

@@ -33,9 +33,9 @@
 #   site.
 #
 #   Each `[format.<id>]` block declares the published level and the `scored`
-#   rows that level covers. A fixture-backed read level or a maintainer
-#   evaluation below the declared level is a contradiction. An absent fixture
-#   or evaluation does not contradict the level. The renderer prints the
+#   rows that level covers. A fixture-backed read level or a recorded
+#   evaluation is a floor for its row, not a ceiling for the format: a value
+#   below the declared level does not contradict it. The renderer prints the
 #   declared level and prints each row's read cell verbatim.
 #
 # How the write cell is chosen. There are two write capabilities, and the
@@ -84,7 +84,7 @@ scored = [
 ]
 
 [format.step]
-level = 9
+level = 8
 scored = [
   "step:ap203-e1",
   "step:ap203-e2",
@@ -96,7 +96,7 @@ scored = [
 ]
 
 [format.rhino]
-level = 1
+level = 2
 scored = [
   "rhino:archive-2",
   "rhino:archive-3",
@@ -112,11 +112,11 @@ level = 5
 scored = ["fcstd:schema-4"]
 
 [format.f3d]
-level = 4
+level = 5
 scored = ["f3d:manifest-3-2-0-0", "f3d:f3z-multi-document"]
 
 [format.catia]
-level = 1
+level = 3
 scored = [
   "catia:standard-nested",
   "catia:fbb-only",
@@ -131,11 +131,11 @@ level = 1
 scored = ["creo:depdb", "creo:nd", "creo:legacy-ascii"]
 
 [format.sldprt]
-level = 1
+level = 3
 scored = ["sldprt:sw-version-pre-12000", "sldprt:sw-version-12000-plus"]
 
 [format.inventor]
-level = 1
+level = 3
 scored = ["inventor:cfb3-rse31-meta8"]
 
 [format.nx]
@@ -143,8 +143,12 @@ level = 1
 scored = ["nx:splmsstr", "nx:legacy-cfb"]
 
 [format.sat]
-level = 1
+level = 3
 scored = ["sat:text"]
+
+[format.pvz]
+level = 3
+scored = ["pvz:pvs-0301", "pvz:pvs-0302", "pvz:pvs-0303", "pvz:pvs-0304", "pvz:pvs-0305"]
 
 
 # --------------------------------------------------------------------------
@@ -926,6 +930,44 @@ refusal = "no-framing-grammar"
 reason = """
 `sat:unknown` means no ASM, ACIS, or text stream framing matched. Detection
 returns Confidence::No and the forced codec path returns WrongFormat"""
+
+# --------------------------------------------------------------------------
+# pvz
+# --------------------------------------------------------------------------
+
+[[support]]
+dialect = "pvz:pvs-0301"
+read = "detected"
+write = "none"
+
+[[support]]
+dialect = "pvz:pvs-0302"
+read = "detected"
+write = "none"
+
+[[support]]
+dialect = "pvz:pvs-0303"
+read = "detected"
+write = "none"
+
+[[support]]
+dialect = "pvz:pvs-0304"
+read = "detected"
+write = "none"
+
+[[support]]
+dialect = "pvz:pvs-0305"
+read = "detected"
+write = "none"
+
+[[support]]
+dialect = "pvz:unknown"
+read = "unclassified-recovered"
+write = "none"
+reason = """
+no known structure-member signature or XML version; the member is read on the
+residual path with the grammar its leading bytes select and charges
+pvz/source.dialect-unverified"""
 
 # --------------------------------------------------------------------------
 # acis

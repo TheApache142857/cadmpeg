@@ -6,7 +6,6 @@ use super::super::uniqueness::{
     exactly_one, unique_feature_definition_for_transform, unique_feature_section_transform,
 };
 use crate::container::ContainerScan;
-use cadmpeg_core::decode::DecodeContext;
 use cadmpeg_core::CodecError;
 use cadmpeg_ir::document::CadIr;
 use cadmpeg_ir::features::FeatureId as IrFeatureId;
@@ -15,17 +14,15 @@ use cadmpeg_ir::sketches::{SketchEntityUse, SketchGeometry, SketchGeometryDefini
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(in super::super) fn link_feature_sketch_history(
-    ctx: &DecodeContext<'_>,
     scan: &ContainerScan,
     ir: &mut CadIr,
 ) -> Result<(), CodecError> {
     for transform in &scan.features.section_transforms {
         if unique_feature_section_transform(
-            ctx,
             &scan.features.section_transforms,
             transform.definition_id,
             transform.offset,
-        )?
+        )
         .is_none()
         {
             continue;
@@ -33,22 +30,19 @@ pub(in super::super) fn link_feature_sketch_history(
         let Some(feature_id) = transform.feature_id else {
             continue;
         };
-        let (owner, _owner_reservation) = crate::identity::compose_scoped::<IrFeatureId>(
-            ctx,
+        let owner = crate::identity::compose_checked::<IrFeatureId>(
             &crate::identity::MODEL_FEATURE,
             feature_id,
-            "creo linked feature lookup identity",
         )?;
         let Some(definition) =
-            unique_feature_definition_for_transform(ctx, &scan.features.definitions, transform)?
+            unique_feature_definition_for_transform(&scan.features.definitions, transform)
         else {
             continue;
         };
-        let Some(sketch) = model_sketch_id(ctx, scan, definition)? else {
+        let Some(sketch) = model_sketch_id(scan, definition) else {
             continue;
         };
-        let Some(sketch_feature) =
-            section_owner_feature_id(ctx, scan, transform.definition_id, &sketch)?
+        let Some(sketch_feature) = section_owner_feature_id(scan, transform.definition_id, &sketch)
         else {
             continue;
         };
@@ -70,9 +64,7 @@ pub(in super::super) fn link_feature_sketch_history(
         ) else {
             continue;
         };
-        feature
-            .dependencies
-            .insert(ctx, sketch_feature, "creo sketch history dependencies")?;
+        feature.dependencies.insert(sketch_feature);
     }
     Ok(())
 }
@@ -196,6 +188,9 @@ pub(in super::super) fn section_entity_is_generated_profile(
     if !expected_kinds.contains(&crate::surface::SurfaceKind::Cylinder) {
         return false;
     }
+    if two_cap_circular_profile_source(feature_id, source_entity_id, tables, rows) {
+        return true;
+    }
     let mut blind_cylinders = tables
         .iter()
         .filter(|table| table.feature_id == feature_id)
@@ -224,6 +219,55 @@ pub(in super::super) fn section_entity_is_generated_profile(
             .then_some(cylinder.entity_id)
         });
     blind_cylinders.next().is_some() && blind_cylinders.next().is_none()
+}
+
+fn two_cap_circular_profile_source(
+    feature_id: u32,
+    source_entity_id: u32,
+    tables: &[crate::feature::entity::FeatureEntityTable],
+    rows: &[crate::surface::SurfaceRow],
+) -> bool {
+    let Some(table) = exactly_one(tables.iter().filter(|table| {
+        table.feature_id == feature_id && table.surface_ids_iter().next().is_some()
+    })) else {
+        return false;
+    };
+    let [first, second, profile, cylinder] = table.entries.as_slice() else {
+        return false;
+    };
+    if table.table_class_id != 29
+        || [
+            first.class_id(),
+            second.class_id(),
+            profile.class_id(),
+            cylinder.class_id(),
+        ] != [204, 203, 200, 200]
+        || first.source_entity_id().is_some()
+        || second.source_entity_id().is_some()
+        || profile.source_entity_id() != Some(source_entity_id)
+        || cylinder.source_entity_id().is_some()
+        || !table.contains_non_surface_entity_id(profile.entity_id)
+        || table.contains_surface_id(profile.entity_id)
+        || table.surface_ids_iter().count() != 3
+        || table.entries.iter().enumerate().any(|(index, entry)| {
+            table.entries[..index]
+                .iter()
+                .any(|prior| prior.entity_id == entry.entity_id)
+        })
+    {
+        return false;
+    }
+    [
+        (first, crate::surface::SurfaceKind::Plane),
+        (second, crate::surface::SurfaceKind::Plane),
+        (cylinder, crate::surface::SurfaceKind::Cylinder),
+    ]
+    .into_iter()
+    .all(|(entry, kind)| {
+        table.contains_surface_id(entry.entity_id)
+            && crate::surface::unique_surface_row(rows, entry.entity_id)
+                .is_some_and(|row| row.feature_id == feature_id && row.kind == kind)
+    })
 }
 
 fn generated_profile_table_shape(table: &crate::feature::entity::FeatureEntityTable) -> bool {
@@ -288,51 +332,40 @@ pub(in super::super) fn analytic_surface_id_for_feature(
 }
 
 pub(in super::super) fn ordered_family_surface_bindings_for_feature(
-    ctx: &DecodeContext<'_>,
     surface_rows: &[crate::surface::SurfaceRow],
     feature_id: u32,
     tables: &[crate::feature::entity::FeatureEntityTable],
     order: &crate::feature::definitions::FeatureOrderTable,
     external_ids: impl IntoIterator<Item = u32>,
     expected_kind: crate::surface::SurfaceKind,
-) -> Result<BTreeMap<u32, u32>, CodecError> {
+) -> BTreeMap<u32, u32> {
     let mut bindings = BTreeMap::new();
     let mut bound_surfaces = BTreeSet::new();
     for external_id in external_ids {
         if order.internal_id(external_id).is_none() {
-            return Ok(BTreeMap::new());
+            return BTreeMap::new();
         }
         let Some(surface_id) = generated_surface_id_for_feature(tables, feature_id, external_id)
         else {
-            return Ok(BTreeMap::new());
+            return BTreeMap::new();
         };
         if !crate::surface::unique_surface_row(surface_rows, surface_id)
             .is_some_and(|row| row.feature_id == feature_id && row.kind.same_family(expected_kind))
             || bound_surfaces.contains(&surface_id)
         {
-            return Ok(BTreeMap::new());
+            return BTreeMap::new();
         }
-        ctx.insert_btree_set(
-            &mut bound_surfaces,
-            surface_id,
-            "creo bound generated surface IDs",
-        )?;
-        ctx.insert_btree_map(
-            &mut bindings,
-            external_id,
-            surface_id,
-            "creo ordered generated surface bindings",
-        )?;
+        bound_surfaces.insert(surface_id);
+        bindings.insert(external_id, surface_id);
     }
-    Ok(bindings)
+    bindings
 }
 
 pub(in super::super) fn profile_segment_ids(
-    ctx: &DecodeContext<'_>,
     definition_id: u32,
     segments: &[&crate::feature::definitions::FeatureSegment],
     profiles: &[Vec<SketchEntityUse>],
-) -> Result<BTreeSet<u32>, CodecError> {
+) -> BTreeSet<u32> {
     let mut ids = BTreeSet::new();
     for segment in segments {
         let matches = profiles.iter().flatten().any(|entity_use| {
@@ -350,14 +383,10 @@ pub(in super::super) fn profile_segment_ids(
                 && crate::identity::matches_numbered_identity(external, "", segment.external_id)
         });
         if matches {
-            ctx.insert_btree_set(
-                &mut ids,
-                segment.external_id,
-                "creo profile segment ID nodes",
-            )?;
+            ids.insert(segment.external_id);
         }
     }
-    Ok(ids)
+    ids
 }
 
 #[cfg(test)]

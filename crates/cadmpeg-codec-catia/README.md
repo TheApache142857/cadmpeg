@@ -7,7 +7,7 @@ surfaces, curves, vertices, and B-rep topology.
 
 <!-- generated: capability catia -->
 
-Support: L1 ([ladder](https://github.com/cadmpeg/cadmpeg/blob/main/docs/format-support.md#catia-v5-catpart)).
+Support: L3 ([ladder](https://github.com/cadmpeg/cadmpeg/blob/main/docs/format-support.md#catia-v5-catpart)).
 
 <!-- /generated: capability catia -->
 
@@ -46,8 +46,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 The result holds the decoded `CadIr` and a `DecodeReport`. Read
 `report.losses` before trusting the IR. Use `CatiaCodec::inspect` to identify
 the storage variant and list catalogued logical streams without decoding
-entities. Set `DecodeOptions::container_only` when only source metadata and
-container diagnostics are needed.
+entities. Set `DecodeOptions::depth` to `DecodeDepth::Container` when only
+source metadata and container diagnostics are needed.
 
 ## Storage model
 

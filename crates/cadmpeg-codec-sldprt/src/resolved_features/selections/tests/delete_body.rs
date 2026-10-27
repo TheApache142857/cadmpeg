@@ -52,7 +52,12 @@ fn decode_and_validate_compact_delete_body_selection() {
     ));
 
     let decoded = SldprtCodec
-        .decode(&mut Cursor::new(source), &DecodeOptions::default())
+        .decode(
+            &mut Cursor::new(crate::test_support::container::native_envelope_fixture(
+                &(source),
+            )),
+            &DecodeOptions::default(),
+        )
         .unwrap();
     let mut decoded = cadmpeg_test_support::EditableDecodeResult::from(decoded);
     assert!(!decoded
@@ -82,9 +87,13 @@ fn decode_and_validate_compact_delete_body_selection() {
     assert!(matches!(
         delete_feature.evaluation.definition(),
         cadmpeg_ir::features::FeatureDefinition::Operation(cadmpeg_ir::features::FeatureOperation::DeleteBody { bodies, mode })
-            if bodies == &cadmpeg_ir::features::BodySelection::local(vec!["287".into(), "115".into()], "sldprt:feature-input:body-ids:287,115".into(), &cadmpeg_test_support::service_decode_context(),).expect("body selection admission").unwrap() && *mode == cadmpeg_ir::features::BodyRetentionMode::DeleteSelected
+            if bodies
+            == &cadmpeg_ir::features::BodySelection::local(
+                vec!["287".into(), "115".into()], "sldprt:feature-input:body-ids:287,115".into()
+            ).unwrap()
+            && *mode == cadmpeg_ir::features::BodyRetentionMode::DeleteSelected
     ));
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut Vec::new(),
@@ -100,7 +109,7 @@ fn decode_and_validate_compact_delete_body_selection() {
         .expect("delete-body feature")
         .name = Some("Renamed Delete Body".into());
     let mut renamed = Vec::new();
-    crate::test_support::plan_inherited_write(
+    crate::test_support::plan_fixture_write_with_native_envelope(
         decoded.ir(),
         decoded.source_fidelity(),
         &mut renamed,
@@ -139,7 +148,7 @@ fn decode_and_validate_compact_delete_body_selection() {
                 );
             });
         }
-        let error = crate::test_support::plan_inherited_write(
+        let error = crate::test_support::plan_fixture_write_with_native_envelope(
             decoded.ir(),
             decoded.source_fidelity(),
             &mut Vec::new(),
@@ -169,14 +178,12 @@ fn decode_and_validate_compact_delete_body_selection() {
                 *bodies = cadmpeg_ir::features::BodySelection::local(
                     vec!["287".into(), "115".into()],
                     "sldprt:feature-input:body-ids:287,115".into(),
-                    &cadmpeg_test_support::service_decode_context(),
                 )
-                .expect("body selection admission")
                 .unwrap();
                 *mode = cadmpeg_ir::features::BodyRetentionMode::KeepSelected;
             });
         }
-        let error = crate::test_support::plan_inherited_write(
+        let error = crate::test_support::plan_fixture_write_with_native_envelope(
             decoded.ir(),
             decoded.source_fidelity(),
             &mut Vec::new(),

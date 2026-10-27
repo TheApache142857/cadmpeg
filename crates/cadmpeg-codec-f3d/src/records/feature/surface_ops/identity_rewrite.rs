@@ -2,10 +2,10 @@
 //! Direct identity walks for native record fields.
 
 use super::{
-    DesignPatchContinuity, DesignRuledSurfaceCorner,
-    DesignRuledSurfaceMethod, DesignRuledSurfaceOperation, DesignSurfaceExtendMethod,
-    DesignSurfaceExtendOperation, DesignSurfaceOffsetOperation, DesignSurfaceOffsetSupport,
-    DesignSurfacePatchBoundary, DesignSurfaceStitchOperation,
+    DesignPatchContinuity, DesignRuledSurfaceCorner, DesignRuledSurfaceMethod,
+    DesignRuledSurfaceOperation, DesignSurfaceExtendMethod, DesignSurfaceExtendOperation,
+    DesignSurfaceOffsetOperation, DesignSurfaceOffsetSupport, DesignSurfacePatchBoundary,
+    DesignSurfacePatchNormalState, DesignSurfacePatchScope, DesignSurfaceStitchOperation,
 };
 
 rewrite_native_scalar!(DesignPatchContinuity);
@@ -21,3 +21,6 @@ rewrite_native_enum!(DesignSurfaceOffsetSupport, []; {
 });
 rewrite_native_record!(DesignSurfacePatchBoundary, []; {scope_reference_ordinal, record_index, is_seed_selection, continuity, flip, scale, model_reference});
 rewrite_native_record!(DesignSurfaceStitchOperation, []; {gap_tolerance, gap_tolerance_offset, tolerance_record_index, settings_record_index});
+
+rewrite_native_scalar!(DesignSurfacePatchNormalState);
+rewrite_native_record!(DesignSurfacePatchScope, []; {boundaries, normal});

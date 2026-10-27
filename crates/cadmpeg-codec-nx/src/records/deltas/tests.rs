@@ -15,8 +15,8 @@ fn all_documented_body_plans_share_first_and_ordinary_field_boundaries() {
         bytes.extend(test_pmarks::TERMINATOR);
         let expected_end = bytes.len();
         bytes.extend([0xde, 0xad, 0, 12, 255]);
-        with_decode_context(|ctx| {
-            let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = DeltasRecords::read(&bytes).unwrap();
             assert_eq!(owner.definitions().len(), 3);
             assert_eq!(owner.census().instance_count(), 2);
             assert_eq!(owner.suffix(), expected_end..bytes.len());
@@ -63,8 +63,8 @@ fn incomplete_first_use_commits_neither_definition_nor_instance() {
     let prefix = test_pmarks::prefix(1);
     let bytes = owned_deltas::body_stream(36);
     for end in prefix.len() + 1..bytes.len() {
-        with_decode_context(|ctx| {
-            let owner = DeltasRecords::read(ctx, &bytes[..end]).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = DeltasRecords::read(&bytes[..end]).unwrap();
             assert_eq!(owner.definitions().len(), 2, "end {end}");
             assert_eq!(owner.events().len(), 2, "end {end}");
             assert_eq!(owner.suffix(), prefix.len()..end);
@@ -76,8 +76,8 @@ fn incomplete_first_use_commits_neither_definition_nor_instance() {
 fn prefix_is_transactional_and_preserves_complete_header() {
     let bytes = test_pmarks::prefix(1);
     for end in test_pmarks::header().len()..bytes.len() {
-        with_decode_context(|ctx| {
-            let owner = DeltasRecords::read(ctx, &bytes[..end]).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = DeltasRecords::read(&bytes[..end]).unwrap();
             assert_eq!(owner.events().len(), 1);
             assert!(owner.definitions().is_empty());
             assert_eq!(owner.suffix(), test_pmarks::header().len()..end);
@@ -95,8 +95,8 @@ fn no_resynchronization_or_reference_based_ownership_after_a_stop() {
         let (declaration, ordinary, _) = owned_deltas::body(36);
         bytes.extend(declaration);
         bytes.extend(&ordinary[2..]);
-        with_decode_context(|ctx| {
-            let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = DeltasRecords::read(&bytes).unwrap();
             assert_eq!(
                 owner.end(),
                 &DeltasEnd::Stopped {
@@ -123,8 +123,8 @@ fn headerless_and_unsupported_bases_own_no_bytes() {
     let at = unsupported.windows(5).position(|w| w == b"13006").unwrap();
     unsupported[at..at + 5].copy_from_slice(b"11004");
     for bytes in [headerless, unsupported] {
-        with_decode_context(|ctx| {
-            let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = DeltasRecords::read(&bytes).unwrap();
             assert!(owner.events().is_empty());
             assert_eq!(owner.suffix(), 0..bytes.len());
         });
@@ -155,8 +155,8 @@ fn positive_integer_and_status_admission_are_independent() {
         let mut bytes = prefix.clone();
         bytes.extend(changed);
         let bytes = test_pmarks::complete(bytes);
-        with_decode_context(|ctx| {
-            let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = DeltasRecords::read(&bytes).unwrap();
             assert_eq!(owner.census().instance_count(), usize::from(admitted));
             assert_eq!(
                 owner.suffix().start,
@@ -177,43 +177,12 @@ fn counted_opaque_fields_own_embedded_schema_and_record_markers() {
     bytes.extend([0, 9]);
     bytes.extend(payload);
     let bytes = test_pmarks::complete(bytes);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.census().instance_count(), 1);
         assert_eq!(owner.definitions().last().unwrap().plan().kind, 84);
         assert_eq!(owner.end(), &DeltasEnd::Complete);
     });
-}
-
-#[test]
-fn resource_refusal_is_not_a_successful_stop() {
-    let bytes = test_pmarks::complete(owned_deltas::body_stream(36));
-    for dimension in [
-        cadmpeg_core::decode::ResourceDimension::CollectionItems,
-        cadmpeg_core::decode::ResourceDimension::RetainedBytes,
-        cadmpeg_core::decode::ResourceDimension::MaterializedBytes,
-    ] {
-        let operation = match dimension {
-            cadmpeg_core::decode::ResourceDimension::CollectionItems => "NX Deltas field spans",
-            cadmpeg_core::decode::ResourceDimension::RetainedBytes => {
-                "NX Deltas section transaction"
-            }
-            _ => "NX schema edit fields",
-        };
-        crate::test_support::resource_refusal_at(&bytes, dimension, operation, |ctx| {
-            DeltasRecords::read(ctx, &bytes)
-        });
-    }
-    crate::test_support::with_decode_context_over(
-        &bytes,
-        |policy| policy.limits.max_work_units = 0,
-        |ctx| {
-            assert!(matches!(
-                DeltasRecords::read(ctx, &bytes),
-                Err(cadmpeg_core::CodecError::ResourceLimit(_))
-            ));
-        },
-    );
 }
 
 #[test]
@@ -227,8 +196,8 @@ fn all_world_layouts_share_the_same_first_and_ordinary_instance_decoder() {
         let end = bytes.len();
         bytes.extend(test_pmarks::TERMINATOR);
         bytes.extend([0xde, 0xad]);
-        with_decode_context(|ctx| {
-            let owner = crate::records::DeltasRecords::read(ctx, &bytes).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = crate::records::DeltasRecords::read(&bytes).unwrap();
             assert_eq!(owner.census().instance_count(), 2);
             assert_eq!(owner.events()[2].range(), first..second);
             assert_eq!(owner.events()[3].range(), second..end);
@@ -271,13 +240,13 @@ fn block_identity_and_storage_use_the_generic_owner() {
     bytes.extend([0, 21, 1, 0, 30, 1]);
     let instance_end = bytes.len();
     let bytes = test_pmarks::complete(bytes);
-    crate::test_support::with_decode_context(|ctx| {
-        let owner = crate::records::DeltasRecords::read(ctx, &bytes).unwrap();
+    crate::test_support::with_decode_context(|_ctx| {
+        let owner = crate::records::DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.census().instance_count(), 1);
         assert_eq!(owner.events()[2].range(), start..instance_end);
         for end in start + 1..instance_end {
             assert_eq!(
-                crate::records::DeltasRecords::read(ctx, &bytes[..end])
+                crate::records::DeltasRecords::read(&bytes[..end])
                     .unwrap()
                     .census()
                     .instance_count(),
@@ -299,8 +268,8 @@ fn constructed_base_body_ff_and_ordinary_extended_identity_share_one_plan() {
     bytes.extend([0, 12, 255, 255, 0, 1]);
     bytes.extend(&ordinary[4..end]);
     let bytes = test_pmarks::complete(bytes);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.census().instance_count(), 2);
         assert_eq!(owner.definitions()[2].declaration(), first..first + 3);
         assert_eq!(owner.definitions()[2].plan().fields.len(), 23);
@@ -331,8 +300,8 @@ fn custom_type_metadata_and_identifier_values_do_not_change_boundaries() {
         bytes.extend(7u32.to_be_bytes());
         let instance_end = bytes.len();
         let bytes = test_pmarks::complete(bytes);
-        with_decode_context(|ctx| {
-            let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = DeltasRecords::read(&bytes).unwrap();
             assert_eq!(owner.census().instance_count(), 2);
             let plan = owner.definitions()[2].plan();
             assert_eq!(plan.custom_name.as_deref(), Some("MY_KIND"));
@@ -357,13 +326,13 @@ fn list_fields_use_declared_storage_and_reject_every_truncation_and_status_two()
     bytes.extend(payload);
     let instance_end = bytes.len();
     let bytes = test_pmarks::complete(bytes);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.census().instance_count(), 1);
         assert_eq!(owner.events()[2].range(), start..instance_end);
         for end in start + 1..instance_end {
             assert_eq!(
-                DeltasRecords::read(ctx, &bytes[..end])
+                DeltasRecords::read(&bytes[..end])
                     .unwrap()
                     .census()
                     .instance_count(),
@@ -374,10 +343,7 @@ fn list_fields_use_declared_storage_and_reject_every_truncation_and_status_two()
             let mut bad = bytes.clone();
             bad[prefix.len() + status] = 2;
             assert_eq!(
-                DeltasRecords::read(ctx, &bad)
-                    .unwrap()
-                    .census()
-                    .instance_count(),
+                DeltasRecords::read(&bad).unwrap().census().instance_count(),
                 0
             );
         }
@@ -409,8 +375,8 @@ fn plain_base_header_and_explicit_base_edits_use_the_same_prefix_fields() {
     edited.splice(header_end + 2..header_end + 3, [2, b'C', b'C', b'Z']);
     for bytes in [original, plain, edited] {
         let bytes = test_pmarks::complete(bytes);
-        with_decode_context(|ctx| {
-            let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+        with_decode_context(|_ctx| {
+            let owner = DeltasRecords::read(&bytes).unwrap();
             assert_eq!(owner.events().len(), 6);
             assert_eq!(owner.definitions().len(), 2);
             assert_eq!(owner.end(), &DeltasEnd::Complete);
@@ -432,8 +398,8 @@ fn assert_stop(
     instances: usize,
     definitions: usize,
 ) {
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(bytes).unwrap();
         assert_eq!(owner.end(), &DeltasEnd::Stopped { offset, reason });
         assert_eq!(owner.suffix(), offset..bytes.len());
         assert_eq!(owner.census().instance_count(), instances);
@@ -479,8 +445,8 @@ fn enclosure_requires_closed_sections_and_its_exact_end_form() {
     assert_stop(&bytes, bytes.len(), StopReason::MissingSection, 0, 2);
     let final_at = bytes.len();
     bytes.extend(test_pmarks::TERMINATOR);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.end(), &DeltasEnd::Complete);
         assert!(matches!(
             owner.events().last().unwrap().content(),
@@ -535,8 +501,8 @@ fn maps_require_canonical_entries_zero_slot_bounded_kind_and_word() {
     }
     bytes.extend(test_pmarks::TERMINATOR);
     bytes.extend(test_pmarks::TERMINATOR);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.end(), &DeltasEnd::Complete);
         let EventContent::Metadata(super::Metadata::Map {
             entries,
@@ -571,8 +537,8 @@ fn pmark_sections_accept_repeated_heads_then_nodes_and_eof() {
     bytes.extend(&region);
     let terminator = bytes.len();
     bytes.extend(test_pmarks::TERMINATOR);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.end(), &DeltasEnd::Complete);
         assert_eq!(owner.census().instance_count(), 1);
         assert_eq!(
@@ -606,9 +572,9 @@ fn enclosing_transition_selects_pmark_when_its_fields_also_form_a_map_prefix() {
     let mut mark = test_pmarks::node(12, 6, 81, 0x0001_0000);
     mark[8..12].copy_from_slice(&[0, 5, 0, 82]);
     mark[12..24].copy_from_slice(&[0, 1, 0, 0, 0, 1, 0, 0, 0, 4, 0, 5]);
-    with_decode_context(|ctx| {
+    with_decode_context(|_ctx| {
         let mut local = cadmpeg_core::decode::View::over_retained(&mark);
-        assert!(super::read_map(ctx, &mut local, 239).unwrap().is_ok());
+        assert!(super::read_map(&mut local, 239).is_ok());
         assert_eq!(local.position(), 18);
         let mut bytes = map_start();
         bytes.extend(test_pmarks::EMPTY_MAP);
@@ -616,7 +582,7 @@ fn enclosing_transition_selects_pmark_when_its_fields_also_form_a_map_prefix() {
         let start = bytes.len();
         bytes.extend(&mark);
         bytes.extend(test_pmarks::TERMINATOR);
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.end(), &DeltasEnd::Complete);
         let event = owner
             .events()
@@ -651,8 +617,8 @@ fn first_uses_are_staged_until_closure_and_shared_across_sections() {
     bytes.extend(region);
     assert_stop(&bytes, pmark_start, StopReason::UnclosedSection, 1, 3);
     bytes.extend(test_pmarks::TERMINATOR);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.end(), &DeltasEnd::Complete);
         assert_eq!(owner.census().instance_count(), 2);
         let instances = owner
@@ -672,8 +638,8 @@ fn first_uses_are_staged_until_closure_and_shared_across_sections() {
     cycled.extend(test_pmarks::EMPTY_MAP);
     cycled.extend(test_pmarks::TERMINATOR);
     cycled.extend(test_pmarks::TERMINATOR);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &cycled).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&cycled).unwrap();
         assert_eq!(owner.end(), &DeltasEnd::Complete);
         assert_eq!(owner.census().instance_count(), 2);
         assert_eq!(
@@ -693,48 +659,6 @@ fn first_uses_are_staged_until_closure_and_shared_across_sections() {
     bytes.extend(test_pmarks::EMPTY_MAP);
     bytes.extend(test_pmarks::TERMINATOR);
     assert_stop(&bytes, stop, StopReason::InvalidMap, 2, 3);
-}
-
-#[test]
-fn metadata_and_first_use_slots_are_charged_once_at_the_destination() {
-    fn items(bytes: &[u8]) -> u64 {
-        with_decode_context(|ctx| {
-            DeltasRecords::read(ctx, bytes).unwrap();
-            ctx.charge_collection_items_limit(u64::MAX, "measure Deltas items")
-                .unwrap_err()
-                .used
-        })
-    }
-    let prefix = test_pmarks::prefix(1);
-    let baseline = items(&prefix);
-    assert_eq!(items(&test_pmarks::complete(prefix.clone())) - baseline, 4);
-    let mut workspace = prefix;
-    workspace.extend([0, 2, 255, 0, 0, 0, 1, 0, 8, b'W']);
-    let workspace = test_pmarks::complete(workspace);
-    assert_eq!(items(&workspace) - baseline, 10);
-    for allowance in [baseline + 9, baseline + 10] {
-        let arena = cadmpeg_core::decode::DecodeArena::new();
-        let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-        policy.limits.max_collection_items = allowance;
-        let (ctx, _) =
-            cadmpeg_core::decode::DecodeContext::from_root_bytes(&workspace, &arena, &policy)
-                .expect("test root is admitted");
-        let result = DeltasRecords::read(&ctx, &workspace);
-        if allowance == baseline + 10 {
-            assert_eq!(result.unwrap().end(), &DeltasEnd::Complete);
-        } else {
-            let Err(cadmpeg_core::CodecError::ResourceLimit(limit)) = result else {
-                panic!("collection limit");
-            };
-            assert_eq!(
-                limit.dimension,
-                cadmpeg_core::decode::ResourceDimension::CollectionItems
-            );
-            assert!(
-                matches!(ctx.finish_session(), Err(cadmpeg_core::CodecError::ResourceLimit(sticky)) if sticky == limit)
-            );
-        }
-    }
 }
 
 #[test]
@@ -785,8 +709,8 @@ fn unsupported_heads_and_invalid_prefix_or_pmark_fields_do_not_commit_sections()
     bytes.extend(&ordinary[2..]);
     assert_stop(&bytes, start, StopReason::UnclosedSection, 0, 2);
     bytes.extend(test_pmarks::TERMINATOR);
-    with_decode_context(|ctx| {
-        let owner = DeltasRecords::read(ctx, &bytes).unwrap();
+    with_decode_context(|_ctx| {
+        let owner = DeltasRecords::read(&bytes).unwrap();
         assert_eq!(owner.census().instance_count(), 1);
         assert_eq!(owner.definitions().len(), 3);
         assert_eq!(owner.end(), &DeltasEnd::Complete);

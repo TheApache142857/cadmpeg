@@ -205,15 +205,9 @@ pub trait EntitySchema: Serialize + rewrite::typed::RewriteIdentities {
     ) -> Result<(), cadmpeg_core::CodecError> {
         rewrite::typed::RewriteIdentities::visit_identity_references(self, ctx, &mut |target| {
             let identity = self.identity();
-            ctx.charge_work(1, "typed reference owner comparison")?;
-            if identity.len() == target.len() {
-                ctx.charge_work(
-                    cadmpeg_core::decode::u64_from_index(identity.len()),
-                    "typed reference owner comparison",
-                )?;
-                if identity == target {
-                    return Ok(());
-                }
+
+            if identity.len() == target.len() && identity == target {
+                return Ok(());
             }
             visitor(target)
         })
@@ -277,7 +271,7 @@ impl_entity_schema!(
     crate::features::FeatureInputTopology,
     FeatureInputTopology,
     id;
-    id, input_of, bodies, faces, edges, vertices, native_ref
+    id, input_of, bodies, faces, edges, vertices, edge_geometry, native_ref
 );
 impl EntitySchema for crate::features::FeatureResultTopology {
     const KIND: EntityKind = EntityKind::FeatureResultTopology;
@@ -324,7 +318,7 @@ impl EntitySchema for crate::spreadsheets::Spreadsheet {
         self.id.as_str()
     }
 }
-impl_entity_schema!(crate::products::ProductDefinition, ProductDefinition, id; id, kind, source_name, label, description, part_number, bom_properties, bodies, native_ref);
+impl_entity_schema!(crate::products::ProductDefinition, ProductDefinition, id; id, kind, source_name, label, description, part_number, bom_properties, bodies, sketches, native_ref);
 impl_entity_schema!(crate::products::Occurrence, Occurrence, id; id, prototype, parent, ordinal, transform, linked_prototype, scale, name, visible, link, native_ref);
 impl EntitySchema for crate::products::AssemblyJoint {
     const KIND: EntityKind = EntityKind::AssemblyJoint;

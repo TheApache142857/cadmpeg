@@ -11,10 +11,8 @@ use crate::container::{self};
 use crate::CreoCodec;
 
 use super::{
-    definition_local_plane_equation,
-    generated_cylinder_section_transform as parse_generated_cylinder_section_transform,
-    generated_planar_section_transform as parse_generated_planar_section_transform,
-    generated_planar_table_shape, plane_equation, resolve as parse_resolve,
+    definition_local_plane_equation, generated_cylinder_section_transform,
+    generated_planar_section_transform, generated_planar_table_shape, plane_equation, resolve,
     FeatureSectionTransform, PlacementSources, SignedPlaneEquation, EPS_PLACEMENT_GEOMETRY,
 };
 use crate::datum::DatumPlaneRecord;
@@ -38,30 +36,8 @@ use crate::feature::entity::FeatureEntityTableEntry;
 use crate::feature::rows::FeatureGeometryTableKind;
 use crate::surface::{PositionalCylinderFrame, SurfaceBodyBoundary, SurfaceParameterRecord};
 
-fn generated_cylinder_section_transform(
-    definition: &FeatureDefinition,
-    sources: &PlacementSources<'_>,
-    tables: &[FeatureEntityTable],
-) -> Option<FeatureSectionTransform> {
-    crate::decode::with_test_decode_ctx(|ctx| {
-        parse_generated_cylinder_section_transform(ctx, definition, sources, tables)
-    })
-    .expect("test cylinder placement")
-}
-
-fn generated_planar_section_transform(
-    definition: &FeatureDefinition,
-    sources: &PlacementSources<'_>,
-    tables: &[FeatureEntityTable],
-) -> Option<FeatureSectionTransform> {
-    crate::decode::with_test_decode_ctx(|ctx| {
-        parse_generated_planar_section_transform(ctx, definition, sources, tables)
-    })
-    .expect("test planar placement")
-}
-
 #[test]
-fn generated_planar_table_entry_nodes_refuse_collection_limit() {
+fn generated_planar_table_shape_rejects_duplicate_entity_ids() {
     let entry = |entity_id, class_id, source_entity_id| FeatureEntityTableEntry {
         payload: crate::feature::entity::entry_payload(class_id, source_entity_id, None, None),
         entity_id,
@@ -80,44 +56,19 @@ fn generated_planar_table_entry_nodes_refuse_collection_limit() {
         &std::collections::BTreeSet::new(),
         200,
     );
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[], &arena, &policy)
-        .expect("empty root");
-    let error = generated_planar_table_shape(&ctx, &table)
-        .expect_err("first entry node exceeds collection limit");
-    assert!(
-        matches!(error, cadmpeg_core::CodecError::ResourceLimit(resource)
-        if resource.dimension == cadmpeg_core::decode::ResourceDimension::CollectionItems
-            && resource.operation == "creo generated planar table entry nodes")
+    assert!(generated_planar_table_shape(&table));
+    let duplicate = FeatureEntityTable::new(
+        10,
+        79,
+        vec![
+            entry(13, 204, None),
+            entry(18, 203, None),
+            entry(13, 200, Some(4)),
+        ],
+        &std::collections::BTreeSet::new(),
+        200,
     );
-    crate::decode::with_test_decode_ctx(|ctx| {
-        assert!(generated_planar_table_shape(ctx, &table)?);
-        let duplicate = FeatureEntityTable::new(
-            10,
-            79,
-            vec![
-                entry(13, 204, None),
-                entry(18, 203, None),
-                entry(13, 200, Some(4)),
-            ],
-            &std::collections::BTreeSet::new(),
-            200,
-        );
-        assert!(!generated_planar_table_shape(ctx, &duplicate)?);
-        Ok::<_, cadmpeg_core::CodecError>(())
-    })
-    .expect("service profile admits table shape");
-}
-
-fn resolve(
-    definitions: &[FeatureDefinition],
-    sources: &PlacementSources<'_>,
-    tables: &[FeatureEntityTable],
-) -> Vec<FeatureSectionTransform> {
-    crate::decode::with_test_decode_ctx(|ctx| parse_resolve(ctx, definitions, sources, tables))
-        .expect("test placement")
+    assert!(!generated_planar_table_shape(&duplicate));
 }
 
 #[test]
@@ -164,7 +115,7 @@ fn blank_definition() -> FeatureDefinition {
 }
 
 #[test]
-fn placement_reference_ids_refuse_before_growth() {
+fn placement_without_reference_sources_resolves_nothing() {
     let mut definition = blank_definition();
     definition.section_3d = Some(FeatureSection3d {
         sketch_plane_entity_id: Some(2),
@@ -185,21 +136,7 @@ fn placement_reference_ids_refuse_before_growth() {
         geometry_tables: &[],
         affected_ids: &[],
     };
-    let arena = cadmpeg_core::decode::DecodeArena::new();
-    let mut policy = cadmpeg_core::decode::DecodePolicy::service();
-    policy.limits.max_collection_items = 0;
-    let (ctx, _) = cadmpeg_core::decode::DecodeContext::from_root_bytes(&[0], &arena, &policy)
-        .expect("test input admitted");
-    assert!(
-        matches!(parse_resolve(&ctx, &[definition.clone()], &sources, &[]),
-        Err(cadmpeg_core::CodecError::ResourceLimit(limit))
-            if limit.operation == "creo placement reference IDs")
-    );
     assert!(resolve(&[definition], &sources, &[]).is_empty());
-}
-
-fn finite_frame(values: [f64; 12]) -> cadmpeg_ir::units::FiniteVector<12> {
-    cadmpeg_ir::units::FiniteVector::new(values).expect("finite frame fixture")
 }
 
 #[test]
@@ -243,6 +180,10 @@ fn unique_complete_local_system_supplies_section_plane_equation() {
         offset: 3,
     });
     assert_eq!(definition_local_plane_equation(&definition), None);
+}
+
+fn finite_frame(values: [f64; 12]) -> cadmpeg_ir::units::FiniteVector<12> {
+    cadmpeg_ir::units::FiniteVector::new(values).expect("finite frame fixture")
 }
 
 #[test]
@@ -534,6 +475,92 @@ fn resolves_section_from_complete_local_frame_when_references_are_unresolved() {
         )
         .expect("valid section frame")]
     );
+}
+
+#[test]
+fn parallel_reference_uses_only_a_unique_valid_owned_local_frame() {
+    let mut definition = blank_definition();
+    definition.identity = crate::feature::definitions::DefinitionIdentity::Parsed {
+        schema_id: std::num::NonZeroU32::new(7301),
+        owner_feature_id: Some(7301),
+    };
+    definition.parameter_frames = vec![FeatureParameterFrame {
+        kind: FeatureParameterFrameKind::LocalSystem,
+        body: Vec::new(),
+        decoded_values: Some(finite_frame([
+            0.0, 0.6, 0.8, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 7.0, -11.0, 13.0,
+        ])),
+        offset: 1,
+    }];
+    definition.section_3d = Some(FeatureSection3d {
+        sketch_plane_entity_id: Some(20001),
+        sketch_plane_flip: Some(BinaryFlag::Clear),
+        reference_planes: ReferencePlanes::Named(vec![20002]),
+        reference_plane_datum_geometry_id: Some(20002),
+        orientation: FeatureSectionOrientation::default(),
+        dimension_ids: Vec::new(),
+        offset: 100,
+    });
+    let datums = [
+        datum(20001, crate::axis::Axis::X, 0.0),
+        datum(20002, crate::axis::Axis::X, 1.0),
+    ];
+    let sources = PlacementSources {
+        datums: &datums,
+        surface_rows: &[],
+        model_planes: &[],
+        outline_planes: &[],
+        plane_envelopes: &[],
+        surface_parameters: &[],
+        geometry_tables: &[],
+        affected_ids: &[],
+    };
+    let expected = FeatureSectionTransform::new(
+        7301,
+        Some(7301),
+        [7.0, -11.0, 13.0],
+        [0.0, 0.6, 0.8],
+        [0.0, -0.8, 0.6],
+        100,
+    )
+    .expect("local fixture frame");
+    assert_eq!(
+        resolve(&[definition.clone()], &sources, &[]),
+        vec![expected]
+    );
+
+    let mut missing_owner = definition.clone();
+    missing_owner.identity = crate::feature::definitions::DefinitionIdentity::Parsed {
+        schema_id: std::num::NonZeroU32::new(7301),
+        owner_feature_id: None,
+    };
+    assert!(resolve(&[missing_owner], &sources, &[]).is_empty());
+
+    let mut missing_frame = definition.clone();
+    missing_frame.parameter_frames.clear();
+    assert!(resolve(&[missing_frame], &sources, &[]).is_empty());
+
+    let mut duplicate_frame = definition.clone();
+    duplicate_frame
+        .parameter_frames
+        .push(definition.parameter_frames[0].clone());
+    assert!(resolve(&[duplicate_frame], &sources, &[]).is_empty());
+
+    let mut incomplete = definition.clone();
+    incomplete.parameter_frames[0].decoded_values = None;
+    assert!(resolve(&[incomplete], &sources, &[]).is_empty());
+
+    for (x, z) in [
+        ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+        ([0.0, 0.0, 1.0], [0.0, 0.0, 0.0]),
+        ([1.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+    ] {
+        let mut invalid = definition.clone();
+        invalid.parameter_frames[0].decoded_values = Some(finite_frame([
+            x[0], x[1], x[2], 0.0, 0.0, 0.0, z[0], z[1], z[2], 7.0, -11.0, 13.0,
+        ]));
+        assert!(resolve(&[invalid], &sources, &[]).is_empty());
+    }
 }
 
 #[test]
@@ -1504,8 +1531,8 @@ fn scan_decodes_featdefs_gsec3d_placement_references() {
         .expect("decode");
     let sketches = &result.ir().native.namespace("creo").unwrap().arenas()["sketches"];
     assert_eq!(sketches.len(), 1);
-    assert_eq!(sketches[0].fields()["source_section"], "FeatDefs");
-    let placement = &sketches[0].fields()["section_3d"];
+    assert_eq!(sketches[0].fields().unwrap()["source_section"], "FeatDefs");
+    let placement = &sketches[0].fields().unwrap()["section_3d"];
     assert_eq!(placement["sketch_plane_entity_id"], 769);
     assert_eq!(placement["sketch_plane_flip"], true);
     assert_eq!(placement["reference_plane_entity_ids"][0], 5);
