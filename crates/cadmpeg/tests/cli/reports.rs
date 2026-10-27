@@ -43,6 +43,7 @@ fn artifact_reports_cover_success_and_semantic_refusal() {
     assert_eq!(value["export"]["census"]["basis"], "target_records");
     assert!(value["export"]["census"]["counts"].is_object());
     assert_eq!(value["export"]["write_path"]["path"], "synthesized");
+    assert_eq!(value["export"]["geometry_written"], true);
     assert_eq!(
         value["export"]["write_path"]["fidelity"]["status"],
         "not_provided"
