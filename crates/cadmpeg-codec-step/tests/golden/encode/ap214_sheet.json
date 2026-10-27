@@ -51,6 +51,7 @@
           "VERTEX_POINT": 3
         }
       },
+      "geometry_written": true,
       "identity": {
         "payload": "native",
         "target": "step:ap242-e3"
@@ -129,6 +130,7 @@
           "VERTEX_POINT": 3
         }
       },
+      "geometry_written": true,
       "identity": {
         "payload": "native",
         "target": "step:ap214"
@@ -195,6 +197,7 @@
           "VERTEX_POINT": 3
         }
       },
+      "geometry_written": true,
       "identity": {
         "payload": "native",
         "target": "step:ap214"

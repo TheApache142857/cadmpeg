@@ -7,6 +7,7 @@
         "128_nurbs_surface": 1
       }
     },
+    "geometry_written": true,
     "identity": {
       "payload": "native",
       "target": "iges:5.3-fixed-ascii"

@@ -7,6 +7,7 @@
         "116_point": 2
       }
     },
+    "geometry_written": true,
     "identity": {
       "payload": "native",
       "target": "iges:5.3-fixed-ascii"

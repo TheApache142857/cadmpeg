@@ -58,6 +58,7 @@
           "VECTOR": 2
         }
       },
+      "geometry_written": true,
       "identity": {
         "payload": "native",
         "target": "step:ap242-e3"
@@ -163,6 +164,7 @@
           "VECTOR": 2
         }
       },
+      "geometry_written": true,
       "identity": {
         "payload": "native",
         "target": "step:ap214"
