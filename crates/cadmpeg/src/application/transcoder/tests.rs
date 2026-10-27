@@ -123,7 +123,7 @@ fn encoder_planning_owns_unknown_explicit_target_admission() {
 
 #[cfg(feature = "step")]
 fn step_ir_with_unrepresentable_native_content() -> CadIr {
-    let mut ir = CadIr::empty();
+    let mut ir = cadmpeg_ir::examples::unit_cube().expect("unit cube fixture is admitted");
     ir.native.namespace_mut("f3d").arenas_mut().insert(
         "asm_histories".into(),
         vec![cadmpeg_ir::NativeRecord::new(

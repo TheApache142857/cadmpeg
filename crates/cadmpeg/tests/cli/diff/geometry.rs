@@ -61,12 +61,14 @@ fn geometry_diff_round_trip_agrees() {
     assert!(report["source_fidelity"].is_object());
 }
 
-/// Write `source` as STEP and return the export loss codes of the report.
+/// Write `source` as STEP, also when the write holds no geometry, and return
+/// the export loss codes of the report.
 #[cfg(all(feature = "step", feature = "iges"))]
 fn step_export_loss_codes(source: &Path, written: &Path, report: &Path) -> Vec<String> {
     cadmpeg()
         .args(["convert", source.to_str().unwrap(), "-o"])
         .arg(written)
+        .arg("--allow-empty")
         .arg("--report")
         .arg(report)
         .assert()

@@ -210,11 +210,13 @@ fn assert_geometry_depth_step_writes_the_full_decode_bytes(name: &str, bytes: &[
     let mut written = Vec::new();
     for (extra, depth) in [(None, "geometry"), (Some("--full-decode"), "full")] {
         let output = dir.path().join(format!("{depth}.step"));
+        // The F3D design writes no face to STEP; the bytes are compared either way.
         let mut args = vec![
             "convert",
             input.to_str().unwrap(),
             "-o",
             output.to_str().unwrap(),
+            "--allow-empty",
         ];
         args.extend(extra);
         Command::cargo_bin("cadmpeg")
