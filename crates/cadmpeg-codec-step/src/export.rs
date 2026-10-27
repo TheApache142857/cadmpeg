@@ -78,6 +78,7 @@ pub(crate) fn write_step(
 /// fidelity and source-target context.
 pub(crate) struct StepWriteOutcome {
     pub(crate) census: cadmpeg_ir::report::export::EntityCensus,
+    pub(crate) geometry_written: bool,
     pub(crate) losses: Vec<LossNote>,
     pub(crate) notes: Vec<String>,
 }
@@ -353,6 +354,10 @@ pub(crate) struct Builder<'a> {
     /// Rings that are only a seam and edges collapsed at its poles, by loop.
     seam_rings: HashMap<&'a str, SeamRing<'a>>,
 
+    /// Whether a shape, standalone, or tessellated representation item was
+    /// written.
+    geometry_written: bool,
+
     /// Faces skipped because their surface geometry is unknown (opaque), so no
     /// STEP surface exists to build an `ADVANCED_FACE` on. Deduplicated (a face
     /// is reached once per shell) and aggregated into a single counted loss.
@@ -572,6 +577,7 @@ impl<'a> Builder<'a> {
             curveless_edges: BTreeSet::new(),
             point_loop_curves: BTreeSet::new(),
             point_loop_points: BTreeSet::new(),
+            geometry_written: false,
             seam_rings: HashMap::new(),
             unknown_surface_faces: BTreeSet::new(),
             topology_relation_losses: BTreeSet::new(),
@@ -663,6 +669,7 @@ impl<'a> Builder<'a> {
             );
             emitted_items.clear();
         }
+        self.geometry_written = !emitted_items.is_empty();
         let mut items = emitted_items;
         let origin = geometry::placement(
             &mut self.emitter,
@@ -2632,6 +2639,7 @@ impl<'a> Builder<'a> {
             representation_items.push(item);
         }
         if !representation_items.is_empty() {
+            self.geometry_written = true;
             self.emitter.emit(
                 "TESSELLATED_SHAPE_REPRESENTATION",
                 &format!("'',{},{context}", refs(&representation_items)),
@@ -5941,6 +5949,7 @@ impl<'a> Builder<'a> {
                 basis: cadmpeg_ir::report::export::CensusBasis::TargetRecords,
                 counts: cadmpeg_ir::CensusKey::count_map(self.emitter.counts()),
             },
+            geometry_written: self.geometry_written,
             losses: self.losses.clone(),
             notes: Vec::new(),
         }

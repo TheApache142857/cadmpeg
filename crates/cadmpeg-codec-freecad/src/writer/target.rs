@@ -180,6 +180,7 @@ fn finish(resolution: &Resolution<'_>) -> Result<ExportBody, CodecError> {
             consumption: PatchConsumption::Independent(Consumption::NotConsumed),
         },
         coverage: ArenaCoverage::Complete,
+        geometry_written: ArenaCoverage::Complete.writes_geometry(&resolution.ir.model),
         losses: Vec::new(),
         notes: outcome.notes,
     })

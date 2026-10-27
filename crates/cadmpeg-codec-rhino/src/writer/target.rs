@@ -34,7 +34,7 @@ pub(crate) fn plan(
     };
     let version = RhinoArchiveVersion::ALL[index];
     let mut bytes = Vec::new();
-    super::write(input.ir, version, &mut bytes)?;
+    let geometry_written = super::write(input.ir, version, &mut bytes)?;
     let vertex_quantization = !version.stores_mesh_vertices_as_f64()
         && input
             .ir
@@ -122,6 +122,7 @@ pub(crate) fn plan(
             consumption: Consumption::NotConsumed,
         },
         coverage: ArenaCoverage::Declared(COVERAGE),
+        geometry_written,
         losses,
         notes: vec![format!("3DM archive version {}", version.value())],
     })

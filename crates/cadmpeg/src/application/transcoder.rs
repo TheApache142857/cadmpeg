@@ -415,6 +415,18 @@ impl PreparedConversion {
         if self.refuses_empty_geometry() {
             return Err(self.empty_geometry_refusal());
         }
+        if self.selection.format.transfers_geometry()
+            && !plan.report().geometry_written()
+            && !self.allow_empty
+        {
+            return Err(ConversionRefusal::EmptyGeometry {
+                format: self.selection.format,
+                decode_report: self.document.decode_report().cloned(),
+                validation: self.validation,
+                export_report: Some(plan.report().clone()),
+            }
+            .into());
+        }
         if self.loss_policy.rejects_export() && !plan.report().losses.is_empty() {
             return Err(ConversionRefusal::ExportLossRejected {
                 decode_report: self.document.decode_report().cloned(),
@@ -444,6 +456,7 @@ impl PreparedConversion {
             format: self.selection.format,
             decode_report: self.document.decode_report().cloned(),
             validation: self.validation,
+            export_report: None,
         }
         .into()
     }

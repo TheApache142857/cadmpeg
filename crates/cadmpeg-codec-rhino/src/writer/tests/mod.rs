@@ -16,6 +16,7 @@ mod computed_values;
 mod coverage;
 mod encoding;
 mod free_geometry;
+mod geometry_presence;
 mod model;
 mod nurbs;
 mod planar;

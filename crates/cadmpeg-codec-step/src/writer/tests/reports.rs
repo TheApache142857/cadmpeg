@@ -1958,3 +1958,22 @@ fn source_native_record_reduction_is_reported() {
             .contains("source-native record(s) were not represented in STEP")
     }));
 }
+
+/// The report states whether a representation item reached the file. A face
+/// whose only edge has no curve is omitted, so its plane is no such item.
+#[test]
+fn the_report_states_whether_a_representation_item_was_written() {
+    let written = |ir: &CadIr| {
+        write_step(
+            ir,
+            &mut Vec::new(),
+            StepSchema::Ap214,
+            &StepWriteOptions::default(),
+        )
+        .unwrap()
+        .geometry_written()
+    };
+    assert!(written(&unit_cube().unwrap()));
+    assert!(!written(&edgeless_doc()));
+    assert!(!written(&CadIr::empty()));
+}

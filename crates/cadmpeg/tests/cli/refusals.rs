@@ -166,6 +166,59 @@ fn convert_rejects_empty_native_geometry_unless_allowed() {
         .stdout(predicate::str::starts_with("ISO-10303-21"));
 }
 
+/// A decode with geometry whose STEP plan writes none is refused as empty:
+/// the one face of `topology_base.f3d` has edges with no curve, so STEP
+/// omits it. The report keeps the export plan; `--allow-empty` writes it.
+#[cfg(feature = "f3d")]
+#[test]
+fn convert_rejects_an_export_that_writes_no_geometry_unless_allowed() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("topology_base.f3d");
+    fs::write(
+        &input,
+        include_bytes!("../../../cadmpeg-codec-f3d/tests/golden/fixtures/topology_base.f3d"),
+    )
+    .unwrap();
+    let output = dir.path().join("empty.step");
+    let report = dir.path().join("report.json");
+    Command::cargo_bin("cadmpeg")
+        .unwrap()
+        .args([
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--report",
+            report.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "export planning wrote no geometry",
+        ));
+    assert!(!output.exists());
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+    assert_eq!(value["refusal"]["stage"], "plan");
+    assert_eq!(value["refusal"]["code"], "empty_geometry");
+    assert_eq!(
+        value["decode_report"]["transfer"]["geometry_transferred"],
+        true
+    );
+    assert_eq!(value["export"]["geometry_written"], false);
+    Command::cargo_bin("cadmpeg")
+        .unwrap()
+        .args([
+            "convert",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--allow-empty",
+        ])
+        .assert()
+        .success();
+    assert!(output.exists());
+}
+
 /// A container-only document is shallower than a geometry encoder plans from,
 /// so the refusal names the depth and `--allow-empty` does not override it.
 #[test]

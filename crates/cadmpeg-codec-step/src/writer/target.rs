@@ -48,6 +48,7 @@ pub(crate) fn plan(
             consumption: Consumption::NotConsumed,
         },
         coverage: ArenaCoverage::Declared(coverage(schema)),
+        geometry_written: outcome.geometry_written,
         losses,
         notes: outcome.notes,
     })

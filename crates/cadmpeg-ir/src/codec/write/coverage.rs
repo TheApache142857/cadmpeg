@@ -56,6 +56,22 @@ impl ArenaCoverage {
         }
     }
 
+    /// Whether the payload writes every record of a non-empty geometric
+    /// arena: any such arena under [`Self::Complete`], and one declared
+    /// [`ArenaDisposition::Written`] otherwise.
+    #[must_use]
+    pub fn writes_geometry(&self, model: &Model) -> bool {
+        model.geometric_arenas().into_iter().any(|(kind, records)| {
+            records != 0
+                && match self {
+                    Self::Complete => true,
+                    Self::Declared(dispositions) => {
+                        dispositions.disposition(kind) == Some(ArenaDisposition::Written)
+                    }
+                }
+        })
+    }
+
     /// One loss per non-empty arena this coverage omits.
     pub(super) fn omission_losses(&self, model: &Model, format: &str) -> Vec<LossNote> {
         match self {
@@ -86,9 +102,13 @@ macro_rules! declare_arena_dispositions {
         impl ArenaDispositions {
             /// Whether the payload may carry a record of this model arena.
             pub fn carries(&self, kind: EntityKind) -> bool {
-                [$(self.$field),*]
-                    .get(kind.index())
-                    .is_none_or(|disposition| disposition.carries())
+                self.disposition(kind)
+                    .is_none_or(ArenaDisposition::carries)
+            }
+
+            /// The disposition of this model arena.
+            pub fn disposition(&self, kind: EntityKind) -> Option<ArenaDisposition> {
+                [$(self.$field),*].get(kind.index()).copied()
             }
 
             fn omission_losses(&self, model: &Model, format: &str) -> Vec<LossNote> {

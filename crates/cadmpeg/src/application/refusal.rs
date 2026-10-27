@@ -348,7 +348,8 @@ pub(crate) enum ConversionRefusal {
         /// Export report computed by encoder planning before rejection.
         export_report: ExportReport,
     },
-    /// Geometry export refused because decode transferred no geometry.
+    /// Geometry export refused because decode transferred no geometry, or
+    /// because the planned payload holds none.
     EmptyGeometry {
         /// Requested output format.
         format: Format,
@@ -356,6 +357,8 @@ pub(crate) enum ConversionRefusal {
         decode_report: Option<DecodeReport>,
         /// Validation report available for an optional `--report`.
         validation: ValidationReport,
+        /// Export report of a plan that wrote no geometry.
+        export_report: Option<ExportReport>,
     },
     /// The command-line target cannot select a writable output format.
     UnsupportedOutputFormat {
@@ -623,17 +626,23 @@ impl ConversionRefusal {
                 format,
                 decode_report,
                 validation,
+                export_report,
             } => RefusalEvidence {
                 code: RefusalCode::EmptyGeometry,
                 message: Cow::Owned(format!(
-                    "decode transferred no geometry; refusing to write an empty {} (use --allow-empty to override)",
+                    "{}; refusing to write an empty {} (use --allow-empty to override)",
+                    if export_report.is_some() {
+                        "export planning wrote no geometry"
+                    } else {
+                        "decode transferred no geometry"
+                    },
                     format.name()
                 )),
                 detail: None,
                 reports: RefusalReports {
                     decode: decode_report.as_ref(),
                     check: Some(validation),
-                    export: None,
+                    export: export_report.as_ref(),
                 },
             },
             Self::UnsupportedOutputFormat { message } => RefusalEvidence {

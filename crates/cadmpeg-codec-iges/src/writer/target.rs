@@ -70,6 +70,7 @@ fn replayed_body(ir: &CadIr, bytes: Vec<u8>) -> ExportBody {
         WritePath::VerbatimReplay,
         // Replay runs only while the document digest matches its decode baseline.
         ArenaCoverage::Complete,
+        ir.model.carries_geometry(),
         Vec::new(),
         "preserved source container replayed verbatim",
         super::counts_for_ir(ir),
@@ -89,6 +90,7 @@ fn synthesized_body(
         synthesis.bytes,
         WritePath::Synthesized { consumption },
         ArenaCoverage::Declared(super::SYNTHESIS_COVERAGE),
+        synthesis.geometry_written,
         losses,
         "IGES Fixed ASCII container regenerated from supported neutral geometry",
         synthesis.counts,

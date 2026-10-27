@@ -266,3 +266,13 @@ fn opaque_carriers_require_a_retained_partition_before_generated_accounting() {
         .to_string()
         .contains("without a retained native partition"));
 }
+
+#[test]
+fn a_written_cube_reports_written_geometry() {
+    let plan = crate::test_support::plan_fixture_with_native_envelope(
+        EncodeInput::new(&cube(), None),
+        TargetRequest::Inherit,
+    )
+    .unwrap();
+    assert!(plan.report().geometry_written());
+}

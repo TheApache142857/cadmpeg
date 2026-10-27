@@ -155,6 +155,7 @@ fn finish(
         },
         write_path,
         coverage: written.coverage(),
+        geometry_written: written.coverage().writes_geometry(&input.ir.model),
         losses,
         notes: vec![
             path_note.into(),

@@ -215,6 +215,7 @@ fn body(
         },
         write_path,
         coverage,
+        geometry_written: coverage.writes_geometry(&ir.model),
         losses,
         notes: vec![
             path_note.into(),

@@ -61,6 +61,7 @@ fn unclassified_reports_serialize_empty_dialect_keys() {
         crate::report::export::WritePath::Synthesized {
             fidelity: crate::report::export::SynthesisFidelity::NotProvided {},
         },
+        false,
         Vec::new(),
         Vec::new(),
     );

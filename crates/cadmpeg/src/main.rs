@@ -178,7 +178,8 @@ enum Command {
         /// Write output even if the check finds errors in what the output writes. The check runs and prints every finding.
         #[arg(long)]
         allow_errors: bool,
-        /// Write output even if no geometry was decoded.
+        /// Write output even if no geometry was decoded or the planned output
+        /// holds none.
         #[arg(long)]
         allow_empty: bool,
         /// Decode the whole source, design intent included, even when the

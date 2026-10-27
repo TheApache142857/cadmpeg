@@ -519,3 +519,33 @@ fn carried_errors_follow_native_format_and_complete_coverage() {
         assert_eq!(plan.carried_errors(&ir, &report), vec![&report.findings[0]]);
     }
 }
+
+/// A payload writes geometry when it carries every record of a non-empty
+/// geometric arena, and the report states it.
+#[test]
+fn the_report_states_whether_the_payload_writes_a_geometric_arena() {
+    let cube = unit_cube().expect("valid unit cube fixture");
+    let written = |ir: &CadIr, coverage: ArenaCoverage| {
+        CoverageEncoder(coverage)
+            .plan(EncodeInput::new(ir, None), TargetRequest::Inherit)
+            .unwrap()
+            .report()
+            .geometry_written()
+    };
+    assert!(written(&cube, ArenaCoverage::Complete));
+    assert!(!written(&CadIr::empty(), ArenaCoverage::Complete));
+    assert!(!written(
+        &cube,
+        ArenaCoverage::Declared(uniform_dispositions(ArenaDisposition::Omitted))
+    ));
+    assert!(!written(
+        &cube,
+        ArenaCoverage::Declared(uniform_dispositions(ArenaDisposition::Reported))
+    ));
+    let mut faces_only = uniform_dispositions(ArenaDisposition::Omitted);
+    faces_only.faces = ArenaDisposition::Written;
+    assert!(written(&cube, ArenaCoverage::Declared(faces_only)));
+    let mut bodies_only = uniform_dispositions(ArenaDisposition::Omitted);
+    bodies_only.bodies = ArenaDisposition::Written;
+    assert!(!written(&cube, ArenaCoverage::Declared(bodies_only)));
+}

@@ -1126,3 +1126,21 @@ fn repeated_finalize_admits_thousands_of_sorted_long_identities() {
     model.finalize();
     assert_eq!(model, before);
 }
+
+#[test]
+fn a_model_carries_geometry_only_with_a_geometric_arena() {
+    assert!(!Model::default().carries_geometry());
+    let cube = unit_cube().unwrap();
+    assert!(cube.model.carries_geometry());
+    let mut topology_only = cube.model.clone();
+    topology_only.faces.clear();
+    topology_only.edges.clear();
+    topology_only.points.clear();
+    topology_only.curves.clear();
+    topology_only.surfaces.clear();
+    assert!(!topology_only.bodies.is_empty());
+    assert!(!topology_only.carries_geometry());
+    let mut one_curve = Model::default();
+    one_curve.curves.push(cube.model.curves[0].clone());
+    assert!(one_curve.carries_geometry());
+}

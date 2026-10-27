@@ -21,6 +21,7 @@ pub struct ExportReport {
     /// Entity counts and the semantic basis on which they were measured.
     pub census: EntityCensus,
     write_path: WritePath,
+    geometry_written: bool,
     /// Omitted, normalized, or reduced content.
     pub losses: Vec<LossNote>,
     /// Informational details about the export path.
@@ -222,6 +223,15 @@ impl ExportReport {
         &self.write_path
     }
 
+    /// Whether the payload holds a geometric item that its format reaches
+    /// from its model: a face, edge, point, curve, surface, subdivision
+    /// surface, or tessellation. A carrier that nothing in the payload
+    /// refers to does not count.
+    #[must_use]
+    pub const fn geometry_written(&self) -> bool {
+        self.geometry_written
+    }
+
     /// Returns the native format namespace, or `"cadir"` for neutral CADIR.
     #[must_use]
     pub fn format(&self) -> &str {
@@ -237,6 +247,7 @@ impl ExportReport {
     pub(crate) fn cadir(
         census: EntityCensus,
         write_path: WritePath,
+        geometry_written: bool,
         losses: Vec<LossNote>,
         notes: Vec<String>,
     ) -> Self {
@@ -244,6 +255,7 @@ impl ExportReport {
             identity: ExportIdentity::Cadir {},
             census,
             write_path,
+            geometry_written,
             losses,
             notes,
         }
@@ -256,6 +268,7 @@ impl ExportReport {
         target: DialectId,
         census: EntityCensus,
         write_path: WritePath,
+        geometry_written: bool,
         losses: Vec<LossNote>,
         notes: Vec<String>,
     ) -> Self {
@@ -263,6 +276,7 @@ impl ExportReport {
             identity: ExportIdentity::Native { target },
             census,
             write_path,
+            geometry_written,
             losses,
             notes,
         }

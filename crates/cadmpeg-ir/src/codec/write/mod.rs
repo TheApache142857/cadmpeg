@@ -162,14 +162,17 @@ impl<E: EncoderBackend> Encoder for E {
             census,
             write_path,
             coverage,
+            geometry_written,
             mut losses,
             notes,
         } = body;
         losses.extend(coverage.omission_losses(&input.ir.model, E::FORMAT.as_str()));
         let write_path = write_path.into_report(input.fidelity.is_some());
         let report = match identity {
-            None => ExportReport::cadir(census, write_path, losses, notes),
-            Some(target) => ExportReport::native(target, census, write_path, losses, notes),
+            None => ExportReport::cadir(census, write_path, geometry_written, losses, notes),
+            Some(target) => {
+                ExportReport::native(target, census, write_path, geometry_written, losses, notes)
+            }
         };
         Ok(ExportPlan {
             report,
@@ -315,6 +318,9 @@ pub struct ExportBody {
     /// Which model arenas the payload carries. The wrapper charges a loss for
     /// every non-empty arena this coverage omits.
     pub coverage: ArenaCoverage,
+    /// Whether the payload holds a geometric item that its format reaches
+    /// from its model. See [`ExportReport::geometry_written`].
+    pub geometry_written: bool,
     /// Losses charged while planning.
     pub losses: Vec<LossNote>,
     /// Free-form notes.
@@ -335,6 +341,7 @@ impl ExportBody {
                 consumption: Consumption::NotConsumed,
             },
             coverage,
+            geometry_written: coverage.writes_geometry(&ir.model),
             losses: Vec::new(),
             notes: Vec::new(),
         }

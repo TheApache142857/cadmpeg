@@ -120,23 +120,24 @@ fn is_support(source: Option<&cadmpeg_ir::SourceObjectAssociation>) -> bool {
         .is_some_and(|source| source.geometry_role == Some(cadmpeg_ir::SourceGeometryRole::Support))
 }
 
+/// Writes the archive and returns whether its object table holds an object.
 fn write(
     ir: &CadIr,
     version: RhinoArchiveVersion,
     output: &mut dyn Write,
-) -> Result<(), CodecError> {
+) -> Result<bool, CodecError> {
     let mut staged = tempfile::tempfile()?;
-    write_seekable(ir, version, &mut staged)?;
+    let objects_written = write_seekable(ir, version, &mut staged)?;
     staged.seek(SeekFrom::Start(0))?;
     std::io::copy(&mut staged, output)?;
-    Ok(())
+    Ok(objects_written)
 }
 
 fn write_seekable(
     ir: &CadIr,
     version: RhinoArchiveVersion,
     output: &mut dyn WriteSeek,
-) -> Result<(), CodecError> {
+) -> Result<bool, CodecError> {
     let mut plan = prepare_write(ir, version)?;
     write_archive_prefix(ir, version, output)?;
     let table_start = output.stream_position()?;
@@ -208,6 +209,7 @@ fn write_seekable(
         output.write_all(&mesh_object_record(&payload, mesh.id.as_str())?)?;
     }
 
+    let objects_written = output.stream_position()? > body_start;
     output.write_all(&short_chunk(TCODE_ENDOFTABLE, 0))?;
     let table_end = output.stream_position()?;
     let body_len = archive_body_len(table_end - body_start)?;
@@ -217,7 +219,7 @@ fn write_seekable(
     output.write_all(&table(TCODE_HISTORY_RECORD_TABLE, &[])?)?;
     let final_size = archive_final_size(output.stream_position()?)?;
     output.write_all(&long_chunk(TCODE_ENDOFFILE, &final_size.to_le_bytes())?)?;
-    Ok(())
+    Ok(objects_written)
 }
 
 fn write_archive_prefix(

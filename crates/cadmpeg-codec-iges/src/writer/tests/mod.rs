@@ -65,6 +65,7 @@ use crate::{IgesCodec, IgesVersion};
 mod closed_edge_range;
 mod encode;
 mod extrusion_directrix;
+mod geometry_presence;
 mod ownership;
 mod pcurve_orientation;
 mod physical_dependence;

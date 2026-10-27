@@ -160,6 +160,7 @@ fn body(
     bytes: Vec<u8>,
     write_path: WritePath,
     coverage: ArenaCoverage,
+    geometry_written: bool,
     losses: Vec<LossNote>,
     note: &str,
     counts: BTreeMap<String, usize>,
@@ -172,6 +173,7 @@ fn body(
         },
         write_path,
         coverage,
+        geometry_written,
         losses,
         notes: vec![note.into()],
     }
@@ -257,6 +259,7 @@ fn counts_for_ir(ir: &CadIr) -> BTreeMap<String, usize> {
 struct Synthesis {
     bytes: Vec<u8>,
     counts: BTreeMap<String, usize>,
+    geometry_written: bool,
     losses: Vec<LossNote>,
 }
 
@@ -645,6 +648,7 @@ fn synthesize(ir: &CadIr, version: crate::IgesVersion) -> Result<Synthesis, Code
     Ok(Synthesis {
         bytes: encode_file(&entities, &body_presentations, version, minimum_resolution)?,
         counts,
+        geometry_written: writes_geometry(&entities),
         losses,
     })
 }
@@ -4921,6 +4925,17 @@ fn point_coordinate_scale(point: FinitePoint3) -> f64 {
         .into_iter()
         .map(f64::abs)
         .fold(1.0, f64::max)
+}
+
+/// Whether an entity that is neither physically dependent nor a definition
+/// is geometry: anything but a direction, transformation, color, or name
+/// property.
+fn writes_geometry(entities: &[Entity]) -> bool {
+    entities.iter().any(|entity| {
+        !entity.status.is_physically_dependent()
+            && !matches!(entity.status, EntityStatus::Definition)
+            && !matches!(entity.type_code, 123 | 124 | 314 | 406)
+    })
 }
 
 fn entity_counts(entities: &[Entity]) -> BTreeMap<String, usize> {

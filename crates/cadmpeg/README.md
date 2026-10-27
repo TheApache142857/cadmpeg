@@ -90,7 +90,9 @@ Conversion stops before export if the check finds errors in what the output
 writes. An error in data the output format does not carry, for example
 feature history in a STEP export, stays in the report and does not stop the
 write. Conversion also refuses
-geometry output when decoding transfers no geometry. `--allow-errors` and
+geometry output when decoding transfers no geometry, or when the planned
+output holds no geometry, for example a STEP export that omits every face.
+`--allow-errors` and
 `--allow-empty` write the current result anyway. They leave model data
 unchanged.
 

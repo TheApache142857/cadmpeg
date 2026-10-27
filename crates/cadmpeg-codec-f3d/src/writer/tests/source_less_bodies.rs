@@ -675,3 +675,12 @@ fn generated_source_less_rejects_a_history_skipped_under_the_retained_allowance(
         .to_string()
         .contains("whose bulletin boards and records were not retained"));
 }
+
+#[test]
+fn a_generated_source_less_cube_reports_written_geometry() {
+    let cube = cadmpeg_ir::examples::unit_cube().expect("unit cube fixture is admitted");
+    let plan = F3dCodec
+        .plan(EncodeInput::new(&cube, None), TargetRequest::Inherit)
+        .expect("source-less cube plan");
+    assert!(plan.report().geometry_written());
+}

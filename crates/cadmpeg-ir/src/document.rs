@@ -1077,6 +1077,33 @@ enum RegenerationParentError<'a> {
 }
 
 impl Model {
+    /// Whether the model holds a face, edge, point, curve, surface,
+    /// subdivision surface, or tessellation.
+    #[must_use]
+    pub fn carries_geometry(&self) -> bool {
+        self.geometric_arenas()
+            .iter()
+            .any(|(_, records)| *records != 0)
+    }
+
+    /// The geometric arenas and their record counts.
+    pub(crate) fn geometric_arenas(&self) -> [(crate::schema::EntityKind, usize); 7] {
+        fn arena<T: crate::schema::EntitySchema>(
+            records: &[T],
+        ) -> (crate::schema::EntityKind, usize) {
+            (T::KIND, records.len())
+        }
+        [
+            arena(&self.faces),
+            arena(&self.edges),
+            arena(&self.points),
+            arena(&self.curves),
+            arena(&self.surfaces),
+            arena(&self.subds),
+            arena(&self.tessellations),
+        ]
+    }
+
     /// Structural tree owner of `child`, derived from tree-node child lists.
     pub fn feature_tree_parent(
         &self,

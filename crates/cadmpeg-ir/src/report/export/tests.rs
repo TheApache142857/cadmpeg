@@ -16,11 +16,13 @@ fn a_native_export_report_states_its_payload_and_names_its_target() {
         crate::report::export::WritePath::Synthesized {
             fidelity: crate::report::export::SynthesisFidelity::NotProvided {},
         },
+        true,
         Vec::new(),
         Vec::new(),
     );
 
     assert_eq!(report.format(), "step");
+    assert!(report.geometry_written());
     assert_eq!(
         wire::field_or_default::<Option<cadmpeg_core::dialect::DialectId>>(
             &(report),
@@ -33,6 +35,7 @@ fn a_native_export_report_states_its_payload_and_names_its_target() {
     let rendered = serde_json::to_value(&report).unwrap();
     assert_eq!(rendered["identity"]["payload"], "native");
     assert_eq!(rendered["identity"]["target"], "step:ap242-e3");
+    assert_eq!(rendered["geometry_written"], true);
     assert!(rendered.get("format").is_none());
     assert_eq!(
         serde_json::from_value::<ExportReport>(rendered).unwrap(),
@@ -46,10 +49,19 @@ fn an_export_payload_carries_only_the_target_key_its_own_arm_owns() {
         "identity": {"payload": "native", "target": "step:ap242-e3"},
         "census": { "basis": "target_records", "counts": {} },
         "write_path": { "path": "synthesized", "fidelity": { "status": "not_provided" } },
+        "geometry_written": true,
         "losses": [],
         "notes": [],
     });
     serde_json::from_value::<ExportReport>(native.clone()).expect("a native export report");
+
+    let mut unstated = native.clone();
+    unstated
+        .as_object_mut()
+        .expect("map")
+        .remove("geometry_written");
+    serde_json::from_value::<ExportReport>(unstated)
+        .expect_err("an export report states whether it wrote geometry");
 
     let mut without_target = native.clone();
     without_target["identity"]
