@@ -67,6 +67,7 @@ fn fillet_between_two_planes_is_a_quarter_cylinder_facing_its_spine() {
             supports: [&floor, &wall],
             radius: 2.0,
             boundary: &boundary,
+            vertices: &boundary,
             tolerance: FIT_TOLERANCE,
         },
     )
@@ -122,6 +123,7 @@ fn ring_around_a_boss_covers_the_whole_spine_as_a_torus() {
             supports: [&floor, &boss],
             radius: 2.0,
             boundary: &boundary,
+            vertices: &[],
             tolerance: FIT_TOLERANCE,
         },
     )
@@ -188,6 +190,7 @@ fn chart_spine_is_moved_onto_the_ball_centres() {
             supports: [&floor, &boss],
             radius: 2.0,
             boundary: &boundary,
+            vertices: &[],
             tolerance: FIT_TOLERANCE,
         },
     )
@@ -229,6 +232,41 @@ fn supports_the_ball_cannot_touch_together_leave_no_cache() {
             supports: [&floor, &ceiling],
             radius: 2.0,
             boundary: &boundary,
+            vertices: &[],
+            tolerance: FIT_TOLERANCE,
+        },
+    )
+    .unwrap();
+    assert!(cache.is_none());
+}
+
+#[test]
+fn cache_that_misses_a_face_vertex_is_refused() {
+    let arena = DecodeArena::new();
+    let (ctx, _) = DecodeContext::from_root_bytes(&[], &arena, &DecodePolicy::service()).unwrap();
+    let floor = plane(Vector3::new(0.0, 0.0, 1.0), Vector3::new(1.0, 0.0, 0.0));
+    let wall = plane(Vector3::new(0.0, 1.0, 0.0), Vector3::new(1.0, 0.0, 0.0));
+    let spine = CurveGeometry::Solved(SolvedCurveGeometry::Line(
+        LineCurve::try_new(Point3::new(0.0, 2.0, 2.0), Vector3::new(1.0, 0.0, 0.0)).unwrap(),
+    ));
+    let boundary = [
+        Point3::new(0.0, 2.0, 0.0),
+        Point3::new(10.0, 2.0, 0.0),
+        Point3::new(0.0, 0.0, 2.0),
+        Point3::new(10.0, 0.0, 2.0),
+    ];
+    // A vertex 0.5 mm inside the quarter cylinder, where no point of the
+    // blend lies.
+    let mut vertices = boundary.to_vec();
+    vertices.push(Point3::new(5.0, 2.0, 0.5));
+    let cache = solve(
+        &ctx,
+        &BlendInputs {
+            spine: &spine,
+            supports: [&floor, &wall],
+            radius: 2.0,
+            boundary: &boundary,
+            vertices: &vertices,
             tolerance: FIT_TOLERANCE,
         },
     )

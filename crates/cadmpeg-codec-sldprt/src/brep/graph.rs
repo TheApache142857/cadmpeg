@@ -1143,8 +1143,8 @@ fn edge_parameter_range(
     }
 }
 
-/// Points on the boundary of a face: the ends of its edges and samples along
-/// their curves.
+/// The boundary of a face: its vertices (the ends of its edges), and the
+/// vertices with samples along the edges' curves.
 fn blend_boundary(
     ctx: &DecodeContext<'_>,
     t: &topology::Tables,
@@ -1152,13 +1152,15 @@ fn blend_boundary(
     carriers: &CarrierIndex,
     edge_curve_spans: &HashMap<u16, (u16, Option<[f64; 2]>)>,
     edge_endpoint_positions: &HashMap<u16, [Point3; 2]>,
-) -> Result<Vec<Point3>, cadmpeg_core::CodecError> {
+) -> Result<(Vec<Point3>, Vec<Point3>), cadmpeg_core::CodecError> {
+    let mut vertices = Vec::new();
     let mut points = Vec::new();
     for coedge in loops.iter().flat_map(|(_, ring)| ring) {
         let Some(edge) = t.coedges().get(coedge).map(|coedge| coedge.refs[6]) else {
             continue;
         };
         if let Some(ends) = edge_endpoint_positions.get(&edge) {
+            vertices.extend(ends);
             points.extend(ends);
         }
         let span = edge_curve_spans.get(&edge).and_then(|(curve_attr, range)| {
@@ -1170,7 +1172,7 @@ fn blend_boundary(
             points.extend(blend_surface::edge_samples(ctx, curve, range)?);
         }
     }
-    Ok(points)
+    Ok((vertices, points))
 }
 
 /// An angular range moved by whole turns so it starts within `[0, τ)`, the
@@ -2659,7 +2661,7 @@ fn decode_graph(
                         &cadmpeg_ir::identity_namespace!("sldprt", "brep", "blend-construction"),
                         f.bridge_attr,
                     );
-                    let boundary = blend_boundary(
+                    let (vertices, boundary) = blend_boundary(
                         ctx,
                         t,
                         &f.loops,
@@ -2687,6 +2689,7 @@ fn decode_graph(
                                     supports: [first_geometry, second_geometry],
                                     radius: blend.signed_radius.abs(),
                                     boundary: &boundary,
+                                    vertices: &vertices,
                                     tolerance: cadmpeg_ir::units::Tolerances::default()
                                         .linear
                                         .get(),

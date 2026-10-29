@@ -53,6 +53,11 @@ const NODE_FRACTIONS: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
 const PROBE_U: [f64; 3] = [1.0 / 6.0, 0.5, 5.0 / 6.0];
 /// Section-parameter fractions at which a patch is measured.
 const PROBE_V: [f64; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+/// Distance in millimetres, beyond the cache's fit tolerance, at which a
+/// face vertex is off the cache: the linear resolution, `1e-8` m.
+const VERTEX_ALLOWANCE: f64 = 1.0e-5;
+/// Section-parameter seeds of the search for a vertex's foot on the cache.
+const VERTEX_SEEDS_V: [f64; 3] = [0.0, 0.5, 1.0];
 
 type Vec3 = [f64; 3];
 type Homogeneous = [f64; 4];
@@ -67,6 +72,8 @@ pub(super) struct BlendInputs<'a> {
     pub(super) radius: f64,
     /// Points on the boundary of the face the blend carries.
     pub(super) boundary: &'a [Point3],
+    /// The face's vertices, which lie on the blend.
+    pub(super) vertices: &'a [Point3],
     /// Largest distance the cache may add to the blend's own data.
     pub(super) tolerance: f64,
 }
@@ -104,7 +111,8 @@ pub(super) fn edge_samples(
 
 /// Solve the cache of one blend over the stretch of spine its face covers.
 /// `None` when the blend's data does not define a section along that
-/// stretch, or when no fit within `MAX_PATCHES` reaches the tolerance.
+/// stretch, when no fit within `MAX_PATCHES` reaches the tolerance, or when
+/// a face vertex is off the cache.
 pub(super) fn solve(
     ctx: &DecodeContext<'_>,
     inputs: &BlendInputs<'_>,
@@ -132,13 +140,58 @@ pub(super) fn solve(
     let widened = spine.widen(extent);
     for stretch in [widened, extent] {
         if let Some(cache) = solve_over(ctx, inputs, &spine, stretch)? {
-            return Ok(Some(cache));
+            let holds = passes_through(ctx, &cache, &spine, stretch, inputs.vertices)?;
+            return Ok(holds.then_some(cache));
         }
         if widened == extent {
             break;
         }
     }
     Ok(None)
+}
+
+/// Whether every vertex lies on the cache within its fit tolerance and the
+/// linear resolution. Sections can agree with one another and still miss
+/// the face, as when a support search settles on another branch; the
+/// vertices are exact points of the blend and catch that.
+fn passes_through(
+    ctx: &DecodeContext<'_>,
+    cache: &BlendCache,
+    spine: &Spine<'_>,
+    extent: [f64; 2],
+    vertices: &[Point3],
+) -> Result<bool, CodecError> {
+    let allowance = cache.fit_tolerance + VERTEX_ALLOWANCE;
+    for vertex in vertices {
+        let point = to3(*vertex);
+        let along = spine
+            .project(ctx, point)?
+            .map_or(lerp(extent, 0.5), |parameter| {
+                spine.within(parameter, extent)
+            });
+        let seeds = VERTEX_SEEDS_V
+            .map(|across| Some(Point2::new(along, across)))
+            .into_iter()
+            .chain([None]);
+        let mut nearest = f64::INFINITY;
+        for seed in seeds {
+            let Some(parameters) =
+                evaluation::nurbs_surface_parameter_near_point(ctx, &cache.surface, *vertex, seed)?
+            else {
+                continue;
+            };
+            let parameters = parameters.get();
+            if let Some(foot) =
+                evaluation::nurbs_surface_point(ctx, &cache.surface, parameters.u, parameters.v)?
+            {
+                nearest = nearest.min(norm(sub(to3(foot.get()), point)));
+            }
+        }
+        if nearest > allowance {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Fit the cache over one stretch of spine.
@@ -331,6 +384,18 @@ impl<'a> Spine<'a> {
             }
             SpineDomain::Line | SpineDomain::Bounded(_) => parameter,
         }))
+    }
+
+    /// A spine parameter moved into `extent`: by whole periods on a closed
+    /// spine, then held to the extent's ends.
+    fn within(&self, parameter: f64, extent: [f64; 2]) -> f64 {
+        let parameter = match self.domain {
+            SpineDomain::Periodic([first, last]) => {
+                extent[0] + (parameter - extent[0]).rem_euclid(last - first)
+            }
+            SpineDomain::Line | SpineDomain::Bounded(_) => parameter,
+        };
+        parameter.clamp(extent[0], extent[1])
     }
 
     /// The stretch widened by `EXTENT_MARGIN` at each end, inside a bounded
