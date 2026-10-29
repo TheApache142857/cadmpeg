@@ -5475,8 +5475,8 @@ pub(crate) mod referenced_angle_revolve_prologue {
     pub(crate) const EXTENT_KIND: usize = 29;
     /// Offset of `direction_kind` (`u8`). Spec §3.1.
     pub(crate) const DIRECTION_KIND: usize = 33;
-    /// Offset of `flag` (`u8`). Spec §3.1.
-    pub(crate) const FLAG: usize = 34;
+    /// Offset of `project_axis` (`u8`). Spec §3.1.
+    pub(crate) const PROJECT_AXIS: usize = 34;
     /// Offset of `structural_constant` (`u32`, little-endian). Spec §3.1.
     pub(crate) const STRUCTURAL_CONSTANT: usize = 35;
     /// Offset of `angle_reference_marker` (`u8`). Spec §3.1.

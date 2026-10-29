@@ -5700,6 +5700,8 @@ fn design_geometry_axis_selection(
         return None;
     }
     let direction = match selection.primary_identity {
+        39 => cadmpeg_ir::units::UnitVector3::X_AXIS,
+        40 => cadmpeg_ir::units::UnitVector3::Y_AXIS,
         41 => cadmpeg_ir::units::UnitVector3::Z_AXIS,
         _ => return None,
     };

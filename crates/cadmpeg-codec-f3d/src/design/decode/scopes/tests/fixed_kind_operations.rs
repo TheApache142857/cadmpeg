@@ -702,6 +702,28 @@ fn fixed_kind_edge_and_revolve_operations(
         None
     );
     bytes[class403_start + 34] = 1;
+    let mut localized_class403_scope = class403_scope.clone();
+    localized_class403_scope
+        .try_edit(|draft| {
+            draft.frame_length = 393;
+            draft.paired_byte_offset = draft.byte_offset + draft.frame_length;
+            draft.layout_fixture_tail();
+        })
+        .unwrap();
+    localized_class403_scope.source_kind = Some("R\u{e9}volution".to_owned());
+    let class403_construction = |scope| {
+        exact_path_feature_construction(
+            &bytes,
+            &crate::design::test_support::indexed_record_offsets_for_test(&bytes),
+            scope,
+            std::slice::from_ref(&class403_angle),
+        )
+    };
+    assert!(class403_construction(&class403_scope).is_some());
+    assert_eq!(
+        class403_construction(&localized_class403_scope),
+        class403_construction(&class403_scope)
+    );
 
     {
         use crate::layout::referenced_angle_revolve_prologue as referenced_layout;
@@ -713,7 +735,7 @@ fn fixed_kind_edge_and_revolve_operations(
             .copy_from_slice(&4u32.to_le_bytes());
         referenced[referenced_layout::EXTENT_KIND..referenced_layout::EXTENT_KIND + 4]
             .copy_from_slice(&2u32.to_le_bytes());
-        referenced[referenced_layout::FLAG] = 1;
+        referenced[referenced_layout::PROJECT_AXIS] = 1;
         referenced
             [referenced_layout::STRUCTURAL_CONSTANT..referenced_layout::STRUCTURAL_CONSTANT + 4]
             .copy_from_slice(&1u32.to_le_bytes());
@@ -749,24 +771,44 @@ fn fixed_kind_edge_and_revolve_operations(
                 std::slice::from_ref(&class403_angle),
             )
         };
-        assert_eq!(
-            construction(&bytes),
-            Some(DesignPathFeatureConstruction::Revolve(
-                crate::records::feature::path_features::DesignRevolveConstruction {
-                    operation: DesignExtrudeOperation::NewBody,
-                    operation_offset: u64_from_index(
-                        referenced_start + referenced_layout::OPERATION
-                    ),
-                    angle: cadmpeg_ir::scalar::PositiveAngle::new(std::f64::consts::TAU).unwrap(),
-                    angle_record_index: indexed_angle_record_index,
-                    angle_offset: u64_from_index(class403_start + 40),
-                    opposite_angle: None,
-                }
-            ))
-        );
-        bytes[referenced_start + referenced_layout::FLAG] = 0;
+        let expected = Some(DesignPathFeatureConstruction::Revolve(
+            crate::records::feature::path_features::DesignRevolveConstruction {
+                operation: DesignExtrudeOperation::NewBody,
+                operation_offset: u64_from_index(referenced_start + referenced_layout::OPERATION),
+                angle: cadmpeg_ir::scalar::PositiveAngle::new(std::f64::consts::TAU).unwrap(),
+                angle_record_index: indexed_angle_record_index,
+                angle_offset: u64_from_index(class403_start + 40),
+                opposite_angle: None,
+            },
+        ));
+        assert_eq!(construction(&bytes), expected);
+        // The Project Axis flag is `0` or `1`; any other value is not a flag.
+        bytes[referenced_start + referenced_layout::PROJECT_AXIS] = 0;
+        assert_eq!(construction(&bytes), expected);
+        bytes[referenced_start + referenced_layout::PROJECT_AXIS] = 2;
         assert_eq!(construction(&bytes), None);
-        bytes[referenced_start + referenced_layout::FLAG] = 1;
+        bytes[referenced_start + referenced_layout::PROJECT_AXIS] = 1;
+        // A localized kind such as `Révolution` lengthens the frame by two
+        // bytes per extra code unit; the token-independent frame is the same.
+        let mut localized_scope = referenced_scope.clone();
+        localized_scope
+            .try_edit(|draft| {
+                draft.frame_length = 371;
+                draft.paired_byte_offset = draft.byte_offset + draft.frame_length;
+                draft.layout_fixture_tail();
+            })
+            .unwrap();
+        let localized = |scope: &crate::records::feature::scope::DesignParameterScope| {
+            exact_path_feature_construction(
+                &bytes,
+                &crate::design::test_support::indexed_record_offsets_for_test(&bytes),
+                scope,
+                std::slice::from_ref(&class403_angle),
+            )
+        };
+        assert_eq!(localized(&localized_scope), None);
+        localized_scope.source_kind = Some("R\u{e9}volution".to_owned());
+        assert_eq!(localized(&localized_scope), expected);
         bytes[referenced_start + referenced_layout::ANGLE_REFERENCE_MARKER + 1] ^= 1;
         assert_eq!(construction(&bytes), None);
         bytes[referenced_start + referenced_layout::ANGLE_REFERENCE_MARKER + 1] ^= 1;

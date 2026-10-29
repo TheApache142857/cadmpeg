@@ -57,13 +57,16 @@ pub(super) fn exact_path_feature_construction(
             ))
         }
         DesignFeatureFamily::Revolve
-            if scope.frame_length() == 365
+            if parameter_scope_payload_length(scope) == Some(351)
                 && scope.reference_members().len() == 6
                 && bytes.get(start + referenced_revolve::MARKER) == Some(&1)
                 && View::u32_le_at(bytes, start + referenced_revolve::ZERO_VALUE) == Some(0)
                 && View::u32_le_at(bytes, start + referenced_revolve::EXTENT_KIND) == Some(2)
                 && bytes.get(start + referenced_revolve::DIRECTION_KIND) == Some(&0)
-                && bytes.get(start + referenced_revolve::FLAG) == Some(&1)
+                && matches!(
+                    bytes.get(start + referenced_revolve::PROJECT_AXIS),
+                    Some(0 | 1)
+                )
                 && View::u32_le_at(bytes, start + referenced_revolve::STRUCTURAL_CONSTANT)
                     == Some(1) =>
         {
@@ -153,7 +156,7 @@ pub(super) fn exact_path_feature_construction(
         DesignFeatureFamily::Revolve
             if scope.class_tag.as_str() == "403"
                 && scope.paired_class_tag.as_str() == "258"
-                && scope.frame_length() == 387
+                && parameter_scope_payload_length(scope) == Some(373)
                 && scope.reference_members().len() == 8
                 && View::u32_le_at(bytes, start + class_403_revolve::EXTENT_KIND) == Some(2)
                 && bytes.get(start + class_403_revolve::DIRECTION_KIND..start + 31)

@@ -99,7 +99,7 @@ fn revolve_projects_with_native_profile() {
 }
 
 #[test]
-fn revolve_projects_design_geometry_z_axis_selection() {
+fn revolve_projects_design_geometry_origin_axis_selections() {
     use crate::records::feature::path_features::{
         DesignPathFeatureConstruction, DesignRevolveConstruction,
     };
@@ -175,17 +175,24 @@ fn revolve_projects_design_geometry_z_axis_selection() {
             (&[], &[]),
         )
     };
-    let Some(cadmpeg_ir::features::FeatureDefinition::Operation(
-        cadmpeg_ir::features::FeatureOperation::Revolve { construction, .. },
-    )) = project(&selection(41))
-    else {
-        panic!("expected a revolve");
-    };
-    let axis = construction.axis().expect("origin Z axis");
-    assert_eq!(axis.origin, cadmpeg_ir::features::FinitePoint3::ZERO);
-    assert_eq!(
-        axis.direction,
-        cadmpeg_ir::features::FeatureDirection3::from(cadmpeg_ir::units::UnitVector3::Z_AXIS)
-    );
+    for (primary_identity, direction) in [
+        (39, cadmpeg_ir::units::UnitVector3::X_AXIS),
+        (40, cadmpeg_ir::units::UnitVector3::Y_AXIS),
+        (41, cadmpeg_ir::units::UnitVector3::Z_AXIS),
+    ] {
+        let Some(cadmpeg_ir::features::FeatureDefinition::Operation(
+            cadmpeg_ir::features::FeatureOperation::Revolve { construction, .. },
+        )) = project(&selection(primary_identity))
+        else {
+            panic!("expected a revolve about origin axis {primary_identity}");
+        };
+        let axis = construction.axis().expect("origin axis");
+        assert_eq!(axis.origin, cadmpeg_ir::features::FinitePoint3::ZERO);
+        assert_eq!(
+            axis.direction,
+            cadmpeg_ir::features::FeatureDirection3::from(direction)
+        );
+    }
+    assert_eq!(project(&selection(38)), None);
     assert_eq!(project(&selection(45)), None);
 }

@@ -5650,8 +5650,8 @@ Parsed by:
 | 25 | 4 | `operation` | `u32` | little | spec | It uses the marker-one prologue through offset 33 |
 | 29 | 4 | `extent_kind` | `u32` | little | spec | It uses the marker-one prologue through offset 33 |
 | 33 | 1 | `direction_kind` | `u8` | little | spec | It uses the marker-one prologue through offset 33 |
-| 34 | 1 | `flag` | `u8` | little | spec | Offset 34 is marker `1` |
-| 35 | 4 | `structural_constant` | `u32` | little | spec | offset 35 stores u32 one |
+| 34 | 1 | `project_axis` | `u8` | little | spec | Offset 34 stores the Project Axis flag |
+| 35 | 4 | `structural_constant` | `u32` | little | spec | Offset 35 stores u32 one |
 | 39 | 1 | `angle_reference_marker` | `u8` | little | spec | The marked angle-owner reference starts at offset 39 |
 
 Unstated regions:
