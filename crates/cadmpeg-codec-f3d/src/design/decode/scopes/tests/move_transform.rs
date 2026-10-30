@@ -229,6 +229,23 @@ fn move_face_transform_refuses_a_short_frame_reserved_bytes_and_a_broken_matrix(
 }
 
 #[test]
+fn move_face_transform_refuses_a_record_with_two_admitted_frames() {
+    let (first, _) = fixture("313", 256);
+    let second_frame = first.len();
+    let mut frames = first;
+    frames.extend_from_slice(&fixture("313", 256).0);
+    let (bytes, scope, _) = move_face_over(frames.clone(), DesignFeatureKind::MoveFace, false);
+    assert!(decoded_move_face(&bytes, &scope).is_none());
+
+    frames[second_frame + 168..second_frame + 176].copy_from_slice(&2.0f64.to_le_bytes());
+    let (bytes, scope, _) = move_face_over(frames, DesignFeatureKind::MoveFace, false);
+    assert_eq!(
+        decoded_move_face(&bytes, &scope).unwrap().transform_offset,
+        48
+    );
+}
+
+#[test]
 fn move_transform_refuses_wrong_length_controls_matrix_and_pair() {
     let (bytes, scope) = fixture("330", 273);
     let mut variants = Vec::new();

@@ -235,6 +235,33 @@ fn move_face_stays_native_without_a_translation_or_its_exact_group() {
 }
 
 #[test]
+fn move_face_stays_native_for_a_reflection() {
+    let faces = group(DesignOperandRole::ROLE_0X10);
+    for transform in [
+        [
+            [-1., 0., 0., 0.25],
+            [0., 1., 0., 0.],
+            [0., 0., 1., 0.],
+            [0., 0., 0., 1.],
+        ],
+        [
+            [1., 0., 0., 0.],
+            [0., 1., 0., 0.25],
+            [0., 0., -1., 0.],
+            [0., 0., 0., 1.],
+        ],
+    ] {
+        assert!(super::super::project_move_face(
+            &move_face_scope(transform),
+            std::slice::from_ref(&faces),
+            &[],
+        )
+        .unwrap()
+        .is_none());
+    }
+}
+
+#[test]
 fn move_transform_projects_signed_rotation_translation_and_unique_body_group() {
     use crate::records::feature::direct_face::{DesignMoveForm, DesignMoveOperation};
     let mut scope = DesignParameterScope::empty("f3d:test:scope#12", DesignFeatureKind::Move, 12);
