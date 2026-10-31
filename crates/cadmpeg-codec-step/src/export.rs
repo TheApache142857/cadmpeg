@@ -1885,7 +1885,20 @@ impl<'a> Builder<'a> {
     fn emit_shape_items(&mut self, context: Ref) -> Vec<Ref> {
         let mut items = Vec::new();
         let ir = self.ir;
+        let bodies_with_shells: BTreeSet<&str> = ir
+            .model
+            .regions
+            .iter()
+            .filter(|region| !region.shells.is_empty())
+            .map(|region| region.body.as_str())
+            .collect();
         for region in &ir.model.regions {
+            // A shell-less region beside a bounded one is void space. The faces
+            // that bound it belong to the neighbouring region's shell, so it
+            // holds nothing to write.
+            if region.shells.is_empty() && bodies_with_shells.contains(region.body.as_str()) {
+                continue;
+            }
             let body_kind = self
                 .bodies
                 .get(region.body.as_str())
