@@ -414,6 +414,18 @@ the native feature when a fixed lane carries a symmetric distance.
 
 **Note.** None.
 
+### DR-154. Extended Extrude selection member tail
+
+**Question.** What do the bytes between the 190-byte frame of an Extrude selection member and the next indexed record header carry when the tail is neither the fourteen-byte nor the fifty-byte form?
+
+**Known.** The tail is 1 to 1024 bytes long. Stored tails include five zero bytes; a UTF-16 fragment of a UUID followed by fourteen bytes; zero bytes followed by u32 values and marked references of the same segment; a second length-prefixed UUID; an unlengthed indexed record; and a run of zero bytes to the stream end. The member ends at the next indexed record header in every form.
+
+**Need.** Files that vary the Extrude options and selected profile, to find which option writes each tail and what its fields name.
+
+**Conflict.** None.
+
+**Note.** None.
+
 ## 2. External references
 
 ### DR-111. Component-path poses of nested occurrences
@@ -629,7 +641,7 @@ the native feature when a fixed lane carries a symmetric distance.
 
 **Need.** A producer-generated radial TSM must retain a deleted domain slot at `p` and map a live element with raw slot `q > p`. The raw-slot prediction is `q`; the compact-index prediction after one deletion is `q-1`. Saving must preserve the deleted slot to separate these predictions. A controlled radial export with a nondefault sweep must establish the sweep-to-angle rule.
 
-### DR-151. EdgeFlange corner controls
+### DR-160. EdgeFlange corner controls
 
 **Question.** Which fields select corner relief, miter, and the corner gap for adjacent flange edges?
 
@@ -641,7 +653,7 @@ the native feature when a fixed lane carries a symmetric distance.
 
 **Note.** The fixed edge list does not identify an independent corner-control field.
 
-### DR-153. EdgeFlange scope radius control
+### DR-161. EdgeFlange scope radius control
 
 **Question.** What physical quantity does the positive f64 scope radius control represent?
 
@@ -866,3 +878,15 @@ the native feature when a fixed lane carries a symmetric distance.
 **Conflict.** None.
 
 **Note.** None.
+
+### DR-153. Instance discriminator of a component path
+
+**Question.** How does the u32 instance discriminator of a local component path select one expanded instance when several instances of the target have the listed containing carriers?
+
+**Known.** No two component-path records of a Design stream share a record and a discriminator. A path that lists the full chain of containing carriers names one instance. A path that lists fewer carriers names every instance below those carriers. In one public assembly, 107 of 1241 local paths name two or more instances this way. For one target with 16 expanded instances and 16 records, the target discriminators are 0 to 15 once each, and the order of the target discriminators equals the order of the Component element discriminators. No tested order of the expanded instances reproduces the target discriminators: ordering by the records from the outermost carrier inward matches for 46 of 77 targets.
+
+**Need.** Designs with a repeated holder of known instance order, made by copy and by pattern, with the component-path records before and after reordering the instances.
+
+**Conflict.** None.
+
+**Note.** A path that names more than one instance is refused and reported as `assembly.local-occurrence-path-pose-unresolved`.
