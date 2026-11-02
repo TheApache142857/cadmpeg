@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::loss::CreoLossCode;
 use crate::CreoCodec;
 use cadmpeg_ir::codec::{Codec, DecodeOptions};
 use cadmpeg_test_support::EditableDecodeResult;
@@ -110,7 +111,7 @@ fn enciphered_storage_codes_retain_the_stored_bytes_without_reading_them() {
         .report()
         .losses
         .iter()
-        .filter(|loss| loss.code.to_string() == "creo/container.enciphered-section-retained")
+        .filter(|loss| loss.code == CreoLossCode::EncipheredSectionRetained.kind())
         .map(|loss| loss.message.as_str())
         .collect::<Vec<_>>();
     assert_eq!(enciphered.len(), 2);

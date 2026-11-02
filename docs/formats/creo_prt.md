@@ -262,8 +262,7 @@ A storage-code `b` or `c` payload stores its first four bytes in the clear and
 enciphers every later byte. A `b` payload has the length of its expanded
 payload and begins with the PSB named-record opener `e0 00`. A `c` payload
 begins with the three-byte `1f 9d <flags>` header and the first code byte; LZW
-code reading applies to the deciphered stream. A reader retains an enciphered
-payload as its stored bytes.
+code reading applies to the deciphered stream.
 
 A section payload beginning `1f 9d <flags>` uses Unix `compress` LZW framing.
 The low five flag bits give the maximum code width from 9 through 16; bit 7
