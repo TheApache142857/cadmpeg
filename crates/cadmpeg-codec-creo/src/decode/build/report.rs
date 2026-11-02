@@ -94,12 +94,8 @@ pub(in super::super) fn build_report(
         .filter(|s| s.role() == SectionRole::PsbGeometry)
         .count();
     let mut losses = Vec::new();
-    for message in &scan.framing.expansion_losses {
-        push_report_loss(
-            &mut losses,
-            CreoLossCode::CompressedSectionUnexpanded,
-            &message.message,
-        );
+    for loss in &scan.framing.expansion_losses {
+        push_report_loss(&mut losses, loss.code, &loss.message);
     }
     losses.extend(scan.framing.local_work_cap_losses.iter().cloned());
     losses.extend(crate::decode::analytic::pcurves::unresolved_pcurve_chart_losses(scan));

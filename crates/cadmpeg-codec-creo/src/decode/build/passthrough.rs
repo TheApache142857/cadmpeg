@@ -13,12 +13,14 @@ use cadmpeg_ir::Exactness;
 use serde::Serialize;
 
 use crate::container::{self, ContainerScan};
+use crate::loss::CreoLossCode;
 
 use super::super::native::annotate;
 use super::super::native::emit_arena;
 use cadmpeg_ir::unknown::UnknownRecord;
 
-/// Retain PSB geometry, thumbnail payloads, and every failed expansion.
+/// Retain PSB geometry, thumbnail payloads, enciphered sections, and every
+/// failed expansion.
 ///
 /// A section whose declared extent runs past the scanned buffer is a refusal
 /// naming the section, its declared end, and the buffer length. The declared
@@ -56,12 +58,21 @@ pub(super) fn preserve_passthrough_sections(
         let raw_is_compressed = section_bytes
             .get(payload_start..)
             .is_some_and(|payload| payload.starts_with(container::UNIX_COMPRESS_MAGIC));
-        let expansion_failed = scan
+        let expansion_loss = scan
             .framing
             .expansion_losses
             .iter()
-            .any(|loss| loss.section_offset == section.offset());
-        let (bytes, offset, tag, exactness) = if expansion_failed {
+            .find(|loss| loss.section_offset == section.offset());
+        let enciphered =
+            expansion_loss.is_some_and(|loss| loss.code == CreoLossCode::EncipheredSectionRetained);
+        let (bytes, offset, tag, exactness) = if enciphered {
+            (
+                section_bytes,
+                section.offset(),
+                "enciphered_section",
+                Exactness::Unknown,
+            )
+        } else if expansion_loss.is_some() {
             (
                 section_bytes,
                 section.offset(),
@@ -110,7 +121,9 @@ pub(super) fn preserve_passthrough_sections(
                 Exactness::Unknown,
             )
         };
-        let namespace = if expansion_failed {
+        let namespace = if enciphered {
+            cadmpeg_ir::identity_namespace!("creo", "enciphered", "section")
+        } else if expansion_loss.is_some() {
             cadmpeg_ir::identity_namespace!("creo", "compressed", "section")
         } else {
             crate::identity::section_namespace(section.name()).ok_or_else(|| {

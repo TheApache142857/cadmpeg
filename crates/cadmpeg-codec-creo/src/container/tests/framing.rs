@@ -316,6 +316,52 @@ fn scan_uses_fixed_width_toc_offsets_for_adjacent_sections() {
 }
 
 #[test]
+fn toc_rows_carry_the_storage_code_after_the_producer_declaration() {
+    use crate::container::TocStorage;
+
+    for (code, storage) in [
+        ("9", Some(TocStorage::Stored)),
+        ("11", Some(TocStorage::Stored)),
+        ("a", Some(TocStorage::Compressed)),
+        ("12", Some(TocStorage::Compressed)),
+        ("b", Some(TocStorage::Enciphered)),
+        ("c", Some(TocStorage::EncipheredCompressed)),
+        ("d", None),
+    ] {
+        let mut data = b"#UGC:2 P test\n#-END_OF_UGC_HEADER\n".to_vec();
+        let header_base = data.len();
+        data.extend_from_slice(format!("{:<80}\n", "#UGC_TOC 2 1 81 17").as_bytes());
+        let section_offset = 2 * 81;
+        let section = b"#FeatRefData\n\xe0\x00xyz";
+        data.extend_from_slice(
+            format!(
+                "{:<80}\n",
+                format!(
+                    "FeatRefData {section_offset:x} {:x} 5 2562 {code} -1 0000 0000",
+                    section.len()
+                )
+            )
+            .as_bytes(),
+        );
+        assert_eq!(data.len(), header_base + section_offset);
+        data.extend_from_slice(section);
+
+        let scan = container::scan_bytes_ok(data);
+
+        assert_eq!(scan.framing.sections.len(), 1, "storage code {code}");
+        assert_eq!(
+            scan.framing.sections[0].storage, storage,
+            "storage code {code}"
+        );
+        assert_eq!(
+            scan.framing.expansion_losses.len(),
+            usize::from(storage.is_some_and(TocStorage::is_enciphered)),
+            "storage code {code}"
+        );
+    }
+}
+
+#[test]
 fn scan_expands_toc_sized_unix_compress_payload() {
     let mut data = b"#UGC:2 P test\n#-END_OF_UGC_HEADER\n".to_vec();
     let header_base = data.len();

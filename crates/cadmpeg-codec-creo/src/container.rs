@@ -48,6 +48,7 @@ use crate::layout::cmnm_model_name_record as cmnm;
 use crate::legacy;
 use crate::legacy::type_code::LegacyTypeCode;
 use crate::loop_array::{self, LoopArrayScan};
+use crate::loss::CreoLossCode;
 use crate::placement::{self, FeatureSectionTransform};
 use crate::primdata::{self, PrimitiveScalarArray, PrimitiveTriangleStrip};
 use crate::psb;
@@ -176,6 +177,54 @@ pub(crate) struct Section {
     length: usize,
     /// Expanded payload length from the TOC, excluding the section header.
     expanded_length: Option<usize>,
+    /// Stored payload form from the TOC storage code.
+    storage: Option<TocStorage>,
+}
+
+/// Stored payload form named by a TOC storage code
+/// ([spec §1](https://github.com/cadmpeg/cadmpeg/blob/main/docs/formats/creo_prt.md#1-container)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TocStorage {
+    /// Codes `9` and `11`.
+    Stored,
+    /// Codes `a` and `12`.
+    Compressed,
+    /// Code `b`.
+    Enciphered,
+    /// Code `c`.
+    EncipheredCompressed,
+}
+
+impl TocStorage {
+    fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "9" | "11" => Some(Self::Stored),
+            "a" | "12" => Some(Self::Compressed),
+            "b" => Some(Self::Enciphered),
+            "c" => Some(Self::EncipheredCompressed),
+            _ => None,
+        }
+    }
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Stored => "9",
+            Self::Compressed => "a",
+            Self::Enciphered => "b",
+            Self::EncipheredCompressed => "c",
+        }
+    }
+
+    pub(crate) fn is_enciphered(self) -> bool {
+        matches!(self, Self::Enciphered | Self::EncipheredCompressed)
+    }
+}
+
+impl ScannedSection<'_> {
+    fn with_storage(mut self, storage: Option<TocStorage>) -> Self {
+        self.section.storage = storage;
+        self
+    }
 }
 
 /// One declared section together with the bytes it was admitted against.
@@ -211,6 +260,7 @@ impl Section {
                 offset,
                 length: region.len(),
                 expanded_length,
+                storage: None,
             },
             region,
         })
@@ -361,9 +411,11 @@ pub(crate) struct ModelName {
     pub(crate) offset: usize,
 }
 
-/// A failed expansion with its admitted source-section identity and diagnosis.
+/// An unreadable section payload with its admitted source-section identity
+/// and diagnosis.
 pub(crate) struct SectionExpansionLoss {
     pub(crate) section_offset: usize,
+    pub(crate) code: CreoLossCode,
     pub(crate) message: String,
 }
 
@@ -380,7 +432,7 @@ pub(crate) struct FramingScan<'a> {
     pub(crate) sections: Vec<Section>,
     /// Successfully expanded Unix-compress section payloads.
     pub(crate) expanded_sections: Vec<ExpandedSection>,
-    /// Bounded compressed sections whose payload could not be expanded.
+    /// Bounded sections whose payload is enciphered or could not be expanded.
     pub(crate) expansion_losses: Vec<SectionExpansionLoss>,
     /// Local work-cap skips recorded while framing and decoding plane support
     /// frames.
@@ -831,6 +883,7 @@ fn toc_sections<'a>(
             ) else {
                 continue;
             };
+            let storage = fields.nth(1).and_then(TocStorage::from_code);
             let Some(offset) = header_base.checked_add(relative_offset) else {
                 continue;
             };
@@ -853,13 +906,10 @@ fn toc_sections<'a>(
             {
                 continue;
             }
-            sections.extend(Section::scan(
-                raw_name,
-                offset,
-                end,
-                Some(expanded_length),
-                data,
-            ));
+            sections.extend(
+                Section::scan(raw_name, offset, end, Some(expanded_length), data)
+                    .map(|section| section.with_storage(storage)),
+            );
         }
     }
     sections
@@ -1027,6 +1077,24 @@ fn expanded_sections(
     const MAX_EXPANDED_SECTION: usize = 256 * 1024 * 1024;
     let mut expanded_sections = Vec::new();
     for section in sections {
+        if let Some(storage) = section
+            .section
+            .storage
+            .filter(|storage| storage.is_enciphered())
+        {
+            losses.push(SectionExpansionLoss {
+                section_offset: section.section.offset(),
+                code: CreoLossCode::EncipheredSectionRetained,
+                message: format!(
+                    "section `{}` at offset {}, {} stored bytes: TOC storage code `{}`                      enciphers the payload after its first four bytes; source bytes retained",
+                    section.section.name(),
+                    section.section.offset(),
+                    section.section.length(),
+                    storage.code(),
+                ),
+            });
+            continue;
+        }
         let Some(expected_length) = section.section.expanded_length else {
             continue;
         };
@@ -1071,6 +1139,7 @@ fn expanded_sections(
                 );
                 losses.push(SectionExpansionLoss {
                     section_offset: section.section.offset(),
+                    code: CreoLossCode::CompressedSectionUnexpanded,
                     message,
                 });
                 continue;
@@ -3341,9 +3410,8 @@ pub(crate) fn summarize(
 
     let notes = notes(scan);
     let mut losses = Vec::new();
-    for message in &scan.framing.expansion_losses {
-        let message = message.message.clone();
-        losses.push(crate::loss::CreoLossCode::CompressedSectionUnexpanded.note(message));
+    for loss in &scan.framing.expansion_losses {
+        losses.push(loss.code.note(loss.message.clone()));
     }
     if let Some(loss) = classification.loss() {
         losses.push(loss);

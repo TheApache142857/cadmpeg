@@ -1047,26 +1047,19 @@ admitting the face.
 
 **Need.** We must know the other grammars to transfer their design data.
 
-### PP-06. Compressed `DispDataTable` dictionary
+### PP-20. Second TOC check word
 
-**Question.** What initial dictionary and code-width state does the compressed `DispDataTable` variant use?
+**Question.** Which function of the section bytes gives the second 16-bit check word of a TOC row?
 
-**Known.** `creo_prt.md` §7 "DEPDB `crv_array` rows are sparse topology views with one-sided `[0, X1, F1, 0]` suffixes. They" defines `1f 9d 10` Unix-compress streams. `creo_prt.md` §8.3 "Unix-compress streams with header `1f 9d 10` grow code width" states that code 256 is a literal dictionary entry and not a clear code.
+**Known.** `creo_prt.md` §1 "The next decimal field is `-1` for codes `9`, `b`, and `11`" defines the first check word as the byte sum of the stored payload.
 
-**Need.** We must define the initial dictionary, first available code, initial code width, and width-transition rule for this stream variant.
-
-**Note.** One part re-saved in Creo 7 through 13 retains this gap in every
-release. The Creo 7 through 11 streams fail with invalid or incomplete LZW
-framing; the Creo 12 and 13 streams reach an undefined code. Other compressed
-sections expand with the defined Unix-compress grammar. Need a complete
-dictionary and width-state proof with synthetic streams before applying that
-grammar to this variant or changing the common decoder.
+**Need.** We must know the function to validate a row's stored or expanded bytes against both check words.
 
 ### PP-07. Compressed `DispDataTable` geometry binding
 
 **Question.** Which fields bind decompressed `DispDataTable` rows to model geometry?
 
-**Known.** The compressed stream contains display data in a namespace separate from material face instances.
+**Known.** The compressed stream contains display data in a namespace separate from material face instances. `creo_prt.md` §1 "A storage-code `b` or `c` payload stores its first four bytes in the clear" defines the enciphered stream that a storage-code `c` row stores.
 
 **Need.** We must know the binding to apply display data to the correct entities.
 

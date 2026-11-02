@@ -238,10 +238,32 @@ scanning is the fallback when no TOC entry validates.
 The count and row width bound a TOC without an `#END_OF_TOC_HEADER` marker.
 The next ordinary TOC field after the stored length is the hexadecimal
 expanded payload length. It excludes the section header. The following
-decimal producer declaration does not select a persistence layout. Additional
-row fields and `#` padding do not change the section extent. A continuation
-TOC uses the same header-relative offset base as the first TOC; its own
-position does not become a new base.
+decimal producer declaration does not select a persistence layout. The field
+after the producer declaration is the hexadecimal storage code:
+
+| Code | Stored payload                                                          |
+| ---: | ----------------------------------------------------------------------- |
+|  `9` | PSB records                                                             |
+|  `a` | Unix-compress stream that expands to PSB records                        |
+|  `b` | Enciphered payload                                                      |
+|  `c` | Enciphered Unix-compress stream                                         |
+| `11` | Payload bytes in a section-specific grammar, such as a JPEG thumbnail   |
+| `12` | Unix-compress stream that expands to section-specific payload bytes     |
+
+The next decimal field is `-1` for codes `9`, `b`, and `11` and positive for
+codes `a`, `c`, and `12`. The next two fields are four-digit hexadecimal
+16-bit check words. The first check word is the sum of the stored payload
+bytes modulo `2^16`; the stored payload excludes the section header.
+Additional row fields and `#` padding do not change the section extent. A
+continuation TOC uses the same header-relative offset base as the first TOC;
+its own position does not become a new base.
+
+A storage-code `b` or `c` payload stores its first four bytes in the clear and
+enciphers every later byte. A `b` payload has the length of its expanded
+payload and begins with the PSB named-record opener `e0 00`. A `c` payload
+begins with the three-byte `1f 9d <flags>` header and the first code byte; LZW
+code reading applies to the deciphered stream. A reader retains an enciphered
+payload as its stored bytes.
 
 A section payload beginning `1f 9d <flags>` uses Unix `compress` LZW framing.
 The low five flag bits give the maximum code width from 9 through 16; bit 7
